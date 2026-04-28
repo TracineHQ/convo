@@ -8,7 +8,7 @@ version = "0.1.0.dev0"
 description = "Global conversation index and query tool for Claude Code. Tool-call analytics, anti-pattern detection, session inspection."
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "Anthony Ledesma" }]
 keywords = [
     "claude-code",
@@ -25,7 +25,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Quality Assurance",
@@ -73,7 +72,7 @@ show_missing = true
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = ["bench/results"]
 
 [tool.ruff.lint]
@@ -87,7 +86,9 @@ ignore = [
     "S101",
     # `print` is allowed in CLI entry points.
     "T201",
-    # We use Pydantic-style explicit types, not from-future-annotations everywhere.
+    # `from __future__ import annotations` is unnecessary on 3.12+ where
+    # PEP 604 unions and PEP 695 type params work at runtime. We do not require
+    # the import; we enforce modern syntax via UP rules and target-version.
     "FA100", "FA102",
     # ANN401 (`Any` in type hints) is too aggressive for adapters. We allow it sparingly.
     "ANN401",
@@ -120,7 +121,7 @@ ignore = [
 convention = "google"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 pretty = true
 show_error_codes = true

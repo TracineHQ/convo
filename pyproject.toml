@@ -70,3 +70,72 @@ exclude_lines = [
 ]
 fail_under = 80
 show_missing = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["bench/results"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Conflicts with formatter
+    "COM812", "ISC001",
+    # We are not writing a library that needs full docstring coverage on every dunder.
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107",
+    # `assert` is fine in tests; pytest uses it.
+    "S101",
+    # `print` is allowed in CLI entry points.
+    "T201",
+    # We use Pydantic-style explicit types, not from-future-annotations everywhere.
+    "FA100", "FA102",
+    # ANN401 (`Any` in type hints) is too aggressive for adapters. We allow it sparingly.
+    "ANN401",
+    # Pandas-specific rules; this is not a pandas project.
+    "PD",
+    # NumPy-specific rules; this is not a numpy project.
+    "NPY",
+    # Allow `TODO` comments; we track work in CHANGELOG and issues, not blocked by lint.
+    "TD002", "TD003", "FIX002",
+    # `typing.Self` rules conflict with explicit annotations we prefer.
+    "PYI034",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    # Tests do not require full docstrings or strict type annotations on every fixture.
+    "D",
+    "ANN",
+    # `assert` and magic numbers are fine in tests.
+    "PLR2004",
+    # Allow private member access in tests.
+    "SLF001",
+]
+"bench/**" = [
+    # Bench scripts are exploratory; relax the rules we apply to library code.
+    "D", "ANN", "PLR2004", "T201",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+pretty = true
+show_error_codes = true
+show_column_numbers = true
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_decorators = true
+no_implicit_reexport = true
+files = ["src/convo", "tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+# Tests can be looser; the source must be strict.
+disallow_untyped_defs = false
+disallow_incomplete_defs = false

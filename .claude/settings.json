@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run mypy:*)",
+      "Bash(uv run pre-commit:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv build:*)",
+      "Bash(uv lock:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/pre-bash-block-py-writes.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-python.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

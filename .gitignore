@@ -35,8 +35,14 @@ Thumbs.db
 *.swp
 *~
 
-# Local Claude Code config (do not commit)
-.claude/
+# Local Claude Code config: ignore everything by default, but track the
+# project-scoped settings + hooks so contributors get the same auto-fix /
+# bash-write-blocking behavior on Edit/Write/MultiEdit/Bash tool calls.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/*.sh
 .outputs/
 .worktrees/
 .semgrep/

@@ -79,6 +79,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install dev deps
+        run: uv sync --extra dev
+      - name: Run gitleaks via pre-commit
+        run: uv run pre-commit run gitleaks --all-files

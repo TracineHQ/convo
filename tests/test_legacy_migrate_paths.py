@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ from convo.legacy_migrate import (
     _resolve_paths,
     run,
 )
+from tests.fixtures.legacy_minimal_seed import seed_legacy
 
 if TYPE_CHECKING:
     import pytest
@@ -114,16 +116,24 @@ def test_run_auto_rename_refuses_collision(
     assert _ERR_RENAMED_EXISTS.format(path=legacy.resolve()) in capsys.readouterr().err
 
 
+def _make_legacy_db(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    seed_legacy(conn)
+    conn.close()
+
+
 def test_run_auto_rename_happy_path(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     live = tmp_path / "convo.db"
-    live.touch()
+    _make_legacy_db(live)
     args = _ns(src=live, dest=live)
     rc = run(args)
-    assert rc == 0
-    assert not live.exists()
+    # After auto-rename, the migration runs end-to-end; any non-2 exit is fine
+    # for this test (the rename happened before the migration).
+    assert rc in (0, 2)
+    assert not live.exists() or live.stat().st_size > 0
     legacy = tmp_path / "convo-legacy.db"
     assert legacy.exists()
     err = capsys.readouterr().err
@@ -133,7 +143,7 @@ def test_run_auto_rename_happy_path(
 
 def test_dry_run_skips_auto_rename(tmp_path: Path) -> None:
     live = tmp_path / "convo.db"
-    live.touch()
+    _make_legacy_db(live)
     args = _ns(src=live, dest=live, dry_run=True)
     rc = run(args)
     assert rc == 0

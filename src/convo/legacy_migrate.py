@@ -9,6 +9,7 @@ default canonical case (`~/.claude/convo.db`) flows naturally through
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import random
@@ -92,6 +93,7 @@ def run(args: argparse.Namespace) -> int:
 
     src_path, dest_path, same_path = _resolve_paths(args)
 
+    auto_renamed = False
     if same_path:
         if args.no_keep_legacy and not args.dry_run:
             print(_ERR_SAME_PATH_NO_KEEP, file=sys.stderr)
@@ -107,10 +109,20 @@ def run(args: argparse.Namespace) -> int:
             src_path.rename(renamed)
             print(f"renamed {src_path} -> {renamed}", file=sys.stderr)
             src_path = renamed
+            auto_renamed = True
 
-    # Phase 02 onward: validate, transform, write dest, etc.
-    del dest_path
-    return 0
+    try:
+        validate_legacy_source(src_path)
+    except LegacySourceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    return _run_migration(
+        args,
+        src_path=src_path,
+        dest_path=dest_path,
+        auto_renamed=auto_renamed,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -649,3 +661,423 @@ def report_deferred_tables(src: sqlite3.Connection) -> list[DeferredTable]:
             },
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Phase 04: orchestration
+# ---------------------------------------------------------------------------
+
+import sqlite3 as _sql_rt  # noqa: E402 — runtime sqlite3 lives below to keep
+
+# phase boundaries readable; mypy uses the TYPE_CHECKING import.
+import time  # noqa: E402
+
+from convo.db import Database as _Database  # noqa: E402
+
+_ERR_DEST_NON_EMPTY = (
+    "destination DB at {dest} is not empty (sessions table has rows); "
+    "refusing to overwrite. Move or delete it before re-running."
+)
+
+
+class LegacySourceError(Exception):
+    """Raised when --src is not a recognizable legacy convo DB."""
+
+
+def validate_legacy_source(src_path: Path) -> None:
+    """Open `src_path` read-only; raise if it isn't a legacy convo DB."""
+    if not src_path.exists():
+        msg = f"--src does not exist: {src_path}"
+        raise LegacySourceError(msg)
+    uri = f"file:{src_path}?mode=ro"
+    conn = _sql_rt.connect(uri, uri=True)
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name IN ('conversations', 'schema_migrations')",
+        ).fetchall()
+        names = {r[0] for r in rows}
+    finally:
+        conn.close()
+    if "conversations" not in names or "schema_migrations" in names:
+        raise LegacySourceError(_ERR_SRC_NOT_LEGACY)
+
+
+def _drain(
+    gen: Iterator[tuple[tuple[Any, ...], int]],
+    counter: dict[str, int],
+    table: str,
+) -> Iterator[tuple[Any, ...]]:
+    for row, drop in gen:
+        if drop:
+            counter[table] = counter.get(table, 0) + drop
+        else:
+            yield row
+
+
+def _migrated_summary(
+    legacy: _sql_rt.Connection,
+    dropped: dict[str, int],
+) -> list[dict[str, Any]]:
+    legacy_counts = {
+        "source_files": legacy.execute(
+            "SELECT count(*) FROM indexed_files",
+        ).fetchone()[0],
+        "sessions": legacy.execute(
+            "SELECT count(*) FROM conversations",
+        ).fetchone()[0],
+        "messages": legacy.execute(
+            "SELECT count(*) FROM messages",
+        ).fetchone()[0],
+        "tool_calls": legacy.execute(
+            "SELECT count(*) FROM tool_calls",
+        ).fetchone()[0],
+    }
+    return [
+        {
+            "table": table,
+            "legacy_count": legacy_counts[table],
+            "new_count": legacy_counts[table] - dropped.get(table, 0),
+            "dropped": dropped.get(table, 0),
+        }
+        for table in ("source_files", "sessions", "messages", "tool_calls")
+    ]
+
+
+def _emit_success(  # noqa: PLR0913 — orchestrator output; many fields by design
+    *,
+    src: Path,
+    dest: Path,
+    auto_renamed: bool,
+    duration_ms: int,
+    migrated: list[dict[str, Any]],
+    report: ValidationReport,
+    deferred: list[DeferredTable],
+    marker_path: Path,
+    marker_write_failed: bool,
+    json_mode: bool,
+) -> None:
+    if json_mode:
+        samples_total = report.samples_passed + report.samples_failed
+        out = {
+            "status": "success",
+            "src": str(src),
+            "dest": str(dest),
+            "auto_renamed_legacy": auto_renamed,
+            "duration_ms": duration_ms,
+            "migrated": migrated,
+            "validation": {
+                "counts": "pass" if report.counts_passed else "fail",
+                "samples": {
+                    "per_table": report.samples_per_table,
+                    "passed": report.samples_passed,
+                    "failed": report.samples_failed,
+                },
+                "fts_probes": {
+                    "total": (report.fts_probes_passed + report.fts_probes_failed),
+                    "passed": report.fts_probes_passed,
+                    "failed": report.fts_probes_failed,
+                },
+            },
+            "deferred": {
+                "marker_path": str(marker_path),
+                "marker_write_failed": marker_write_failed,
+                "tables": deferred,
+            },
+        }
+        # avoid unused-var lint
+        _ = samples_total
+        print(json.dumps(out))
+        return
+
+    legacy_label = " (auto-renamed legacy)" if auto_renamed else ""
+    print(f"convo migrate-legacy: src={src}")
+    print(f"  dest={dest}{legacy_label}")
+    print()
+    print("migrating...")
+    for entry in migrated:
+        suffix = f" ({entry['dropped']} dropped)" if entry["dropped"] else ""
+        print(
+            f"  {entry['table']:<14} {entry['legacy_count']} -> {entry['new_count']}{suffix}",
+        )
+    print(f"  {_TOOL_RESULTS_NOOP_NOTE}")
+    print()
+    print("validation:")
+    print(f"  counts:    {'PASS' if report.counts_passed else 'FAIL'}")
+    print(
+        f"  samples:   {'PASS' if report.samples_failed == 0 else 'FAIL'} "
+        f"({report.samples_passed}/"
+        f"{report.samples_passed + report.samples_failed} total)",
+    )
+    fts_total = report.fts_probes_passed + report.fts_probes_failed
+    print(
+        f"  fts probes: {'PASS' if report.fts_probes_failed == 0 else 'FAIL'}"
+        f" ({report.fts_probes_passed}/{fts_total})",
+    )
+    if report.fts_skipped_reason:
+        print(f"  ({report.fts_skipped_reason})")
+    print()
+    if deferred:
+        print("deferred (waiting on convo v0.2 / 0002_live_hooks.sql):")
+        for d in deferred:
+            print(f"  {d['name']}: {d['row_count']} rows")
+    if marker_write_failed:
+        print(f"warning: marker write failed at {marker_path}")
+    else:
+        print(f"marker: {marker_path}")
+    print()
+    print(
+        f"migration complete in {duration_ms / 1000:.1f}s. legacy preserved at {src}",
+    )
+
+
+def _emit_failure(  # noqa: PLR0913 — orchestrator output; many fields by design
+    *,
+    src: Path,
+    dest: Path,
+    error: str,
+    recovered: bool,
+    snapshot: Path | None,
+    dest_removed: bool,
+    json_mode: bool,
+) -> None:
+    if json_mode:
+        out: dict[str, Any] = {
+            "status": "data_error",
+            "src": str(src),
+            "dest": str(dest),
+            "error": error,
+            "recovered": recovered,
+            "snapshot": str(snapshot) if snapshot else None,
+            "dest_removed": dest_removed,
+        }
+        print(json.dumps(out))
+        return
+    print(f"migration failed: {error}", file=sys.stderr)
+    if recovered and snapshot is not None:
+        print(f"recovered: dest restored from snapshot at {snapshot}", file=sys.stderr)
+    elif dest_removed:
+        print(f"recovered: fresh dest at {dest} was removed", file=sys.stderr)
+
+
+def _run_migration(  # noqa: C901, PLR0912, PLR0915 — orchestrator
+    args: argparse.Namespace,
+    *,
+    src_path: Path,
+    dest_path: Path,
+    auto_renamed: bool,
+) -> int:
+    t0 = time.monotonic_ns()
+    src_uri = f"file:{src_path}?mode=ro"
+    src_conn = _sql_rt.connect(src_uri, uri=True)
+    src_conn.row_factory = _sql_rt.Row
+
+    try:
+        deferred = report_deferred_tables(src_conn)
+
+        if args.dry_run:
+            dropped: dict[str, int] = {}
+            # Dry-run: scan transforms to compute drop counts without inserts.
+            list(migrate_source_files(src_conn))
+            for _, drop in migrate_sessions(src_conn, {}):
+                dropped["sessions"] = dropped.get("sessions", 0) + drop
+            for _, drop in migrate_messages(src_conn):
+                dropped["messages"] = dropped.get("messages", 0) + drop
+            for _, drop in migrate_tool_calls(src_conn):
+                dropped["tool_calls"] = dropped.get("tool_calls", 0) + drop
+            migrated_plan = _migrated_summary(src_conn, dropped)
+            duration_ms = (time.monotonic_ns() - t0) // 1_000_000
+            _emit_success(
+                src=src_path,
+                dest=dest_path,
+                auto_renamed=auto_renamed,
+                duration_ms=duration_ms,
+                migrated=migrated_plan,
+                report=ValidationReport(
+                    counts_passed=True,
+                    counts_detail={},
+                    samples_per_table=0,
+                ),
+                deferred=deferred,
+                marker_path=_marker_path(),
+                marker_write_failed=False,
+                json_mode=args.json,
+            )
+            return 0
+
+        dest_existed = dest_path.exists()
+        snapshot_path: Path | None = None
+        new_db = _Database(dest_path)
+        new_db.open()
+
+        # Idempotent re-run refusal: if dest already has rows, refuse.
+        if dest_existed and new_db.conn is not None:
+            count = new_db.conn.execute(
+                "SELECT count(*) FROM sessions",
+            ).fetchone()[0]
+            if count > 0:
+                new_db.close()
+                print(
+                    _ERR_DEST_NON_EMPTY.format(dest=dest_path),
+                    file=sys.stderr,
+                )
+                return 1
+
+        if dest_existed:
+            try:
+                snapshot_path = new_db.auto_snapshot()
+            except OSError as exc:
+                new_db.close()
+                _emit_failure(
+                    src=src_path,
+                    dest=dest_path,
+                    error=f"pre-migration snapshot failed: {exc}",
+                    recovered=False,
+                    snapshot=None,
+                    dest_removed=False,
+                    json_mode=args.json,
+                )
+                return 2
+
+        try:
+            assert new_db.conn is not None
+            new_db.conn.execute("BEGIN EXCLUSIVE")
+            try:
+                dropped = {}
+                new_db.conn.executemany(
+                    "INSERT INTO source_files(path, kind, sha256, size, "
+                    "mtime_ns, last_indexed_at, message_count) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    migrate_source_files(src_conn),
+                )
+                path_to_id = {
+                    r["path"]: r["id"]
+                    for r in new_db.conn.execute(
+                        "SELECT id, path FROM source_files",
+                    )
+                }
+                new_db.conn.executemany(
+                    "INSERT INTO sessions(id, source_file_id, project_path, "
+                    "started_at, ended_at, model, git_branch, git_commit) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    _drain(
+                        migrate_sessions(src_conn, path_to_id),
+                        dropped,
+                        "sessions",
+                    ),
+                )
+                # Filter messages/tool_calls to surviving sessions to honor FK.
+                surviving_sessions = {
+                    r[0]
+                    for r in new_db.conn.execute(
+                        "SELECT id FROM sessions",
+                    )
+                }
+
+                def _msg_filter() -> Iterator[tuple[Any, ...]]:
+                    for row, drop in migrate_messages(src_conn):
+                        if drop:
+                            dropped["messages"] = dropped.get("messages", 0) + drop
+                            continue
+                        if row[1] not in surviving_sessions:
+                            dropped["messages"] = dropped.get("messages", 0) + 1
+                            continue
+                        yield row
+
+                new_db.conn.executemany(
+                    "INSERT INTO messages(id, session_id, parent_id, role, "
+                    "seq, timestamp, content, has_newlines, raw_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    _msg_filter(),
+                )
+                surviving_msgs = {
+                    r[0]
+                    for r in new_db.conn.execute(
+                        "SELECT id FROM messages",
+                    )
+                }
+
+                def _tc_filter() -> Iterator[tuple[Any, ...]]:
+                    for row, drop in migrate_tool_calls(src_conn):
+                        if drop:
+                            dropped["tool_calls"] = dropped.get("tool_calls", 0) + drop
+                            continue
+                        if row[1] not in surviving_msgs:
+                            dropped["tool_calls"] = dropped.get("tool_calls", 0) + 1
+                            continue
+                        yield row
+
+                new_db.conn.executemany(
+                    "INSERT INTO tool_calls(id, message_id, session_id, seq, "
+                    "name, input_json, started_at, ended_at, duration_ms, "
+                    "has_newlines) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    _tc_filter(),
+                )
+                new_db.conn.execute("COMMIT")
+            except Exception:
+                new_db.conn.execute("ROLLBACK")
+                raise
+
+            report = validate(
+                src_conn,
+                new_db,
+                seed=args.seed,
+                dropped_per_table=dropped,
+            )
+
+            marker_write_failed = False
+            try:
+                marker_path = _write_marker(src_path, deferred)
+            except OSError as exc:
+                marker_path = _marker_path()
+                marker_write_failed = True
+                print(
+                    f"warning: marker write failed ({exc}); migration data is committed.",
+                    file=sys.stderr,
+                )
+
+            duration_ms = (time.monotonic_ns() - t0) // 1_000_000
+            migrated = _migrated_summary(src_conn, dropped)
+            _emit_success(
+                src=src_path,
+                dest=dest_path,
+                auto_renamed=auto_renamed,
+                duration_ms=duration_ms,
+                migrated=migrated,
+                report=report,
+                deferred=deferred,
+                marker_path=marker_path,
+                marker_write_failed=marker_write_failed,
+                json_mode=args.json,
+            )
+            return 0  # noqa: TRY300 — branch returns directly; no else needed
+
+        except (ValidationError, Exception) as exc:  # noqa: BLE001 — orchestrator catches all
+            error_text = f"{type(exc).__name__}: {exc}"
+            new_db.close()
+            recovered = False
+            dest_removed = False
+            if dest_existed and snapshot_path is not None:
+                try:
+                    new_db.restore_snapshot(snapshot_path)
+                    new_db.close()
+                    recovered = True
+                except (OSError, RuntimeError, ValueError):
+                    pass
+            elif not dest_existed:
+                dest_path.unlink(missing_ok=True)
+                dest_removed = True
+            _emit_failure(
+                src=src_path,
+                dest=dest_path,
+                error=error_text,
+                recovered=recovered,
+                snapshot=snapshot_path,
+                dest_removed=dest_removed,
+                json_mode=args.json,
+            )
+            return 2
+    finally:
+        src_conn.close()
+        with contextlib.suppress(NameError, AttributeError, _sql_rt.Error):
+            new_db.close()

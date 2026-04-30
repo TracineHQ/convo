@@ -26,6 +26,7 @@ def test_backup_snapshot_writes_timestamped_file_and_creates_dir(
     db: Database,
     tmp_path: Path,
 ) -> None:
+    seed_source_file(db, path="/seed/a.jsonl")
     target = tmp_path / "snaps"
     assert not target.exists()
     written = db.backup_snapshot(target)
@@ -40,6 +41,7 @@ def test_backup_snapshot_honors_env_var(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    seed_source_file(db, path="/seed/a.jsonl")
     env_dir = tmp_path / "envsnap"
     monkeypatch.setenv("CONVO_BACKUP_DIR", str(env_dir))
     written = db.backup_snapshot()
@@ -52,6 +54,7 @@ def test_backup_snapshot_defaults_to_sibling_of_db(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    seed_source_file(db, path="/seed/a.jsonl")
     monkeypatch.delenv("CONVO_BACKUP_DIR", raising=False)
     written = db.backup_snapshot()
     assert written.parent == tmp_path / _db_module.SNAPSHOT_DIR_NAME

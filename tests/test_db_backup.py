@@ -30,6 +30,7 @@ def test_backup_writes_queryable_v1_db(db: Database, tmp_path: Path) -> None:
 
 
 def test_backup_refuses_overwrite(db: Database, tmp_path: Path) -> None:
+    seed_source_file(db, path="/seed/a.jsonl")
     dest = tmp_path / "snap.db"
     db.backup(dest)
     with pytest.raises(FileExistsError, match=str(dest)):
@@ -37,8 +38,16 @@ def test_backup_refuses_overwrite(db: Database, tmp_path: Path) -> None:
 
 
 def test_backup_creates_parent_dirs(db: Database, tmp_path: Path) -> None:
+    seed_source_file(db, path="/seed/a.jsonl")
     dest = tmp_path / "nested" / "deep" / "snap.db"
     assert not dest.parent.exists()
     db.backup(dest)
     assert dest.exists()
     assert dest.parent.is_dir()
+
+
+def test_backup_refuses_empty_db(db: Database, tmp_path: Path) -> None:
+    dest = tmp_path / "snap.db"
+    with pytest.raises(RuntimeError, match="empty convo DB"):
+        db.backup(dest)
+    assert not dest.exists()

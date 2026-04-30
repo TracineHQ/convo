@@ -30,7 +30,13 @@ _ERR_DB_FROM_FUTURE = (
 _ERR_MIGRATION_GAP = "Non-contiguous migration versions discovered: {versions}"
 _ERR_MIGRATION_DUP = "Duplicate migration version {version} ({first}, {second})"
 _ERR_NOT_OPEN = "Database is not open"
+_ERR_DB_UNREADABLE = "DB at {path} is not a usable SQLite file: {reason}"
 _ERR_BACKUP_DEST_EXISTS = "Backup destination already exists: {dest}"
+_ERR_BACKUP_EMPTY_DB = (
+    "Refusing to back up an empty convo DB at {path} (no indexed rows). "
+    "Point CONVO_DB / --db at a populated convo database, "
+    "or run intake first."
+)
 _ERR_RESTORE_SRC_MISSING = "Snapshot source does not exist: {src}"
 _ERR_RESTORE_BAD_DB = "Snapshot source is not a usable convo DB: {src} ({reason})"
 _ERR_RESTORE_FROM_FUTURE = (
@@ -110,15 +116,21 @@ class Database:
             )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = _sql.connect(self.path)
-        self.conn.executescript(
-            "PRAGMA journal_mode = WAL;"
-            "PRAGMA foreign_keys = ON;"
-            "PRAGMA synchronous = NORMAL;"
-            "PRAGMA temp_store = MEMORY;"
-            "PRAGMA busy_timeout = 5000;"
-            "PRAGMA mmap_size = 268435456;"
-            "PRAGMA cache_size = -64000;",
-        )
+        try:
+            self.conn.executescript(
+                "PRAGMA journal_mode = WAL;"
+                "PRAGMA foreign_keys = ON;"
+                "PRAGMA synchronous = NORMAL;"
+                "PRAGMA temp_store = MEMORY;"
+                "PRAGMA busy_timeout = 5000;"
+                "PRAGMA mmap_size = 268435456;"
+                "PRAGMA cache_size = -64000;",
+            )
+        except _sql.DatabaseError as exc:
+            self.close()
+            raise RuntimeError(
+                _ERR_DB_UNREADABLE.format(path=self.path, reason=exc),
+            ) from exc
         self.conn.row_factory = _sql.Row
         self.migrate()
         return self
@@ -159,6 +171,8 @@ class Database:
     def backup(self, dest: Path | str) -> None:
         if self.conn is None:
             raise RuntimeError(_ERR_NOT_OPEN)
+        if self.conn.execute("SELECT COUNT(*) FROM source_files").fetchone()[0] == 0:
+            raise RuntimeError(_ERR_BACKUP_EMPTY_DB.format(path=self.path))
         dest_path = Path(dest).expanduser()
         if dest_path.exists():
             raise FileExistsError(_ERR_BACKUP_DEST_EXISTS.format(dest=dest_path))
@@ -201,10 +215,15 @@ class Database:
             Path(str(self.path) + suffix).unlink(missing_ok=True)
         # Copy snapshot to a sibling tempfile of the live DB, then atomic-replace.
         # Same-FS guarantees the os.replace is atomic and the user's snapshot file
-        # is preserved (never moved).
+        # is preserved (never moved). Staging file is unlinked on partial failure
+        # so a crashed restore never leaves orphan `.restoring` files behind.
         staging = self.path.with_name(f"{self.path.name}.restoring")
-        shutil.copyfile(src_path, staging)
-        os.replace(staging, self.path)  # noqa: PTH105 — atomic-replace; tests patch os.replace
+        try:
+            shutil.copyfile(src_path, staging)
+            os.replace(staging, self.path)  # noqa: PTH105 — atomic-replace; tests patch os.replace
+        except BaseException:
+            staging.unlink(missing_ok=True)
+            raise
         self.open()
 
     def __enter__(self) -> Self:

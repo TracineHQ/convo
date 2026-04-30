@@ -55,33 +55,6 @@ def test_backup_auto_writes_timestamped(
     assert any(_AUTO_NAME_RE.match(p.name) for p in snaps.iterdir())
 
 
-def test_backup_auto_with_prune_keep_3(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    live = tmp_path / "live.db"
-    snaps = tmp_path / "snaps"
-    snaps.mkdir()
-    # Pre-seed 5 snapshots with staggered mtimes (oldest first).
-    for i in range(5):
-        p = snaps / f"convo-2026010{i}-000000-000000.db"
-        p.write_bytes(b"")
-        os.utime(p, (1700000000.0 + i, 1700000000.0 + i))
-
-    monkeypatch.setenv("CONVO_DB", str(live))
-    monkeypatch.setenv("CONVO_BACKUP_DIR", str(snaps))
-
-    assert main(["backup", "--auto", "--prune", "--keep", "3"]) == 0
-    out = capsys.readouterr().out
-    assert "snapshot written: " in out
-    # 5 pre-seeded + 1 new = 6 total; keep 3 → delete 3.
-    assert "pruned 3 old snapshot(s)\n" in out
-
-    remaining = list(snaps.glob("convo-*.db"))
-    assert len(remaining) == 3
-
-
 def test_db_flag_overrides_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -96,16 +69,21 @@ def test_db_flag_overrides_env(
     assert not env_db.exists()
 
 
-def test_backup_overwrite_propagates_file_exists_error(
+def test_backup_overwrite_reports_clean_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("CONVO_DB", str(tmp_path / "live.db"))
     out = tmp_path / "out.db"
     out.write_bytes(b"existing")
 
-    with pytest.raises(FileExistsError, match=str(out)):
-        main(["backup", str(out)])
+    rc = main(["backup", str(out)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert err.startswith("convo: ")
+    assert str(out) in err
+    assert "Traceback" not in err
 
 
 def test_unknown_subcommand_exits_2() -> None:

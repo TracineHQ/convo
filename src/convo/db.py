@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sqlite3 as _sql
 from datetime import UTC, datetime
 from importlib.resources import files
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 DEFAULT_DB_PATH: Path = Path.home() / ".claude" / "convo.db"
-DEFAULT_SNAPSHOT_DIR: Path = Path.home() / ".claude" / "convo-backups"
+SNAPSHOT_DIR_NAME: str = "convo-backups"
 SCHEMA_VERSION: int = 1
 _MIN_SQLITE: tuple[int, int, int] = (3, 37, 0)
 _MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
@@ -38,13 +39,18 @@ _ERR_RESTORE_FROM_FUTURE = (
 )
 
 
-def _resolve_snapshot_dir(explicit: Path | str | None) -> Path:
+def _resolve_snapshot_dir(explicit: Path | str | None, db_path: Path) -> Path:
+    """Resolve snapshot dir.
+
+    Precedence: explicit arg > $CONVO_BACKUP_DIR > sibling of resolved DB
+    (`<db>.parent / convo-backups`).
+    """
     if explicit is not None:
         return Path(explicit).expanduser()
     env = os.environ.get("CONVO_BACKUP_DIR")
     if env:
         return Path(env).expanduser()
-    return DEFAULT_SNAPSHOT_DIR
+    return db_path.parent / SNAPSHOT_DIR_NAME
 
 
 def resolve_db_path(explicit: Path | str | None = None) -> Path:
@@ -160,40 +166,12 @@ class Database:
         self.conn.execute("VACUUM INTO ?", (str(dest_path),))
 
     def backup_snapshot(self, snapshot_dir: Path | str | None = None) -> Path:
-        target_dir = _resolve_snapshot_dir(snapshot_dir)
+        target_dir = _resolve_snapshot_dir(snapshot_dir, self.path)
         target_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         dest = target_dir / f"convo-{timestamp}.db"
         self.backup(dest)
         return dest
-
-    def prune_snapshots(
-        self,
-        snapshot_dir: Path | str | None = None,
-        keep_n: int = 7,
-    ) -> list[Path]:
-        target_dir = _resolve_snapshot_dir(snapshot_dir)
-        if not target_dir.exists():
-            return []
-        snapshots = sorted(
-            target_dir.glob("convo-*.db"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        deleted: list[Path] = []
-        for path in snapshots[keep_n:]:
-            path.unlink()
-            deleted.append(path)
-        return deleted
-
-    def auto_snapshot(
-        self,
-        snapshot_dir: Path | str | None = None,
-        keep_n: int = 7,
-    ) -> Path:
-        written = self.backup_snapshot(snapshot_dir)
-        self.prune_snapshots(snapshot_dir, keep_n=keep_n)
-        return written
 
     def restore_snapshot(self, src: Path | str) -> None:
         src_path = Path(src).expanduser()
@@ -221,7 +199,12 @@ class Database:
         self.close()
         for suffix in ("-wal", "-shm"):
             Path(str(self.path) + suffix).unlink(missing_ok=True)
-        os.replace(src_path, self.path)  # noqa: PTH105 — atomic-replace; tests patch os.replace
+        # Copy snapshot to a sibling tempfile of the live DB, then atomic-replace.
+        # Same-FS guarantees the os.replace is atomic and the user's snapshot file
+        # is preserved (never moved).
+        staging = self.path.with_name(f"{self.path.name}.restoring")
+        shutil.copyfile(src_path, staging)
+        os.replace(staging, self.path)  # noqa: PTH105 — atomic-replace; tests patch os.replace
         self.open()
 
     def __enter__(self) -> Self:

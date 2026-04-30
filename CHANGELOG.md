@@ -13,14 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mypy strict configuration, justfile, pre-commit hooks, gitleaks config,
   GitHub Actions CI matrix on Python 3.12 and 3.13.
 - Storage layer: `Database` class with `open` / `close` / `migrate` /
-  `backup` / `backup_snapshot` / `prune_snapshots` / `auto_snapshot` /
-  `restore_snapshot`, default DB at `~/.claude/convo.db` (overridable via
-  `CONVO_DB`), versioned schema migrations under
-  `src/convo/migrations/NNNN_*.sql`, FTS5 trigram-tokenizer search across
-  tool-call inputs, tool-result outputs, and message text.
-- CLI subcommands: `convo backup <dest>`,
-  `convo backup --auto [--prune --keep N]`, `convo restore <src>`. Exposed
-  via the `convo` console-script entry point.
+  `backup` / `backup_snapshot` / `restore_snapshot`, default DB at
+  `~/.claude/convo.db` (overridable via `CONVO_DB`), versioned schema
+  migrations under `src/convo/migrations/NNNN_*.sql`, FTS5
+  trigram-tokenizer search across tool-call inputs, tool-result outputs,
+  and message text.
+- CLI subcommands: `convo backup <dest>`, `convo backup --auto`,
+  `convo restore <src>`. Exposed via the `convo` console-script entry
+  point. Snapshots are append-only; `restore` preserves the snapshot
+  source file.
 - Wheel-build CI check that asserts `migrations/0001_init.sql` is present
   in the packaged distribution.
 - `just snapshots-clean` recipe to mirror `just db-reset` for local resets.

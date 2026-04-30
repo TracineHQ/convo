@@ -1,4 +1,4 @@
-"""Tests for snapshots: backup_snapshot, prune, auto, restore."""
+"""Tests for snapshots: backup_snapshot, restore."""
 
 from __future__ import annotations
 
@@ -20,13 +20,6 @@ if TYPE_CHECKING:
 
 
 _NAME_RE = re.compile(r"^convo-\d{8}-\d{6}-\d{6}\.db$")
-
-
-def _make_snap(dirpath: Path, name: str, mtime: float) -> Path:
-    p = dirpath / name
-    p.write_bytes(b"")
-    os.utime(p, (mtime, mtime))
-    return p
 
 
 def test_backup_snapshot_writes_timestamped_file_and_creates_dir(
@@ -54,63 +47,15 @@ def test_backup_snapshot_honors_env_var(
     assert written.exists()
 
 
-def test_backup_snapshot_falls_back_to_default(
+def test_backup_snapshot_defaults_to_sibling_of_db(
     db: Database,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("CONVO_BACKUP_DIR", raising=False)
-    fake_default = tmp_path / "default"
-    monkeypatch.setattr(_db_module, "DEFAULT_SNAPSHOT_DIR", fake_default)
     written = db.backup_snapshot()
-    assert written.parent == fake_default
-
-
-def test_prune_keeps_n_newest_and_ignores_non_glob(
-    db: Database,
-    tmp_path: Path,
-) -> None:
-    snaps = [
-        _make_snap(tmp_path, f"convo-2026010{i}-000000-000000.db", 1700000000.0 + i)
-        for i in range(8)
-    ]
-    (tmp_path / "unrelated.txt").write_text("x")
-    (tmp_path / "convo-notes.md").write_text("notes")
-
-    deleted = db.prune_snapshots(tmp_path, keep_n=3)
-    assert len(deleted) == 5
-
-    remaining = sorted(tmp_path.glob("convo-*.db"))
-    assert len(remaining) == 3
-    # 3 newest (highest mtime: indexes 5, 6, 7) survive.
-    assert set(remaining) == set(snaps[-3:])
-
-    assert (tmp_path / "unrelated.txt").exists()
-    assert (tmp_path / "convo-notes.md").exists()
-
-
-def test_prune_missing_dir_returns_empty(db: Database, tmp_path: Path) -> None:
-    assert db.prune_snapshots(tmp_path / "nope") == []
-
-
-def test_auto_snapshot_writes_and_prunes(
-    db: Database,
-    tmp_path: Path,
-) -> None:
-    for i in range(8):
-        _make_snap(
-            tmp_path,
-            f"convo-2026010{i}-000000-000000.db",
-            1700000000.0 + i,
-        )
-
-    written = db.auto_snapshot(tmp_path, keep_n=3)
+    assert written.parent == tmp_path / _db_module.SNAPSHOT_DIR_NAME
     assert written.exists()
-    assert _NAME_RE.match(written.name)
-
-    remaining = sorted(tmp_path.glob("convo-*.db"))
-    assert len(remaining) == 3
-    assert written in remaining
 
 
 def test_restore_snapshot_happy_path(db: Database, tmp_path: Path) -> None:
@@ -168,6 +113,17 @@ def test_restore_future_version_raises(db: Database, tmp_path: Path) -> None:
 
     after = db.conn.execute("SELECT count(*) FROM source_files").fetchone()[0]
     assert after == before
+
+
+def test_restore_preserves_snapshot_file(db: Database, tmp_path: Path) -> None:
+    seed_source_file(db, path="/a.jsonl")
+    snap = db.backup_snapshot(tmp_path)
+    snap_size_before = snap.stat().st_size
+
+    db.restore_snapshot(snap)
+
+    assert snap.exists(), "restore must not consume the snapshot file"
+    assert snap.stat().st_size == snap_size_before
 
 
 def test_restore_unlinks_sidecars_before_replace(

@@ -10,8 +10,8 @@ Status: under construction. v0.1.0 in progress.
 ## Available commands
 
 - `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)
-- `convo backup --auto [--prune --keep N]` -- timestamped snapshot, optionally pruned
-- `convo restore <src>` -- atomic-swap restore from a snapshot file
+- `convo backup --auto` -- timestamped snapshot to the snapshot directory
+- `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
 
 ## Planned commands
 
@@ -29,9 +29,11 @@ at `~/.claude/convo.db` (override with `CONVO_DB`). Three storage commands
 ship with v0.1.0:
 
 - `convo backup <dest>` -- write a `VACUUM INTO` snapshot to `<dest>`.
-- `convo backup --auto [--prune --keep N]` -- write a timestamped snapshot to
-  `~/.claude/convo-backups/`, optionally rotating to `N` retained files.
-- `convo restore <src>` -- atomically replace the live DB with `<src>`.
+- `convo backup --auto` -- write a timestamped snapshot to
+  `~/.claude/convo-backups/` (override with `CONVO_BACKUP_DIR`). Snapshots
+  are append-only; manage history yourself or run `just snapshots-clean`.
+- `convo restore <src>` -- atomically replace the live DB with `<src>`. The
+  snapshot file is preserved.
 
 Snapshots use microsecond-precision UTC timestamps so concurrent calls cannot
 collide on filenames. Restore validates the source before touching the live

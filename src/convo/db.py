@@ -45,7 +45,7 @@ _ERR_RESTORE_FROM_FUTURE = (
 )
 
 
-def _resolve_snapshot_dir(explicit: Path | str | None, db_path: Path) -> Path:
+def resolve_snapshot_dir(explicit: Path | str | None, db_path: Path) -> Path:
     """Resolve snapshot dir.
 
     Precedence: explicit arg > $CONVO_BACKUP_DIR > sibling of resolved DB
@@ -180,7 +180,7 @@ class Database:
         self.conn.execute("VACUUM INTO ?", (str(dest_path),))
 
     def backup_snapshot(self, snapshot_dir: Path | str | None = None) -> Path:
-        target_dir = _resolve_snapshot_dir(snapshot_dir, self.path)
+        target_dir = resolve_snapshot_dir(snapshot_dir, self.path)
         target_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         dest = target_dir / f"convo-{timestamp}.db"

@@ -35,6 +35,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `intake/` package: typed `IntakeRecord` dataclass union, `parse_line`
   / `parse_file` lazy generator, pure `map_record`, `index_file` /
   `index_tree` orchestrators, `compute_file_signature` (chunked sha256).
+- `convo info [--json]`: at-a-glance database overview — schema version
+  (`PRAGMA user_version`), row counts per indexed table (`source_files`,
+  `sessions`, `messages`, `tool_calls`, `tool_results`), last index
+  timestamp, top 5 projects by session count, live DB size, and snapshot
+  directory path / count / total bytes. JSON mode emits a versioned
+  envelope (`schema_version: 1`).
+- `convo search "<query>" [--since SPAN] [--project P] [--tool T]
+  [--limit N] [--json]`: FTS5-backed search across messages, tool calls,
+  and tool results, ranked by timestamp DESC. `--since` accepts a
+  shorthand span (`7d`, `24h`, `90m`, `30s`). Queries flow through to
+  FTS5 MATCH syntax, so `+required` / `-excluded` prefixes work; invalid
+  FTS5 input is rejected with a clean error envelope. Prose mode prints
+  one hit per line with `[kind] timestamp | excerpt | session_id` and
+  highlights matched substrings on a TTY.
+- `convo inspect <session-id> [--json] [--full]`: session timeline with
+  header (started_at, ended_at, project, model, git_branch) and a
+  numbered message list with inline tool calls. Accepts a partial UUID
+  prefix — exact match resolves directly, ambiguous prefixes print the
+  candidate list, no match emits `convo: no session matches <prefix>`.
+  `--full` dumps message content verbatim; default truncates to 200
+  chars per message.
+- `convo snapshots [--json]`: list snapshot files in `CONVO_BACKUP_DIR`
+  with aligned `name | size | age` columns, newest first. JSON mode
+  emits structured `SnapshotInfo` records (path, timestamp_utc,
+  size_bytes, age_human).
+- `convo restore --latest`: shorthand that resolves `CONVO_BACKUP_DIR`,
+  picks the newest snapshot file by mtime, and restores it via the
+  existing atomic-swap path. Mutually exclusive with positional `<src>`;
+  empty snapshot directory exits 1 with a clean error.
 - Wheel-build CI check that asserts `migrations/0001_init.sql` is present
   in the packaged distribution.
 - `just snapshots-clean` recipe to mirror `just db-reset` for local resets.
@@ -58,15 +87,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned for 0.1.0
 
-- JSONL intake pipeline with typed records.
-- Read commands: search, format, inspect, export.
 - Analytics: tools, commands, sessions, files, skills, model, hooks,
-  retries, chains.
-- CLI dispatch via typer.
+  retries, chains (`stats`, `summary`).
 - Period-comparison `diff` command.
 
 ### Future work
 
 - Demo asciinema recording in README.
 - Optional mkdocs site.
-- PyPI publish (deferred until adoption signal).
+- Claude Code plugin/extension packaging (primary distribution target).

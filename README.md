@@ -1,13 +1,15 @@
 # convo
 
-Index Claude Code session JSONLs into a local SQLite database, then back it
-up and restore it. v0.2 ships the intake pipeline alongside the storage
-layer; query/analytics commands (search, stats, summary) land in a later
-release (see Roadmap).
+Index Claude Code session JSONLs into a local SQLite database, then search,
+inspect, and snapshot the result. v1 covers the intake pipeline, the storage
+layer, and the read surface (`info`, `search`, `inspect`, `snapshots`,
+`restore --latest`); analytics commands (`stats`, `summary`, `diff`) land in
+a later release (see Roadmap).
 
 ## Install
 
-PyPI publish is deferred until the intake pipeline lands. For now:
+convo is intended to ship as a Claude Code plugin/extension. Until that
+landing slot exists, install from source:
 
 ```bash
 uv tool install git+https://github.com/<your-org>/convo
@@ -23,9 +25,33 @@ Verify with `convo --help`.
   walk `~/.claude/projects/<slug>/*.jsonl` and populate the database.
   Idempotent: skips files whose sha256 hasn't changed. `--full` re-indexes
   everything.
+- `convo info [--json]` -- schema version, row counts per table, last index
+  time, top 5 projects by session count, snapshot directory size.
+- `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N] [--json]`
+  -- FTS5 search over messages, tool calls, and tool results. `SPAN` accepts
+  `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefixes (`+required`,
+  `-excluded`).
+- `convo inspect <session-id> [--json] [--full]` -- session timeline with
+  inline tool calls. Accepts a UUID prefix; ambiguous prefixes list
+  candidates. `--full` dumps message content verbatim (default truncates to
+  200 chars per message).
+- `convo snapshots [--json]` -- list snapshot files with `name | size | age`
+  columns, newest first.
 - `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)
 - `convo backup --auto` -- timestamped snapshot to the snapshot directory
 - `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
+- `convo restore --latest` -- shorthand for restoring the newest snapshot in
+  `$CONVO_BACKUP_DIR`.
+
+Example session:
+
+```bash
+convo index
+convo info
+convo search "kafka" --since 7d --limit 10
+convo inspect 3f8a1c2b
+convo snapshots
+```
 
 ## Storage
 
@@ -71,15 +97,10 @@ set a tighter umask in the cron line:
 
 Future releases will add:
 
-- `convo search` -- substring / FTS search over tool calls and messages
 - `convo stats` -- tools, commands, sessions, files, skills, model, hooks
 - `convo summary` -- one-shot dashboard across sessions, tools, dangers,
   anti-patterns
 - `convo diff` -- compare current period vs previous (default 7d)
-- `convo inspect` -- session timeline and subagent tree view
-- `convo info` -- schema version, row counts, last index time
-- `convo snapshots` / `convo restore --latest` -- snapshot listing and
-  latest-snapshot shorthand
 
 ## License
 

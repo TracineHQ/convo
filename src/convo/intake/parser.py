@@ -267,6 +267,12 @@ def parse_file(path: Path) -> Iterator[IntakeRecord]:
     on the first line, skips blank lines, and tolerates trailing newlines. On
     a malformed line, raises `IntakeParseError` with the 1-based line number;
     the caller decides whether to skip or abort.
+
+    Decode policy: strict UTF-8. A malformed byte sequence raises
+    `UnicodeDecodeError` (no `errors="replace"`) — fail fast on a corrupt
+    file rather than silently rewriting bytes. The orchestrator catches this
+    at `index_file` and converts it into a per-file `IndexResult.error` so
+    one bad file doesn't abort the whole tree run.
     """
     with path.open("rb") as fh:
         for lineno, raw_bytes in enumerate(fh, start=1):

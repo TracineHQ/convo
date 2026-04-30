@@ -407,6 +407,27 @@ def test_or_ignore_dedupes_cross_file_pk_collision(db: Database, tmp_path: Path)
     assert msg_count == 1
 
 
+def test_index_file_contains_unicode_decode_error(db: Database, tmp_path: Path) -> None:
+    """Containment: a malformed UTF-8 byte sequence in a JSONL must not escape.
+
+    `parse_file` decodes UTF-8 strictly; a bad byte sequence raises
+    `UnicodeDecodeError`. The orchestrator must catch it, ROLLBACK, and
+    return an `IndexResult` with `error` populated rather than propagating
+    the exception (which would abort the entire tree run).
+    """
+    path = tmp_path / f"{_SESSION_ID}.jsonl"
+    path.write_bytes(b"\xff\xfe\x00invalid\n")
+
+    before = _row_counts(db)
+    result = index_file(db, path)
+
+    assert result.error is not None
+    assert result.error_at_line is None
+    assert result.source_file_id is None
+    assert result.inserted_rows == {}
+    assert _row_counts(db) == before
+
+
 def test_index_file_no_orphan_foreign_keys(db: Database, session_path: Path) -> None:
     """Smoke: every persisted FK-bearing column either is NULL or resolves in-DB."""
     index_file(db, session_path)

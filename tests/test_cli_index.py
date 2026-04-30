@@ -278,8 +278,54 @@ def test_index_status_error_when_all_fail(
     bad.parent.mkdir(parents=True)
     bad.write_text('{"type":\n', encoding="utf-8")
     rc = main(["index", "--projects-dir", str(root), "--json"])
-    assert rc == 0
+    assert rc == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "error"
     assert payload["files_failed"] == 1
     assert payload["files_indexed"] == 0
+
+
+@pytest.mark.usefixtures("live_db")
+def test_index_partial_on_idempotent_rerun_with_persistent_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A re-run where every healthy file is skipped-unchanged and one file still
+    fails must report status=partial, not status=error.
+    """
+    root = tmp_path / "projects"
+    good_sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    bad_sid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    _write_jsonl(root / "alpha" / f"{good_sid}.jsonl", [_user_record("u1", good_sid, "hi")])
+    bad = root / "broken" / f"{bad_sid}.jsonl"
+    bad.parent.mkdir(parents=True)
+    bad.write_text('{"type":\n', encoding="utf-8")
+
+    rc = main(["index", "--projects-dir", str(root), "--json"])
+    assert rc == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first["status"] == "partial"
+    assert first["files_indexed"] == 1
+    assert first["files_failed"] == 1
+
+    rc = main(["index", "--projects-dir", str(root), "--json"])
+    assert rc == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second["status"] == "partial"
+    assert second["files_indexed"] == 0
+    assert second["files_failed"] == 1
+    assert second["files_skipped"] >= 1
+
+
+@pytest.mark.usefixtures("live_db")
+def test_index_projects_dir_pointing_at_file_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    target = tmp_path / "oops.txt"
+    target.write_text("not a directory\n", encoding="utf-8")
+    rc = main(["index", "--projects-dir", str(target)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert err.startswith("convo: ")
+    assert "not a directory" in err

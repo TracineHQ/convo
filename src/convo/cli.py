@@ -177,7 +177,7 @@ def _print_summary(report: IndexReport) -> None:
 def _envelope_status(report: IndexReport) -> str:
     if report.files_failed == 0:
         return "success"
-    if report.files_indexed == 0 and report.files_failed > 0:
+    if report.files_indexed == 0 and report.files_skipped_unchanged == 0:
         return "error"
     return "partial"
 
@@ -204,6 +204,9 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
     if not projects_dir.exists():
         msg = f"projects dir does not exist: {projects_dir}"
         raise RuntimeError(msg)
+    if not projects_dir.is_dir():
+        msg = f"projects dir is not a directory: {projects_dir}"
+        raise RuntimeError(msg)
 
     from convo.intake.orchestrator import _discover_jsonl  # noqa: PLC0415
 
@@ -228,4 +231,4 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
         print(json.dumps(_build_envelope(report)))
     else:
         _print_summary(report)
-    return 0
+    return 1 if _envelope_status(report) == "error" else 0

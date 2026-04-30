@@ -295,6 +295,17 @@ def index_file(db: Database, path: Path, *, force: bool = False) -> IndexResult:
                 error=exc.reason,
                 error_at_line=exc.lineno,
             )
+        except (UnicodeDecodeError, OSError) as exc:
+            # Containment: a malformed-UTF-8 byte sequence or a read error on
+            # one file must not abort the whole tree run. Same pattern as the
+            # IntakeParseError / sqlite3.DatabaseError branches.
+            conn.rollback()
+            return IndexResult(
+                path=path,
+                source_file_id=None,
+                error=str(exc),
+                error_at_line=None,
+            )
         try:
             source_file_id, counts = _persist(conn, sig, records)
             conn.commit()

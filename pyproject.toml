@@ -111,6 +111,10 @@ ignore = [
     "PLR2004",
     # Allow private member access in tests.
     "SLF001",
+    # Test seed helpers commonly take many keyword args.
+    "PLR0913",
+    # /tmp paths in tests are data fixtures, not real filesystem targets.
+    "S108",
 ]
 "bench/**" = [
     # Bench scripts are exploratory; relax the rules we apply to library code.

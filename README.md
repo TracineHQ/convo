@@ -1,8 +1,9 @@
 # convo
 
-Backup and restore for the convo SQLite database. v0.1.0 ships the storage
-layer only; the JSONL intake pipeline and query/analytics commands land in a
-later release (see Roadmap).
+Index Claude Code session JSONLs into a local SQLite database, then back it
+up and restore it. v0.2 ships the intake pipeline alongside the storage
+layer; query/analytics commands (search, stats, summary) land in a later
+release (see Roadmap).
 
 ## Install
 
@@ -18,6 +19,10 @@ Verify with `convo --help`.
 
 ## Available commands
 
+- `convo index [--full] [--projects-dir PATH] [--dry-run] [--json]` --
+  walk `~/.claude/projects/<slug>/*.jsonl` and populate the database.
+  Idempotent: skips files whose sha256 hasn't changed. `--full` re-indexes
+  everything.
 - `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)
 - `convo backup --auto` -- timestamped snapshot to the snapshot directory
 - `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
@@ -66,14 +71,13 @@ set a tighter umask in the cron line:
 
 Future releases will add:
 
-- JSONL intake pipeline that indexes every Claude Code session JSONL from
-  `~/.claude/projects/` into the convo database.
 - `convo search` -- substring / FTS search over tool calls and messages
 - `convo stats` -- tools, commands, sessions, files, skills, model, hooks
 - `convo summary` -- one-shot dashboard across sessions, tools, dangers,
   anti-patterns
 - `convo diff` -- compare current period vs previous (default 7d)
 - `convo inspect` -- session timeline and subagent tree view
+- `convo info` -- schema version, row counts, last index time
 - `convo snapshots` / `convo restore --latest` -- snapshot listing and
   latest-snapshot shorthand
 

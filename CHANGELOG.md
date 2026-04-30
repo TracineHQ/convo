@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `convo restore <src>`. Exposed via the `convo` console-script entry
   point. Snapshots are append-only; `restore` preserves the snapshot
   source file.
+- JSONL intake pipeline: `convo index [--full] [--projects-dir PATH]
+  [--dry-run] [--json]`. Walks `~/.claude/projects/<slug>/*.jsonl`,
+  parses Claude Code session records, populates `source_files`,
+  `sessions`, `messages`, `tool_calls`, `tool_results`. Idempotent
+  (sha256-keyed); `--full` re-indexes. Cross-file `parent_id` and
+  `tool_call_id` references are NULLed/dropped; PK collisions across
+  resumed sessions are deduped via `INSERT OR IGNORE`; FK validation
+  is deferred to commit-time so out-of-order parent records work.
+  Per-file errors are contained — one bad file does not abort the
+  tree run.
+- `intake/` package: typed `IntakeRecord` dataclass union, `parse_line`
+  / `parse_file` lazy generator, pure `map_record`, `index_file` /
+  `index_tree` orchestrators, `compute_file_signature` (chunked sha256).
 - Wheel-build CI check that asserts `migrations/0001_init.sql` is present
   in the packaged distribution.
 - `just snapshots-clean` recipe to mirror `just db-reset` for local resets.

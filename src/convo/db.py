@@ -33,6 +33,22 @@ _ERR_LEGACY_DB = (
     "Detected a legacy convo DB at {path}. Run `convo migrate-legacy` "
     "to convert it, or pass `--db <other-path>` for a fresh DB."
 )
+_ERR_BACKUP_DEST_EXISTS = "Backup destination already exists: {dest}"
+_ERR_RESTORE_SRC_MISSING = "Snapshot source does not exist: {src}"
+_ERR_RESTORE_BAD_DB = "Snapshot source is not a usable convo DB: {src} ({reason})"
+_ERR_RESTORE_FROM_FUTURE = (
+    "Snapshot at {src} is from a newer schema version "
+    "(snapshot {snapshot_v} > current {current_v}); refusing to restore"
+)
+
+
+def _resolve_snapshot_dir(explicit: Path | str | None) -> Path:
+    if explicit is not None:
+        return Path(explicit).expanduser()
+    env = os.environ.get("CONVO_BACKUP_DIR")
+    if env:
+        return Path(env).expanduser()
+    return DEFAULT_SNAPSHOT_DIR
 
 
 def resolve_db_path(explicit: Path | str | None = None) -> Path:
@@ -151,27 +167,78 @@ class Database:
         return result
 
     def backup(self, dest: Path | str) -> None:
-        raise NotImplementedError
+        if self.conn is None:
+            raise RuntimeError(_ERR_NOT_OPEN)
+        dest_path = Path(dest).expanduser()
+        if dest_path.exists():
+            raise FileExistsError(_ERR_BACKUP_DEST_EXISTS.format(dest=dest_path))
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn.execute("VACUUM INTO ?", (str(dest_path),))
 
     def backup_snapshot(self, snapshot_dir: Path | str | None = None) -> Path:
-        raise NotImplementedError
+        target_dir = _resolve_snapshot_dir(snapshot_dir)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
+        dest = target_dir / f"convo-{timestamp}.db"
+        self.backup(dest)
+        return dest
 
     def prune_snapshots(
         self,
         snapshot_dir: Path | str | None = None,
         keep_n: int = 7,
     ) -> list[Path]:
-        raise NotImplementedError
+        target_dir = _resolve_snapshot_dir(snapshot_dir)
+        if not target_dir.exists():
+            return []
+        snapshots = sorted(
+            target_dir.glob("convo-*.db"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        deleted: list[Path] = []
+        for path in snapshots[keep_n:]:
+            path.unlink()
+            deleted.append(path)
+        return deleted
 
     def auto_snapshot(
         self,
         snapshot_dir: Path | str | None = None,
         keep_n: int = 7,
     ) -> Path:
-        raise NotImplementedError
+        written = self.backup_snapshot(snapshot_dir)
+        self.prune_snapshots(snapshot_dir, keep_n=keep_n)
+        return written
 
     def restore_snapshot(self, src: Path | str) -> None:
-        raise NotImplementedError
+        src_path = Path(src).expanduser()
+        if not src_path.exists():
+            raise ValueError(_ERR_RESTORE_SRC_MISSING.format(src=src_path))
+        try:
+            probe = _sql.connect(str(src_path))
+            try:
+                snapshot_v = probe.execute("PRAGMA user_version").fetchone()[0]
+                probe.execute("SELECT version FROM schema_migrations LIMIT 1").fetchall()
+            finally:
+                probe.close()
+        except _sql.DatabaseError as exc:
+            raise ValueError(
+                _ERR_RESTORE_BAD_DB.format(src=src_path, reason=exc),
+            ) from exc
+        if snapshot_v > SCHEMA_VERSION:
+            raise ValueError(
+                _ERR_RESTORE_FROM_FUTURE.format(
+                    src=src_path,
+                    snapshot_v=snapshot_v,
+                    current_v=SCHEMA_VERSION,
+                ),
+            )
+        self.close()
+        for suffix in ("-wal", "-shm"):
+            Path(str(self.path) + suffix).unlink(missing_ok=True)
+        os.replace(src_path, self.path)  # noqa: PTH105 — atomic-replace; tests patch os.replace
+        self.open()
 
     def __enter__(self) -> Self:
         return self.open()

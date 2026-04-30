@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+
 from convo.db import Database
 
 if TYPE_CHECKING:

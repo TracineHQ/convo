@@ -1,10 +1,10 @@
 # convo
 
 Index Claude Code session JSONLs into a local SQLite database, then search,
-inspect, and snapshot the result. v1 covers the intake pipeline, the storage
-layer, and the read surface (`info`, `search`, `inspect`, `snapshots`,
-`restore --latest`); analytics commands (`stats`, `summary`, `diff`) land in
-a later release (see Roadmap).
+inspect, snapshot, and analyze the result. v1 covers the intake pipeline,
+the storage layer, the read surface (`info`, `search`, `inspect`,
+`snapshots`, `restore --latest`), and analytics (`stats`, `summary`,
+`diff`).
 
 ## Install
 
@@ -42,6 +42,12 @@ Verify with `convo --help`.
 - `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
 - `convo restore --latest` -- shorthand for restoring the newest snapshot in
   `$CONVO_BACKUP_DIR`.
+- `convo stats <family> [--since SPAN] [--project P] [--json]` -- analytics
+  families: `tools`, `commands`, `sessions`, `files`, `model`.
+- `convo summary [--since SPAN] [--project P] [--json]` -- composite of all
+  five families in one report.
+- `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
+  window comparison with deltas. Default span 7d.
 
 Example session:
 
@@ -49,7 +55,8 @@ Example session:
 convo index
 convo info
 convo search "kafka" --since 7d --limit 10
-convo inspect 3f8a1c2b
+convo summary --since 7d
+convo inspect <session-id>   # use a prefix from the search hits above
 convo snapshots
 ```
 
@@ -74,9 +81,11 @@ DB, copies it to a `<db>.restoring` staging file co-located with the live DB,
 then atomically replaces. `-wal` / `-shm` sidecars are unlinked first to
 prevent corruption.
 
-Snapshot files are written with the process umask (typically `0644`). On a
-shared host where convo data may include sensitive prompt/response content,
-set a tighter umask in the cron line:
+Snapshot files are written `0600` (owner read/write only) regardless of the
+process umask, since convo data may include prompt/response content. The live
+DB at `~/.claude/convo.db` still inherits the process umask — set
+`umask 077` in the shell or cron line that creates it if you want owner-only
+permissions on the live DB as well:
 
 ```cron
 0 3 * * * umask 077 && /path/to/convo backup --auto
@@ -97,10 +106,10 @@ set a tighter umask in the cron line:
 
 Future releases will add:
 
-- `convo stats` -- tools, commands, sessions, files, skills, model, hooks
-- `convo summary` -- one-shot dashboard across sessions, tools, dangers,
-  anti-patterns
-- `convo diff` -- compare current period vs previous (default 7d)
+- Claude Code plugin/extension packaging (primary distribution target).
+- `convo stats hooks` and `convo stats skills` -- deferred to v1.1; both
+  require a `0002_live_hooks.sql` schema addition to capture pre/post tool
+  hook events and skill invocations from the JSONL.
 
 ## License
 

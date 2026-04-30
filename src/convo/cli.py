@@ -1,15 +1,36 @@
-"""Argparse CLI for convo: backup, restore, index, info, search, inspect, snapshots."""
+"""Argparse CLI for convo: backup, restore, index, info, search, inspect, snapshots, stats."""
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sqlite3
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from convo.analytics import (
+    CommandsReport,
+    Delta,
+    DeltaReport,
+    DiffReport,
+    FilesReport,
+    ModelReport,
+    SessionsReport,
+    SummaryReport,
+    ToolsReport,
+    WindowSnapshot,
+    compute_diff,
+    gather_summary,
+    stats_commands,
+    stats_files,
+    stats_model,
+    stats_sessions,
+    stats_tools,
+)
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
 from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
 from convo.read.filters import parse_span
@@ -26,13 +47,14 @@ from convo.read.snapshots import SnapshotInfo, list_snapshots
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from datetime import timedelta
 
 DEFAULT_PROJECTS_DIR: Path = Path.home() / ".claude" / "projects"
 
 _INFO_ENVELOPE_VERSION: int = 1
 _SEARCH_ENVELOPE_VERSION: int = 1
 _INSPECT_ENVELOPE_VERSION: int = 1
+_STATS_ENVELOPE_VERSION: int = 1
+_STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
 _UNKNOWN_PROJECT_LABEL: str = "(unknown)"
@@ -77,6 +99,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_search_parser(sub)
     _add_inspect_parser(sub)
     _add_snapshots_parser(sub)
+    _add_stats_parser(sub)
+    _add_summary_parser(sub)
+    _add_diff_parser(sub)
     return parser
 
 
@@ -247,6 +272,43 @@ def _add_snapshots_parser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     )
 
 
+def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    stats_p = sub.add_parser(
+        "stats",
+        help="Aggregate analytics over the indexed convo DB.",
+        epilog=(
+            "Family chooses which aggregation to run: "
+            "tools (call frequency / median duration / error rate), "
+            "commands (first-user-message histogram), "
+            "sessions (count, median/p95 duration, hour-of-day), "
+            "files (source_files counts and top-N by message_count), "
+            "model (sessions per model)."
+        ),
+    )
+    stats_p.add_argument(
+        "family",
+        choices=_STATS_FAMILIES,
+        help="Which stats family to compute.",
+    )
+    stats_p.add_argument(
+        "--since",
+        type=parse_span,
+        default=None,
+        help="Only include rows newer than this span (e.g. 7d, 24h, 90m, 30s).",
+    )
+    stats_p.add_argument(
+        "--project",
+        default=None,
+        help="Restrict to one project_path (exact match against sessions.project_path).",
+    )
+    stats_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -268,6 +330,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         "search": _search_command,
         "inspect": _inspect_command,
         "snapshots": _snapshots_command,
+        "stats": _stats_command,
+        "summary": _summary_command,
+        "diff": _diff_command,
     }
     handler = handlers.get(args.cmd)
     if handler is None:
@@ -329,7 +394,7 @@ def _build_snapshots_envelope(
         "schema_version": _SNAPSHOTS_ENVELOPE_VERSION,
         "snapshots": {
             "snapshot_dir": str(snapshot_dir),
-            "snapshots": [_snapshot_to_dict(s) for s in snapshots],
+            "entries": [_snapshot_to_dict(s) for s in snapshots],
         },
     }
 
@@ -721,3 +786,597 @@ def _print_message(idx: int, msg: MessageView, *, full: bool) -> None:
     for tc in msg.tool_calls:
         preview = _truncate(tc.input_json.replace("\n", " "), _INSPECT_TOOL_INPUT_PREVIEW)
         print(f"  → {tc.name}: {preview}")
+
+
+_STATS_FAMILY_FUNCS: dict[
+    str,
+    Callable[..., ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport],
+] = {
+    "tools": stats_tools,
+    "commands": stats_commands,
+    "sessions": stats_sessions,
+    "files": stats_files,
+    "model": stats_model,
+}
+
+
+def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
+    family: str = args.family
+    func = _STATS_FAMILY_FUNCS[family]
+    with Database(db_path) as db:
+        report = func(db, since=args.since, project=args.project)
+    if args.as_json:
+        print(json.dumps(_build_stats_envelope(family, report)))
+    else:
+        _print_stats(family, report)
+    return 0
+
+
+def _build_stats_envelope(
+    family: str,
+    report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport,
+) -> dict[str, object]:
+    body: dict[str, object] = {"family": family, **dataclasses.asdict(report)}
+    return {"schema_version": _STATS_ENVELOPE_VERSION, "stats": body}
+
+
+def _print_stats(
+    family: str,
+    report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport,
+) -> None:
+    if family == "tools":
+        assert isinstance(report, ToolsReport)
+        _print_stats_tools(report)
+    elif family == "commands":
+        assert isinstance(report, CommandsReport)
+        _print_stats_commands(report)
+    elif family == "sessions":
+        assert isinstance(report, SessionsReport)
+        _print_stats_sessions(report)
+    elif family == "files":
+        assert isinstance(report, FilesReport)
+        _print_stats_files(report)
+    elif family == "model":
+        assert isinstance(report, ModelReport)
+        _print_stats_model(report)
+
+
+def _print_stats_tools(report: ToolsReport) -> None:
+    print(f"total_calls  {report.total_calls}")
+    if report.total_calls == 0:
+        print("(no data)")
+        return
+    print()
+    print("top by frequency:")
+    if not report.top_by_frequency:
+        print("  (none)")
+    else:
+        name_w = max(len("tool"), *(len(f.name) for f in report.top_by_frequency))
+        count_w = max(len("count"), *(len(str(f.count)) for f in report.top_by_frequency))
+        print(f"  {'tool'.ljust(name_w)}  {'count'.rjust(count_w)}")
+        print(f"  {'-' * name_w}  {'-' * count_w}")
+        for f in report.top_by_frequency:
+            print(f"  {f.name.ljust(name_w)}  {str(f.count).rjust(count_w)}")
+    print()
+    print("top by median duration:")
+    if not report.top_by_median_duration:
+        print("  (none)")
+    else:
+        rows = [
+            (s.name, f"{s.median_ms:.1f}", str(s.sample_count))
+            for s in report.top_by_median_duration
+        ]
+        name_w = max(len("tool"), *(len(r[0]) for r in rows))
+        ms_w = max(len("median_ms"), *(len(r[1]) for r in rows))
+        n_w = max(len("samples"), *(len(r[2]) for r in rows))
+        print(f"  {'tool'.ljust(name_w)}  {'median_ms'.rjust(ms_w)}  {'samples'.rjust(n_w)}")
+        print(f"  {'-' * name_w}  {'-' * ms_w}  {'-' * n_w}")
+        for name, ms, n in rows:
+            print(f"  {name.ljust(name_w)}  {ms.rjust(ms_w)}  {n.rjust(n_w)}")
+    print()
+    print("error rates:")
+    if not report.error_rates:
+        print("  (none)")
+    else:
+        rows2 = [
+            (er.name, str(er.total), str(er.errors), f"{er.error_rate:.2%}")
+            for er in report.error_rates
+        ]
+        name_w = max(len("tool"), *(len(r[0]) for r in rows2))
+        tot_w = max(len("total"), *(len(r[1]) for r in rows2))
+        err_w = max(len("errors"), *(len(r[2]) for r in rows2))
+        rate_w = max(len("rate"), *(len(r[3]) for r in rows2))
+        print(
+            f"  {'tool'.ljust(name_w)}  "
+            f"{'total'.rjust(tot_w)}  "
+            f"{'errors'.rjust(err_w)}  "
+            f"{'rate'.rjust(rate_w)}",
+        )
+        print(f"  {'-' * name_w}  {'-' * tot_w}  {'-' * err_w}  {'-' * rate_w}")
+        for name, tot, err, rate in rows2:
+            print(
+                f"  {name.ljust(name_w)}  "
+                f"{tot.rjust(tot_w)}  "
+                f"{err.rjust(err_w)}  "
+                f"{rate.rjust(rate_w)}",
+            )
+
+
+def _print_stats_commands(report: CommandsReport) -> None:
+    print(f"total_sessions_with_command  {report.total_sessions_with_command}")
+    if report.total_sessions_with_command == 0:
+        print("(no data)")
+        return
+    print()
+    print("top commands:")
+    if not report.top_commands:
+        print("  (none)")
+        return
+    count_w = max(len("count"), *(len(str(c.count)) for c in report.top_commands))
+    print(f"  {'count'.rjust(count_w)}  command")
+    print(f"  {'-' * count_w}  {'-' * 7}")
+    for c in report.top_commands:
+        print(f"  {str(c.count).rjust(count_w)}  {c.command}")
+
+
+def _print_stats_sessions(report: SessionsReport) -> None:
+    print(f"total_sessions         {report.total_sessions}")
+    print(f"sessions_with_duration {report.sessions_with_duration}")
+    if report.total_sessions == 0:
+        print("(no data)")
+        return
+    median = "n/a" if report.median_duration_s is None else f"{report.median_duration_s:.1f}s"
+    p95 = "n/a" if report.p95_duration_s is None else f"{report.p95_duration_s:.1f}s"
+    print(f"median_duration        {median}")
+    print(f"p95_duration           {p95}")
+    print()
+    print("hour-of-day (UTC):")
+    max_count = max(report.hour_of_day) if report.hour_of_day else 0
+    width = max(len(str(max_count)), 1)
+    for h, count in enumerate(report.hour_of_day):
+        bar = "#" * count if count > 0 else ""
+        print(f"  {h:02d}  {str(count).rjust(width)}  {bar}")
+
+
+def _print_stats_files(report: FilesReport) -> None:
+    print(f"total_files          {report.total_files}")
+    print(f"total_size_bytes     {report.total_size_bytes}")
+    print(f"total_message_count  {report.total_message_count}")
+    if report.total_files == 0:
+        print("(no data)")
+        return
+    print()
+    print("top files by message_count:")
+    if not report.top_files:
+        print("  (none)")
+        return
+    rows = [(f.path, str(f.message_count), str(f.size_bytes)) for f in report.top_files]
+    path_w = max(len("path"), *(len(r[0]) for r in rows))
+    mc_w = max(len("messages"), *(len(r[1]) for r in rows))
+    sz_w = max(len("size"), *(len(r[2]) for r in rows))
+    print(f"  {'path'.ljust(path_w)}  {'messages'.rjust(mc_w)}  {'size'.rjust(sz_w)}")
+    print(f"  {'-' * path_w}  {'-' * mc_w}  {'-' * sz_w}")
+    for path, mc, sz in rows:
+        print(f"  {path.ljust(path_w)}  {mc.rjust(mc_w)}  {sz.rjust(sz_w)}")
+
+
+def _print_stats_model(report: ModelReport) -> None:
+    print(f"total_sessions  {report.total_sessions}")
+    print(f"null_count      {report.null_count}")
+    if report.total_sessions == 0:
+        print("(no data)")
+        return
+    print()
+    print("by model:")
+    if not report.by_model:
+        print("  (none)")
+        return
+    name_w = max(len("model"), *(len(m.model) for m in report.by_model))
+    count_w = max(len("sessions"), *(len(str(m.session_count)) for m in report.by_model))
+    print(f"  {'model'.ljust(name_w)}  {'sessions'.rjust(count_w)}")
+    print(f"  {'-' * name_w}  {'-' * count_w}")
+    for m in report.by_model:
+        print(f"  {m.model.ljust(name_w)}  {str(m.session_count).rjust(count_w)}")
+
+
+_SUMMARY_ENVELOPE_VERSION: int = 1
+_SUMMARY_TOP_LIMIT: int = 5
+
+
+def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    summary_p = sub.add_parser(
+        "summary",
+        help="Compose all stats families into a single dashboard.",
+        epilog=(
+            "Runs each of the five stats families (tools, commands, sessions, "
+            "files, model) over the same (since, project) window and prints a "
+            "summary section per family."
+        ),
+    )
+    summary_p.add_argument(
+        "--since",
+        type=parse_span,
+        default=None,
+        help="Only include rows newer than this span (e.g. 7d, 24h, 90m, 30s).",
+    )
+    summary_p.add_argument(
+        "--project",
+        default=None,
+        help="Restrict to one project_path (exact match against sessions.project_path).",
+    )
+    summary_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
+    with Database(db_path) as db:
+        report = gather_summary(db, since=args.since, project=args.project)
+    if args.as_json:
+        print(json.dumps(_build_summary_envelope(report)))
+    else:
+        _print_summary_report(report)
+    return 0
+
+
+def _build_summary_envelope(report: SummaryReport) -> dict[str, object]:
+    body: dict[str, object] = {
+        "since": _span_to_str(report.since),
+        "project": report.project,
+        "tools": dataclasses.asdict(report.tools),
+        "commands": dataclasses.asdict(report.commands),
+        "sessions": dataclasses.asdict(report.sessions),
+        "files": dataclasses.asdict(report.files),
+        "model": dataclasses.asdict(report.model),
+    }
+    return {"schema_version": _SUMMARY_ENVELOPE_VERSION, "summary": body}
+
+
+def _print_summary_report(report: SummaryReport) -> None:
+    since_label = _span_to_str(report.since) or "all"
+    project_label = report.project if report.project is not None else "all"
+    print(f"convo summary (since={since_label}, project={project_label})")
+    print()
+    _print_summary_tools(report.tools)
+    print()
+    _print_summary_commands(report.commands)
+    print()
+    _print_summary_sessions(report.sessions)
+    print()
+    _print_summary_files(report.files)
+    print()
+    _print_summary_model(report.model)
+
+
+def _print_summary_tools(report: ToolsReport) -> None:
+    print(f"tools  ({report.total_calls} calls)")
+    if report.total_calls == 0 or not report.top_by_frequency:
+        print("  (no data)")
+        return
+    top = report.top_by_frequency[:_SUMMARY_TOP_LIMIT]
+    name_w = max(len("tool"), *(len(f.name) for f in top))
+    count_w = max(len("count"), *(len(str(f.count)) for f in top))
+    print(f"  {'tool'.ljust(name_w)}  {'count'.rjust(count_w)}")
+    print(f"  {'-' * name_w}  {'-' * count_w}")
+    for f in top:
+        print(f"  {f.name.ljust(name_w)}  {str(f.count).rjust(count_w)}")
+    extra = len(report.top_by_frequency) - len(top)
+    if extra > 0:
+        print(f"  --- {extra} more")
+
+
+def _print_summary_commands(report: CommandsReport) -> None:
+    print(f"commands  ({report.total_sessions_with_command} sessions)")
+    if report.total_sessions_with_command == 0 or not report.top_commands:
+        print("  (no data)")
+        return
+    top = report.top_commands[:_SUMMARY_TOP_LIMIT]
+    count_w = max(len("count"), *(len(str(c.count)) for c in top))
+    print(f"  {'count'.rjust(count_w)}  command")
+    print(f"  {'-' * count_w}  {'-' * 7}")
+    for c in top:
+        print(f"  {str(c.count).rjust(count_w)}  {c.command}")
+    extra = len(report.top_commands) - len(top)
+    if extra > 0:
+        print(f"  --- {extra} more")
+
+
+def _print_summary_sessions(report: SessionsReport) -> None:
+    print(f"sessions  ({report.total_sessions} total)")
+    if report.total_sessions == 0:
+        print("  (no data)")
+        return
+    median = "n/a" if report.median_duration_s is None else f"{report.median_duration_s:.1f}s"
+    p95 = "n/a" if report.p95_duration_s is None else f"{report.p95_duration_s:.1f}s"
+    print(f"  median_duration  {median}")
+    print(f"  p95_duration     {p95}")
+
+
+def _print_summary_files(report: FilesReport) -> None:
+    print(f"files  ({report.total_files} files, {report.total_message_count} messages)")
+    if report.total_files == 0 or not report.top_files:
+        print("  (no data)")
+        return
+    top = report.top_files[:_SUMMARY_TOP_LIMIT]
+    rows = [(f.path, str(f.message_count)) for f in top]
+    path_w = max(len("path"), *(len(r[0]) for r in rows))
+    mc_w = max(len("messages"), *(len(r[1]) for r in rows))
+    print(f"  {'path'.ljust(path_w)}  {'messages'.rjust(mc_w)}")
+    print(f"  {'-' * path_w}  {'-' * mc_w}")
+    for path, mc in rows:
+        print(f"  {path.ljust(path_w)}  {mc.rjust(mc_w)}")
+    extra = len(report.top_files) - len(top)
+    if extra > 0:
+        print(f"  --- {extra} more")
+
+
+def _print_summary_model(report: ModelReport) -> None:
+    print(f"model  ({report.total_sessions} sessions, {report.null_count} unknown)")
+    if report.total_sessions == 0 or not report.by_model:
+        print("  (no data)")
+        return
+    top = report.by_model[:_SUMMARY_TOP_LIMIT]
+    name_w = max(len("model"), *(len(m.model) for m in top))
+    count_w = max(len("sessions"), *(len(str(m.session_count)) for m in top))
+    print(f"  {'model'.ljust(name_w)}  {'sessions'.rjust(count_w)}")
+    print(f"  {'-' * name_w}  {'-' * count_w}")
+    for m in top:
+        print(f"  {m.model.ljust(name_w)}  {str(m.session_count).rjust(count_w)}")
+    extra = len(report.by_model) - len(top)
+    if extra > 0:
+        print(f"  --- {extra} more")
+
+
+_DIFF_ENVELOPE_VERSION: int = 1
+_DIFF_DEFAULT_SPAN: timedelta = timedelta(days=7)
+_DIFF_TOP_LIMIT: int = 10
+_ANSI_GREEN: str = "\x1b[32m"
+_ANSI_RED: str = "\x1b[31m"
+_ANSI_RESET: str = "\x1b[0m"
+
+
+def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    diff_p = sub.add_parser(
+        "diff",
+        help="Compare the current window against the previous window of the same length.",
+        epilog=(
+            "Default span is 7d. The current window is [now-span, now); the "
+            "previous window is [now-2*span, now-span). Per-bucket deltas are "
+            "shown alongside both windows. ANSI colour on TTY: green for "
+            "increases, red for decreases."
+        ),
+    )
+    diff_p.add_argument(
+        "--since",
+        type=parse_span,
+        default=None,
+        help="Window length (e.g. 7d, 24h, 90m, 30s). Default: 7d.",
+    )
+    diff_p.add_argument(
+        "--project",
+        default=None,
+        help="Restrict to one project_path (exact match against sessions.project_path).",
+    )
+    diff_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
+    span: timedelta = args.since if args.since is not None else _DIFF_DEFAULT_SPAN
+    with Database(db_path) as db:
+        report = compute_diff(db, span=span, project=args.project)
+    if args.as_json:
+        print(json.dumps(_build_diff_envelope(report)))
+    else:
+        _print_diff(report)
+    return 0
+
+
+def _build_diff_envelope(report: DiffReport) -> dict[str, object]:
+    body: dict[str, object] = {
+        "span_seconds": report.span_seconds,
+        "project": report.project,
+        "current": _window_to_dict(report.current),
+        "previous": _window_to_dict(report.previous),
+        "deltas": _deltas_to_dict(report.deltas),
+    }
+    return {"schema_version": _DIFF_ENVELOPE_VERSION, "diff": body}
+
+
+def _window_to_dict(window: WindowSnapshot) -> dict[str, object]:
+    return dataclasses.asdict(window)
+
+
+def _delta_to_dict(delta: Delta) -> dict[str, object]:
+    return {"absolute": delta.absolute, "pct": delta.pct}
+
+
+def _deltas_to_dict(deltas: DeltaReport) -> dict[str, object]:
+    return {
+        "tool_calls_total": _delta_to_dict(deltas.tool_calls_total),
+        "tool_calls_by_name": {k: _delta_to_dict(v) for k, v in deltas.tool_calls_by_name.items()},
+        "commands_total": _delta_to_dict(deltas.commands_total),
+        "commands_top": {k: _delta_to_dict(v) for k, v in deltas.commands_top.items()},
+        "sessions_count": _delta_to_dict(deltas.sessions_count),
+        "sessions_median_seconds": _delta_to_dict(deltas.sessions_median_seconds),
+        "sessions_p95_seconds": _delta_to_dict(deltas.sessions_p95_seconds),
+        "files_count": _delta_to_dict(deltas.files_count),
+        "model_histogram": {k: _delta_to_dict(v) for k, v in deltas.model_histogram.items()},
+    }
+
+
+def _diff_use_color() -> bool:
+    return sys.stdout.isatty()
+
+
+def _format_delta_int(delta: Delta, *, color: bool) -> str:
+    abs_val = int(delta.absolute) if float(delta.absolute).is_integer() else delta.absolute
+    pct_str = _format_pct(delta.pct)
+    sign = "+" if delta.absolute > 0 else ""
+    raw = f"{sign}{abs_val} ({pct_str})"
+    return _wrap_color(raw, delta.absolute, color=color)
+
+
+def _format_delta_float(delta: Delta, *, color: bool, suffix: str = "") -> str:
+    pct_str = _format_pct(delta.pct)
+    sign = "+" if delta.absolute > 0 else ""
+    raw = f"{sign}{delta.absolute:.1f}{suffix} ({pct_str})"
+    return _wrap_color(raw, delta.absolute, color=color)
+
+
+def _wrap_color(text: str, value: float, *, color: bool) -> str:
+    if not color or value == 0:
+        return text
+    code = _ANSI_GREEN if value > 0 else _ANSI_RED
+    return f"{code}{text}{_ANSI_RESET}"
+
+
+def _format_pct(pct: float | None) -> str:
+    if pct is None:
+        return "new"
+    return f"{pct * 100:+.1f}%"
+
+
+def _print_diff(report: DiffReport) -> None:
+    color = _diff_use_color()
+    span_label = _span_seconds_label(report.span_seconds)
+    project_label = report.project if report.project is not None else "all"
+    print(f"convo diff (span={span_label}, project={project_label})")
+    print(f"  current   [{report.current.lower}, {report.current.upper})")
+    print(f"  previous  [{report.previous.lower}, {report.previous.upper})")
+    print()
+    _print_diff_scalars(report, color=color)
+    print()
+    _print_diff_mapping(
+        "top tools by frequency",
+        current=report.current.tool_calls_by_name,
+        previous=report.previous.tool_calls_by_name,
+        deltas=report.deltas.tool_calls_by_name,
+        color=color,
+    )
+    print()
+    _print_diff_mapping(
+        "top commands",
+        current=report.current.commands_top,
+        previous=report.previous.commands_top,
+        deltas=report.deltas.commands_top,
+        color=color,
+    )
+    print()
+    _print_diff_mapping(
+        "model histogram",
+        current=report.current.model_histogram,
+        previous=report.previous.model_histogram,
+        deltas=report.deltas.model_histogram,
+        color=color,
+    )
+
+
+def _print_diff_scalars(report: DiffReport, *, color: bool) -> None:
+    rows: list[tuple[str, str, str, str]] = [
+        (
+            "tool_calls_total",
+            str(report.current.tool_calls_total),
+            str(report.previous.tool_calls_total),
+            _format_delta_int(report.deltas.tool_calls_total, color=color),
+        ),
+        (
+            "commands_total",
+            str(report.current.commands_total),
+            str(report.previous.commands_total),
+            _format_delta_int(report.deltas.commands_total, color=color),
+        ),
+        (
+            "sessions_count",
+            str(report.current.sessions_count),
+            str(report.previous.sessions_count),
+            _format_delta_int(report.deltas.sessions_count, color=color),
+        ),
+        (
+            "sessions_median_s",
+            _opt_seconds(report.current.sessions_median_seconds),
+            _opt_seconds(report.previous.sessions_median_seconds),
+            _format_delta_float(report.deltas.sessions_median_seconds, color=color, suffix="s"),
+        ),
+        (
+            "sessions_p95_s",
+            _opt_seconds(report.current.sessions_p95_seconds),
+            _opt_seconds(report.previous.sessions_p95_seconds),
+            _format_delta_float(report.deltas.sessions_p95_seconds, color=color, suffix="s"),
+        ),
+        (
+            "files_count",
+            str(report.current.files_count),
+            str(report.previous.files_count),
+            _format_delta_int(report.deltas.files_count, color=color),
+        ),
+    ]
+    metric_w = max(len("metric"), *(len(r[0]) for r in rows))
+    cur_w = max(len("current"), *(len(r[1]) for r in rows))
+    prev_w = max(len("previous"), *(len(r[2]) for r in rows))
+    delta_label = "Δ"
+    print(
+        f"{'metric'.ljust(metric_w)}  "
+        f"{'current'.rjust(cur_w)}  "
+        f"{'previous'.rjust(prev_w)}  "
+        f"{delta_label}",
+    )
+    print(f"{'-' * metric_w}  {'-' * cur_w}  {'-' * prev_w}  {'-' * 7}")
+    for metric, cur, prev, delta in rows:
+        print(f"{metric.ljust(metric_w)}  {cur.rjust(cur_w)}  {prev.rjust(prev_w)}  {delta}")
+
+
+def _print_diff_mapping(
+    title: str,
+    *,
+    current: object,
+    previous: object,
+    deltas: object,
+    color: bool,
+) -> None:
+    cur_map = cast("dict[str, int]", current)
+    prev_map = cast("dict[str, int]", previous)
+    delta_map = cast("dict[str, Delta]", deltas)
+    print(f"{title}:")
+    if not delta_map:
+        print("  (no data)")
+        return
+    items = list(delta_map.items())[:_DIFF_TOP_LIMIT]
+    rows = [
+        (k, str(cur_map.get(k, 0)), str(prev_map.get(k, 0)), _format_delta_int(d, color=color))
+        for k, d in items
+    ]
+    name_w = max(len("name"), *(len(r[0]) for r in rows))
+    cur_w = max(len("current"), *(len(r[1]) for r in rows))
+    prev_w = max(len("previous"), *(len(r[2]) for r in rows))
+    delta_label = "Δ"
+    print(
+        f"  {'name'.ljust(name_w)}  "
+        f"{'current'.rjust(cur_w)}  "
+        f"{'previous'.rjust(prev_w)}  "
+        f"{delta_label}",
+    )
+    print(f"  {'-' * name_w}  {'-' * cur_w}  {'-' * prev_w}  {'-' * 7}")
+    for name, cur, prev, delta in rows:
+        print(f"  {name.ljust(name_w)}  {cur.rjust(cur_w)}  {prev.rjust(prev_w)}  {delta}")
+    extra = len(delta_map) - len(rows)
+    if extra > 0:
+        print(f"  --- {extra} more")
+
+
+def _opt_seconds(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.1f}s"
+
+
+def _span_seconds_label(span_seconds: float) -> str:
+    total = int(span_seconds)
+    return f"{total}s"

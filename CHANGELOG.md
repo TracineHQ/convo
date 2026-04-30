@@ -64,6 +64,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   picks the newest snapshot file by mtime, and restores it via the
   existing atomic-swap path. Mutually exclusive with positional `<src>`;
   empty snapshot directory exits 1 with a clean error.
+- `convo stats <family> [--since SPAN] [--project P] [--json]`: per-family
+  SQL aggregations over the indexed corpus. `tools` ranks tool-call usage
+  by name (top-20 frequency, top-10 by median duration, per-tool error
+  rate via `tool_results.is_error`); `commands` groups the first user
+  message of each session (whitespace-collapsed, truncated to 80 chars)
+  and returns the top-20 frequency histogram; `sessions` reports count,
+  median and p95 duration (computed in Python via `statistics`), and a
+  24-bucket hour-of-day distribution of session start times (UTC);
+  `files` reports `source_files` count, total size, message-count sum,
+  and the top-10 indexed JSONL files ranked by `message_count`; `model`
+  reports a sessions-per-model histogram with a separate null/unknown
+  bucket. Each family emits a versioned JSON envelope
+  (`schema_version: 1`) under `--json`.
+- `convo summary [--since SPAN] [--project P] [--json]`: composes all
+  five `stats` families into one dashboard run. Re-uses the Phase B
+  `parse_span` and `--project` filter so the window/scope is consistent
+  across sub-reports. JSON mode emits a single envelope keyed by family.
+- `convo diff [--since SPAN] [--project P] [--json]`: runs the same
+  aggregations over two consecutive windows of equal length (current vs
+  previous) and reports per-row deltas. Default span is 7d. Prose mode
+  highlights deltas with ANSI green/red on a TTY; JSON mode emits raw
+  current/previous/delta triples.
 - Wheel-build CI check that asserts `migrations/0001_init.sql` is present
   in the packaged distribution.
 - `just snapshots-clean` recipe to mirror `just db-reset` for local resets.
@@ -87,9 +109,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned for 0.1.0
 
-- Analytics: tools, commands, sessions, files, skills, model, hooks,
-  retries, chains (`stats`, `summary`).
-- Period-comparison `diff` command.
+- `convo stats hooks` and `convo stats skills` — deferred to v1.1;
+  require a `0002_live_hooks.sql` schema addition to capture pre/post
+  tool hook events and skill invocations from the JSONL.
 
 ### Future work
 

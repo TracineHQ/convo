@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import stat
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
@@ -153,3 +155,14 @@ def test_restore_unlinks_sidecars_before_replace(
 
     assert observed["wal_existed_at_replace"] is False
     assert observed["shm_existed_at_replace"] is False
+
+
+def test_backup_snapshot_is_owner_only(db: Database, tmp_path: Path) -> None:
+    """Snapshot files must be 0o600 — they may contain prompt/response text."""
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX permissions not enforced on Windows")
+    seed_source_file(db, path="/seed/a.jsonl")
+    snap = db.backup_snapshot(tmp_path)
+    mode = stat.S_IMODE(snap.stat().st_mode)
+    assert mode == 0o600, f"expected 0o600, got 0o{mode:o}"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 _SPAN_RE = re.compile(r"^(?P<n>[1-9][0-9]*)(?P<unit>[dhms])$")
 _UNIT_TO_KW: dict[str, str] = {
@@ -33,3 +33,21 @@ def parse_span(s: str) -> timedelta:
     n = int(match.group("n"))
     unit = match.group("unit")
     return timedelta(**{_UNIT_TO_KW[unit]: n})
+
+
+def since_iso(since: timedelta | None) -> str | None:
+    """Format `since` as an ISO timestamp suitable for WHERE clauses.
+
+    Stored timestamps are ISO-8601 with `Z` suffix and carry fractional seconds
+    (e.g. ``2024-04-30T14:23:45.123Z``). SQLite compares TEXT lexicographically;
+    ASCII ``.`` (0x2E) is less than ``Z`` (0x5A), so a cutoff formatted without
+    a fractional component (``...:45Z``) sorts AFTER any same-second timestamp
+    that does carry one (``...:45.123Z``), silently excluding rows on the
+    cutoff second from ``--since`` windows. We therefore include a ``.``
+    followed by microseconds in the cutoff so lexicographic ordering matches
+    real-world stored values.
+    """
+    if since is None:
+        return None
+    cutoff = datetime.now(UTC) - since
+    return cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ")

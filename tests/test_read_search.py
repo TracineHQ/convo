@@ -173,6 +173,18 @@ def test_search_empty_query_raises(db: Database) -> None:
         list(search(db, "   "))
 
 
+def test_search_short_token_raises(db: Database) -> None:
+    """Trigram tokenizer needs ≥3 chars; queries shorter than that must error."""
+    _seed_search_corpus(db)
+    with pytest.raises(ValueError, match="at least 3 characters"):
+        list(search(db, "x"))
+    with pytest.raises(ValueError, match="at least 3 characters"):
+        list(search(db, "ab"))
+    # Operator tokens after `+` / `-` strip must also be ≥3 chars.
+    with pytest.raises(ValueError, match="at least 3 characters"):
+        list(search(db, "+go -no"))
+
+
 def test_search_results_ordered_by_timestamp_desc(db: Database) -> None:
     _seed_search_corpus(db)
     hits = list(search(db, "kafka"))

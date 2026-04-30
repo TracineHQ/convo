@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 
-from convo.read.filters import parse_span
+from convo.read import filters as _filters_mod
+from convo.read.filters import parse_span, since_iso
 
 
 def test_parse_span_days() -> None:
@@ -55,3 +57,33 @@ def test_parse_span_one_unit() -> None:
 def test_parse_span_invalid(value: str) -> None:
     with pytest.raises(ValueError, match="invalid --since span"):
         parse_span(value)
+
+
+def test_since_iso_none_returns_none() -> None:
+
+    assert since_iso(None) is None
+
+
+def test_since_iso_includes_fractional_seconds_for_lex_compare() -> None:
+    """Cutoff must contain ``.`` so SQLite TEXT compare orders ``.000Z`` < ``.123Z``.
+
+    Regression: with strftime("%Y-%m-%dT%H:%M:%SZ"), a record stored at
+    ``2024-01-01T12:00:00.500Z`` would be silently excluded by ``--since`` when
+    the computed cutoff was ``2024-01-01T12:00:00Z`` (because lex-compare puts
+    ``.500Z`` < ``Z``). The fix: format cutoff with microseconds.
+    """
+    fixed_now = datetime(2024, 1, 1, 12, 0, 1, tzinfo=UTC)
+    with patch.object(_filters_mod, "datetime") as mock_dt:
+        mock_dt.now.return_value = fixed_now
+        cutoff = since_iso(timedelta(seconds=1, microseconds=500_000))
+
+    assert cutoff is not None
+    # The cutoff string must contain a `.` so SQLite TEXT compare matches
+    # millisecond-precision stored timestamps.
+    assert "." in cutoff, f"cutoff missing fractional component: {cutoff!r}"
+    # The record at 12:00:00.500Z should compare >= cutoff (12:00:00.000000Z).
+    record_ts = "2024-01-01T12:00:00.500Z"
+    assert record_ts >= cutoff, (
+        f"record {record_ts!r} should be included (>= cutoff {cutoff!r}) "
+        "but lex-compare excludes it"
+    )

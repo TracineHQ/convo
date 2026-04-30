@@ -178,6 +178,9 @@ class Database:
             raise FileExistsError(_ERR_BACKUP_DEST_EXISTS.format(dest=dest_path))
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn.execute("VACUUM INTO ?", (str(dest_path),))
+        # VACUUM INTO honors the process umask (often 0o644). Snapshot may
+        # contain prompt/response text — tighten to owner-only by default.
+        dest_path.chmod(0o600)
 
     def backup_snapshot(self, snapshot_dir: Path | str | None = None) -> Path:
         target_dir = resolve_snapshot_dir(snapshot_dir, self.path)

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
+from convo.read.filters import since_iso as _filters_since_iso
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -30,6 +30,10 @@ _KIND_TOOL_RESULT: str = "tool_result"
 
 _ERR_INVALID_QUERY = "invalid search query: {reason}"
 _ERR_EMPTY_QUERY = "search query must not be empty"
+_ERR_SHORT_QUERY_TERM = (
+    "search tokens must be at least 3 characters (FTS5 trigram tokenizer minimum)"
+)
+_MIN_TERM_LEN = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,16 +84,21 @@ def build_fts_query(raw: str) -> str:
     tokens = text.split()
     has_operators = any(t.startswith(("+", "-")) and len(t) > 1 for t in tokens)
     if not has_operators:
+        # Whole-phrase mode: the trigram tokenizer needs ≥3 chars to find any
+        # match, so a 1- or 2-char query silently returns 0 hits. Reject up-front.
+        if len(text) < _MIN_TERM_LEN:
+            raise ValueError(_ERR_SHORT_QUERY_TERM)
         return _phrase(text)
 
     parts: list[str] = []
     for token in tokens:
+        term = token[1:] if token.startswith(("+", "-")) and len(token) > 1 else token
+        if len(term) < _MIN_TERM_LEN:
+            raise ValueError(_ERR_SHORT_QUERY_TERM)
         if token.startswith("-") and len(token) > 1:
-            parts.append(f"NOT {_phrase(token[1:])}")
-        elif token.startswith("+") and len(token) > 1:
-            parts.append(_phrase(token[1:]))
+            parts.append(f"NOT {_phrase(term)}")
         else:
-            parts.append(_phrase(token))
+            parts.append(_phrase(term))
     return " ".join(parts)
 
 
@@ -125,7 +134,7 @@ def search(  # noqa: PLR0913
     """
     filters = _Filters(
         fts_match=build_fts_query(query),
-        since_iso=_since_iso(since),
+        since_iso=_filters_since_iso(since),
         project=project,
         tool=tool,
     )
@@ -138,14 +147,6 @@ def search(  # noqa: PLR0913
     finally:
         ro.close()
     yield from rows
-
-
-def _since_iso(since: timedelta | None) -> str | None:
-    if since is None:
-        return None
-    cutoff = datetime.now(UTC) - since
-    # Stored timestamps are ISO-8601 with `Z` suffix; produce a compatible string.
-    return cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _run_search(

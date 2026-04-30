@@ -70,8 +70,8 @@ def test_snapshots_json_envelope(
     assert payload["schema_version"] == 1
     body = payload["snapshots"]
     assert body["snapshot_dir"] == str(snapshot_dir)
-    assert len(body["snapshots"]) == 1
-    item = body["snapshots"][0]
+    assert len(body["entries"]) == 1
+    item = body["entries"][0]
     assert set(item.keys()) == {"name", "path", "timestamp_utc", "size_bytes", "age_human"}
     assert item["size_bytes"] == 42
     assert item["name"].startswith("convo-")
@@ -110,7 +110,7 @@ def test_snapshots_empty_json(
     rc = main(["snapshots", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["snapshots"]["snapshots"] == []
+    assert payload["snapshots"]["entries"] == []
 
 
 def test_snapshots_help_shows_json(capsys: pytest.CaptureFixture[str]) -> None:

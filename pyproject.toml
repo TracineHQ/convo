@@ -48,6 +48,9 @@ Homepage = "https://github.com/TracineHQ/convo"
 Repository = "https://github.com/TracineHQ/convo"
 Issues = "https://github.com/TracineHQ/convo/issues"
 
+[project.scripts]
+convo = "convo.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/convo"]
 

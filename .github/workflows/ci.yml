@@ -71,6 +71,11 @@ jobs:
         run: uv build
       - name: List artifacts
         run: ls -la dist/
+      - name: Verify migrations are bundled in the wheel
+        run: |
+          set -eu
+          unzip -l dist/*.whl | grep -F 'convo/migrations/0001_init.sql' \
+            || { echo "ERROR: 0001_init.sql missing from built wheel"; exit 1; }
 
   gitleaks:
     name: Scan for leaked secrets

@@ -22,6 +22,26 @@ Status: under construction. v0.1.0 in progress.
 - `convo inspect` -- session timeline and subagent tree view
 - `convo index` -- build / update the index incrementally
 
+## Storage
+
+`convo` indexes every Claude Code session JSONL into a local SQLite database
+at `~/.claude/convo.db` (override with `CONVO_DB`). Three storage commands
+ship with v0.1.0:
+
+- `convo backup <dest>` -- write a `VACUUM INTO` snapshot to `<dest>`.
+- `convo backup --auto [--prune --keep N]` -- write a timestamped snapshot to
+  `~/.claude/convo-backups/`, optionally rotating to `N` retained files.
+- `convo restore <src>` -- atomically replace the live DB with `<src>`.
+
+Snapshots use microsecond-precision UTC timestamps so concurrent calls cannot
+collide on filenames. Restore validates the source before touching the live
+DB and explicitly cleans `-wal` / `-shm` sidecars to prevent corruption.
+
+Known limitations: `convo restore` requires the snapshot directory to live on
+the same filesystem as the live DB (atomic-replace constraint), and Windows
+is not supported in this version (`os.replace` against an open DB raises
+`PermissionError`).
+
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

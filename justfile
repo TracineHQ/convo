@@ -40,15 +40,19 @@ test-fast:
 
 # Run benchmark scripts (writes results under bench/results/)
 bench:
-    @echo "bench: not implemented yet (see plan Phase 6)"
+    @echo "bench: TODO; tracked in CHANGELOG [Future work]"
 
 # Live demo for README recordings
 demo:
-    @echo "demo: not implemented yet (see plan Phase 6)"
+    @echo "demo: TODO; tracked in CHANGELOG [Future work]"
 
 # Reset the local convo database (uses default location)
 db-reset:
     rm -f ~/.claude/convo.db ~/.claude/convo.db-journal ~/.claude/convo.db-wal ~/.claude/convo.db-shm
+
+# Reset the local snapshot directory
+snapshots-clean:
+    rm -rf ~/.claude/convo-backups
 
 # Sync dev dependencies
 sync:

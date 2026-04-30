@@ -7,6 +7,12 @@ every project on your machine.
 
 Status: under construction. v0.1.0 in progress.
 
+## Available commands
+
+- `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)
+- `convo backup --auto [--prune --keep N]` -- timestamped snapshot, optionally pruned
+- `convo restore <src>` -- atomic-swap restore from a snapshot file
+
 ## Planned commands
 
 - `convo summary` -- one-shot dashboard across sessions, tools, dangers, anti-patterns
@@ -15,7 +21,6 @@ Status: under construction. v0.1.0 in progress.
 - `convo diff` -- compare current period vs previous (default 7d)
 - `convo inspect` -- session timeline and subagent tree view
 - `convo index` -- build / update the index incrementally
-- `convo backup` -- snapshot the database
 
 ## License
 

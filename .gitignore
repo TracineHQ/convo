@@ -50,3 +50,6 @@ Thumbs.db
 
 # Bench results
 bench/results/
+
+# Internal planning docs (kept locally; never committed)
+docs/

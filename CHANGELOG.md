@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wheel-build CI check that asserts `migrations/0001_init.sql` is present
   in the packaged distribution.
 - `just snapshots-clean` recipe to mirror `just db-reset` for local resets.
+- Legacy migration: `convo migrate-legacy` ports a legacy
+  TracineHQ/claude-skills convo DB to the new schema. Migrates
+  `indexed_files` → `source_files`, `conversations` → `sessions`, legacy
+  `messages` → new `messages` (synthesized `raw_json` carrying
+  `_synthesized: true`), and legacy `tool_calls` → new `tool_calls` with
+  best-effort `(conversation_id, timestamp)` → `assistant message`
+  resolution. Same-path canonical case auto-renames
+  `~/.claude/convo.db → ~/.claude/convo-legacy.db` before opening the
+  destination. Validation pass covers row counts, content samples, and
+  FTS5 round-trip probes (seeded via `--seed`). Snapshot-on-failure
+  restores the destination if the migration aborts. Deferred table
+  inventory is recorded at `~/.claude/convo-legacy-deferred.json` for
+  future `--resume-deferred` use once `0002_live_hooks.sql` ships.
 
 ### Known limitations
 

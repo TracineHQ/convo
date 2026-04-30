@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -11,6 +12,16 @@ from convo.db import Database, _discover_migrations
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+_BASE_TABLES = {
+    "messages",
+    "schema_migrations",
+    "sessions",
+    "source_files",
+    "tool_calls",
+    "tool_results",
+}
+_FTS_TABLES = {"messages_fts", "tool_calls_fts", "tool_results_fts"}
 
 
 def _write(p: Path, body: str = "-- noop\n") -> None:
@@ -97,3 +108,42 @@ def test_open_does_not_flag_empty_db_as_legacy(db_path: Path) -> None:
     db = Database(db_path)
     db.open()
     db.close()
+
+
+def test_fresh_db_has_user_version_1_and_expected_tables(db_path: Path) -> None:
+    with Database(db_path) as db:
+        assert db.conn is not None
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+
+        rows = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        ).fetchall()
+        names = {r[0] for r in rows}
+        assert names >= _BASE_TABLES
+        assert names >= _FTS_TABLES
+
+        migrations = db.conn.execute(
+            "SELECT version, filename, applied_at FROM schema_migrations",
+        ).fetchall()
+        assert len(migrations) == 1
+        assert migrations[0][0] == 1
+        assert migrations[0][1] == "0001_init.sql"
+        # Parses as ISO-8601:
+        datetime.fromisoformat(migrations[0][2])
+
+
+def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
+    with Database(db_path) as db:
+        assert db.conn is not None
+        first = db.conn.execute(
+            "SELECT applied_at FROM schema_migrations WHERE version = 1",
+        ).fetchone()[0]
+
+    with Database(db_path) as db:
+        assert db.conn is not None
+        rows = db.conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
+        assert rows[0] == 1
+        second = db.conn.execute(
+            "SELECT applied_at FROM schema_migrations WHERE version = 1",
+        ).fetchone()[0]
+        assert first == second

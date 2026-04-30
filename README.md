@@ -12,8 +12,6 @@ Status: under construction. v0.1.0 in progress.
 - `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)
 - `convo backup --auto [--prune --keep N]` -- timestamped snapshot, optionally pruned
 - `convo restore <src>` -- atomic-swap restore from a snapshot file
-- `convo migrate-legacy [--src ...] [--dest ...] [--dry-run] [--no-keep-legacy] [--json] [--seed N] [--resume-deferred]` --
-  port a legacy convo DB (TracineHQ/claude-skills) to the new schema
 
 ## Planned commands
 

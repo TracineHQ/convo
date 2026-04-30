@@ -77,39 +77,6 @@ def test_open_refuses_db_from_future_version(db_path: Path) -> None:
     raw.close()
 
 
-def test_open_detects_legacy_convo_db(db_path: Path) -> None:
-    raw = sqlite3.connect(db_path)
-    raw.executescript(
-        "CREATE TABLE conversations (id INTEGER PRIMARY KEY, project_path TEXT);"
-        "PRAGMA user_version = 2;",
-    )
-    raw.close()
-
-    with pytest.raises(RuntimeError) as excinfo:
-        Database(db_path).open()
-    msg = str(excinfo.value)
-    assert "legacy convo DB" in msg
-    assert "convo migrate-legacy" in msg
-
-
-def test_open_does_not_flag_v1_db_as_legacy(db_path: Path) -> None:
-    # v1 convo DB has schema_migrations; should open without legacy error.
-    db = Database(db_path)
-    db.open()
-    db.close()
-    # Re-open: still fine, no legacy false-positive.
-    db.open()
-    db.close()
-
-
-def test_open_does_not_flag_empty_db_as_legacy(db_path: Path) -> None:
-    raw = sqlite3.connect(db_path)
-    raw.close()
-    db = Database(db_path)
-    db.open()
-    db.close()
-
-
 def test_fresh_db_has_user_version_1_and_expected_tables(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None

@@ -29,10 +29,6 @@ _ERR_DB_FROM_FUTURE = (
 _ERR_MIGRATION_GAP = "Non-contiguous migration versions discovered: {versions}"
 _ERR_MIGRATION_DUP = "Duplicate migration version {version} ({first}, {second})"
 _ERR_NOT_OPEN = "Database is not open"
-_ERR_LEGACY_DB = (
-    "Detected a legacy convo DB at {path}. Run `convo migrate-legacy` "
-    "to convert it, or pass `--db <other-path>` for a fresh DB."
-)
 _ERR_BACKUP_DEST_EXISTS = "Backup destination already exists: {dest}"
 _ERR_RESTORE_SRC_MISSING = "Snapshot source does not exist: {src}"
 _ERR_RESTORE_BAD_DB = "Snapshot source is not a usable convo DB: {src} ({reason})"
@@ -118,20 +114,8 @@ class Database:
             "PRAGMA cache_size = -64000;",
         )
         self.conn.row_factory = _sql.Row
-        self._check_legacy_db()
         self.migrate()
         return self
-
-    def _check_legacy_db(self) -> None:
-        if self.conn is None:
-            raise RuntimeError(_ERR_NOT_OPEN)
-        cur = self.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-            "('conversations', 'schema_migrations')",
-        )
-        names = {row[0] for row in cur.fetchall()}
-        if "conversations" in names and "schema_migrations" not in names:
-            raise RuntimeError(_ERR_LEGACY_DB.format(path=self.path))
 
     def close(self) -> None:
         if self.conn is not None:

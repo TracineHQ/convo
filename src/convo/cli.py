@@ -6,7 +6,6 @@ import argparse
 from pathlib import Path
 
 from convo.db import Database, resolve_db_path
-from convo.legacy_migrate import run as _migrate_legacy_run
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -50,53 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     restore.add_argument("src", type=Path)
 
-    mig = sub.add_parser(
-        "migrate-legacy",
-        help="Port a legacy convo DB to the new schema.",
-    )
-    mig.add_argument(
-        "--src",
-        type=Path,
-        default=None,
-        help="Legacy DB path (default: $CONVO_DB or ~/.claude/convo.db).",
-    )
-    mig.add_argument(
-        "--dest",
-        type=Path,
-        default=None,
-        help="New DB path (default: $CONVO_DB or ~/.claude/convo.db).",
-    )
-    mig.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Validate sources and report counts without writing the dest.",
-    )
-    mig.add_argument(
-        "--no-keep-legacy",
-        action="store_true",
-        help="Disallow same-path migration (refuses to auto-rename).",
-    )
-    mig.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit machine-readable JSON output instead of prose.",
-    )
-    mig.add_argument(
-        "--seed",
-        type=int,
-        default=0xC0FFEE,
-        help="Seed for stable validation sampling (default: 0xC0FFEE).",
-    )
-    mig.add_argument(
-        "--resume-deferred",
-        action="store_true",
-        help="Re-run the deferred-table portion of a prior migration.",
-    )
-
     args = parser.parse_args(argv)
-
-    if args.cmd == "migrate-legacy":
-        return _migrate_legacy_run(args)
 
     db_path = resolve_db_path(args.db)
 

@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  # Scope to the tag ref so two tag pushes can't race, but never cancel a
+  # release mid-publish — a half-published artifact on PyPI is unrecoverable.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    name: Build distribution and smoke-test wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
+        with:
+          # Cache disabled in the release workflow to avoid cache-poisoning
+          # writes from a tag-triggered run; CI populates the cache on every
+          # push to main, which is enough.
+          enable-cache: false
+      - name: Pin Python version
+        run: uv python pin 3.12
+      - name: Install dev deps
+        run: uv sync --extra dev
+      - name: Build wheel and sdist
+        run: uv build
+      - name: List artifacts
+        run: ls -la dist/
+      - name: Verify migrations are bundled in the wheel
+        run: |
+          set -eu
+          unzip -l dist/*.whl | grep -F 'convo/migrations/0001_init.sql' \
+            || { echo "ERROR: 0001_init.sql missing from built wheel"; exit 1; }
+      - name: Install built wheel as a tool
+        run: |
+          set -eu
+          wheel=$(ls dist/convo-*.whl)
+          uv tool install "$wheel"
+      - name: Smoke test the tagged artifact
+        env:
+          CONVO_DB: /tmp/release-smoke.db
+        run: |
+          set -eu
+          convo --version
+          convo --help | head -5
+          convo info
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-to-pypi:
+    name: Publish to PyPI (Trusted Publisher)
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    # Required for PyPI Trusted Publisher: the GitHub environment binds the
+    # OIDC subject claim. The user configures this environment in the repo
+    # settings with required reviewers; this workflow just references it.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/convo/
+    permissions:
+      # Mint the OIDC token PyPI exchanges for an upload credential.
+      id-token: write
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Publish to PyPI
+        # Trusted Publisher exchanges the GitHub OIDC token for a short-lived
+        # PyPI upload credential. No password / API token is configured here.
+        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d  # v1.14.0
+
+  github-release:
+    name: Draft GitHub Release with notes and assets
+    needs: publish-to-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create the Release and upload assets.
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          # Strip leading 'v' from the tag (v0.1.0 -> 0.1.0) to match
+          # Keep-a-Changelog headers like '## [0.1.0] - 2026-04-30'.
+          version="${REF_NAME#v}"
+          notes_file="$(mktemp)"
+          python3 - "$version" "$notes_file" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          version, out_path = sys.argv[1], sys.argv[2]
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+
+          # Match '## [<version>]' (with optional trailing date / suffix).
+          # The section runs until the next '## [' header or end-of-file.
+          pattern = re.compile(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              re.DOTALL | re.MULTILINE,
+          )
+          match = pattern.search(changelog)
+          if not match:
+              sys.stderr.write(
+                  f"warning: no CHANGELOG entry for {version}; using fallback notes\n"
+              )
+              body = f"Release {version}.\n"
+          else:
+              body = match.group(1).strip() + "\n"
+
+          pathlib.Path(out_path).write_text(body, encoding="utf-8")
+          PY
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3.0.0
+        with:
+          body_path: ${{ steps.notes.outputs.notes_file }}
+          draft: false
+          # A tag like v0.1.0-rc1 contains a hyphen → mark as prerelease.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/*
+          fail_on_unmatched_files: true

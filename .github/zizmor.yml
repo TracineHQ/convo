@@ -8,3 +8,11 @@ rules:
       # native Windows cmd.exe / PowerShell users. Switching to pwsh/bash
       # would defeat the purpose of the test.
       - ci.yml:204
+  superfluous-actions:
+    ignore:
+      # softprops/action-gh-release gives us release-notes-from-CHANGELOG
+      # extraction + asset-attachment in one declarative step. Replacing it
+      # with `gh release create` in a `run:` block would mean re-implementing
+      # the body_path logic, prerelease detection, and fail_on_unmatched_files
+      # behavior in shell. Action is widely used and pinned by SHA.
+      - release.yml:143

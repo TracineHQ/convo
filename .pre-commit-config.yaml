@@ -31,3 +31,15 @@ repos:
       - id: mypy
         files: ^src/
         additional_dependencies: []
+
+  - repo: local
+    hooks:
+      - id: vulture
+        name: vulture (dead-code scan)
+        # Run via `uv run` so we share the project venv and pick up
+        # [tool.vulture] config from pyproject.toml. Avoids version drift.
+        entry: uv run vulture
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true

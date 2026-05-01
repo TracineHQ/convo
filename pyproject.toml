@@ -42,6 +42,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pre-commit>=3.7",
+    "vulture>=2.14",
 ]
 
 [project.urls]
@@ -154,6 +155,31 @@ module = "tests.*"
 # Tests can be looser; the source must be strict.
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+
+[tool.vulture]
+# Dead-code scanner. Strict mode: min_confidence 80 keeps the signal high.
+# Run with `uv run vulture` (paths and config below are picked up automatically).
+paths = ["src", "tests"]
+min_confidence = 80
+sort_by_size = true
+ignore_decorators = [
+    # Pytest collects fixture/parametrize names by string; vulture cannot follow.
+    "@pytest.fixture",
+    "@pytest.fixture(*)",
+    "@pytest.mark.*",
+    # Click/argparse style decorators if added later.
+    "@app.route",
+]
+ignore_names = [
+    # __exit__ protocol parameters are required by the contextmanager interface
+    # even when the body only needs `self`. See src/convo/db.py.
+    "exc_type",
+    "exc",
+    "tb",
+    # Common test helper / fixture / mock attributes.
+    "side_effect",
+    "return_value",
+]
 
 [tool.bandit]
 # Skip B608 (hardcoded_sql_expressions). Ruff's S608 covers the same rule and

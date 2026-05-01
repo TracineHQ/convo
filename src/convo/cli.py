@@ -22,6 +22,9 @@ from convo.analytics import (
     ModelReport,
     SessionsReport,
     SummaryReport,
+    ToolDurationStat,
+    ToolErrorRate,
+    ToolFreq,
     ToolsReport,
     WindowSnapshot,
     compute_diff,
@@ -946,59 +949,62 @@ def _print_stats_tools(report: ToolsReport) -> None:
         print("(no data)")
         return
     print()
+    _print_top_frequency(report.top_by_frequency)
+    print()
+    _print_top_duration(report.top_by_median_duration)
+    print()
+    _print_error_rates(report.error_rates)
+
+
+def _print_top_frequency(top: tuple[ToolFreq, ...]) -> None:
     print("top by frequency:")
-    if not report.top_by_frequency:
+    if not top:
         print("  (none)")
-    else:
-        name_w = max(len("tool"), *(len(f.name) for f in report.top_by_frequency))
-        count_w = max(len("count"), *(len(str(f.count)) for f in report.top_by_frequency))
-        print(f"  {'tool'.ljust(name_w)}  {'count'.rjust(count_w)}")
-        print(f"  {'-' * name_w}  {'-' * count_w}")
-        for f in report.top_by_frequency:
-            print(f"  {f.name.ljust(name_w)}  {str(f.count).rjust(count_w)}")
-    print()
+        return
+    name_w = max(len("tool"), *(len(f.name) for f in top))
+    count_w = max(len("count"), *(len(str(f.count)) for f in top))
+    print(f"  {'tool'.ljust(name_w)}  {'count'.rjust(count_w)}")
+    print(f"  {'-' * name_w}  {'-' * count_w}")
+    for f in top:
+        print(f"  {f.name.ljust(name_w)}  {str(f.count).rjust(count_w)}")
+
+
+def _print_top_duration(top: tuple[ToolDurationStat, ...]) -> None:
     print("top by median duration:")
-    if not report.top_by_median_duration:
+    if not top:
         print("  (none)")
-    else:
-        rows = [
-            (s.name, f"{s.median_ms:.1f}", str(s.sample_count))
-            for s in report.top_by_median_duration
-        ]
-        name_w = max(len("tool"), *(len(r[0]) for r in rows))
-        ms_w = max(len("median_ms"), *(len(r[1]) for r in rows))
-        n_w = max(len("samples"), *(len(r[2]) for r in rows))
-        print(f"  {'tool'.ljust(name_w)}  {'median_ms'.rjust(ms_w)}  {'samples'.rjust(n_w)}")
-        print(f"  {'-' * name_w}  {'-' * ms_w}  {'-' * n_w}")
-        for name, ms, n in rows:
-            print(f"  {name.ljust(name_w)}  {ms.rjust(ms_w)}  {n.rjust(n_w)}")
-    print()
+        return
+    rows = [(s.name, f"{s.median_ms:.1f}", str(s.sample_count)) for s in top]
+    name_w = max(len("tool"), *(len(r[0]) for r in rows))
+    ms_w = max(len("median_ms"), *(len(r[1]) for r in rows))
+    n_w = max(len("samples"), *(len(r[2]) for r in rows))
+    print(f"  {'tool'.ljust(name_w)}  {'median_ms'.rjust(ms_w)}  {'samples'.rjust(n_w)}")
+    print(f"  {'-' * name_w}  {'-' * ms_w}  {'-' * n_w}")
+    for name, ms, n in rows:
+        print(f"  {name.ljust(name_w)}  {ms.rjust(ms_w)}  {n.rjust(n_w)}")
+
+
+def _print_error_rates(rates: tuple[ToolErrorRate, ...]) -> None:
     print("error rates:")
-    if not report.error_rates:
+    if not rates:
         print("  (none)")
-    else:
-        rows2 = [
-            (er.name, str(er.total), str(er.errors), f"{er.error_rate:.2%}")
-            for er in report.error_rates
-        ]
-        name_w = max(len("tool"), *(len(r[0]) for r in rows2))
-        tot_w = max(len("total"), *(len(r[1]) for r in rows2))
-        err_w = max(len("errors"), *(len(r[2]) for r in rows2))
-        rate_w = max(len("rate"), *(len(r[3]) for r in rows2))
+        return
+    rows = [(er.name, str(er.total), str(er.errors), f"{er.error_rate:.2%}") for er in rates]
+    name_w = max(len("tool"), *(len(r[0]) for r in rows))
+    tot_w = max(len("total"), *(len(r[1]) for r in rows))
+    err_w = max(len("errors"), *(len(r[2]) for r in rows))
+    rate_w = max(len("rate"), *(len(r[3]) for r in rows))
+    print(
+        f"  {'tool'.ljust(name_w)}  "
+        f"{'total'.rjust(tot_w)}  "
+        f"{'errors'.rjust(err_w)}  "
+        f"{'rate'.rjust(rate_w)}",
+    )
+    print(f"  {'-' * name_w}  {'-' * tot_w}  {'-' * err_w}  {'-' * rate_w}")
+    for name, tot, err, rate in rows:
         print(
-            f"  {'tool'.ljust(name_w)}  "
-            f"{'total'.rjust(tot_w)}  "
-            f"{'errors'.rjust(err_w)}  "
-            f"{'rate'.rjust(rate_w)}",
+            f"  {name.ljust(name_w)}  {tot.rjust(tot_w)}  {err.rjust(err_w)}  {rate.rjust(rate_w)}",
         )
-        print(f"  {'-' * name_w}  {'-' * tot_w}  {'-' * err_w}  {'-' * rate_w}")
-        for name, tot, err, rate in rows2:
-            print(
-                f"  {name.ljust(name_w)}  "
-                f"{tot.rjust(tot_w)}  "
-                f"{err.rjust(err_w)}  "
-                f"{rate.rjust(rate_w)}",
-            )
 
 
 def _print_stats_commands(report: CommandsReport) -> None:

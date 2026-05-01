@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from convo.analytics._constants import SECONDS_PER_DAY
 from convo.read._db_access import open_ro
 
 if TYPE_CHECKING:
@@ -26,7 +27,6 @@ _TRUNC_LEN: int = 80
 _QUANTILE_BUCKETS: int = 20
 _P95_QUANTILE_INDEX: int = 18
 _MIN_QUANTILE_SAMPLES: int = 2  # statistics.quantiles requires n >= 2.
-_SECONDS_PER_DAY: float = 86400.0
 
 _DEFAULT_SPAN: timedelta = timedelta(days=7)
 
@@ -253,7 +253,7 @@ def _sessions_durations(
         params.append(project)
     where_sql = " AND ".join(where)
     base_sql = (
-        f"SELECT (julianday(ended_at) - julianday(started_at)) * {_SECONDS_PER_DAY} "  # noqa: S608
+        f"SELECT (julianday(ended_at) - julianday(started_at)) * {SECONDS_PER_DAY} "  # noqa: S608
         "AS duration_s FROM sessions WHERE "
     )
     sql = base_sql + where_sql  # WHERE built from fixed allow-list; binds parameterized.

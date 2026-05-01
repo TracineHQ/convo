@@ -250,11 +250,44 @@ def index_file(db: Database, path: Path, *, force: bool = False) -> IndexResult:
     if db.conn is None:
         raise RuntimeError(_ERR_DB_NOT_OPEN)
     conn = db.conn
-    path_str = str(path)
 
+    early = _short_circuit(conn, path, force=force)
+    if isinstance(early, IndexResult):
+        return early
+    sig, existing = early
+
+    conn.commit()
+    conn.execute("BEGIN EXCLUSIVE")
+    # Defer FK checks for the duration of this file's transaction. Claude Code
+    # JSONLs are not topologically sorted: a record's `parentUuid` can refer to
+    # a record that appears LATER in the file. With `defer_foreign_keys = 1`,
+    # FK checks fire at COMMIT time — by which point all rows are present.
+    conn.execute("PRAGMA defer_foreign_keys = 1")
+    try:
+        if existing is not None:
+            _delete_existing(conn, existing[0])
+        records_or_result = _parse_or_rollback(conn, path)
+        if isinstance(records_or_result, IndexResult):
+            return records_or_result
+        records = records_or_result
+        result = _persist_or_rollback(conn, path, sig, records)
+    except BaseException:
+        conn.rollback()
+        raise
+
+    return result
+
+
+def _short_circuit(
+    conn: Any,
+    path: Path,
+    *,
+    force: bool,
+) -> IndexResult | tuple[_FileSig, tuple[int, str | None] | None]:
+    """Return an early `IndexResult` for empty/unchanged files, else compute the signature."""
     if _is_empty_file(path):
         return IndexResult(path=path, source_file_id=None, skipped_reason=_SKIP_EMPTY)
-
+    path_str = str(path)
     sha256, size, mtime_ns = compute_file_signature(path)
     sig = _FileSig(
         path_str=path_str,
@@ -263,7 +296,6 @@ def index_file(db: Database, path: Path, *, force: bool = False) -> IndexResult:
         sha_hex=sha256.hex(),
         session_id=_session_id_from_path(path),
     )
-
     existing = _lookup_existing(conn, path_str)
     if existing is not None and not force and existing[1] == sig.sha_hex:
         return IndexResult(
@@ -271,60 +303,53 @@ def index_file(db: Database, path: Path, *, force: bool = False) -> IndexResult:
             source_file_id=existing[0],
             skipped_reason=_SKIP_UNCHANGED,
         )
+    return sig, existing
 
-    conn.commit()
-    conn.execute("BEGIN EXCLUSIVE")
-    # Defer FK checks for the duration of this file's transaction. Claude Code
-    # JSONLs are not topologically sorted: a record's `parentUuid` can refer
-    # to another record that appears LATER in the file. The mapper's prescan
-    # confirms the parent will exist in this file, but per-row FK enforcement
-    # rejects the row before its parent has been inserted. With
-    # `defer_foreign_keys = 1`, FK checks fire only at COMMIT time — by which
-    # point all rows are present.
-    conn.execute("PRAGMA defer_foreign_keys = 1")
+
+def _parse_or_rollback(conn: Any, path: Path) -> list[IntakeRecord] | IndexResult:
+    """Parse records; on any containable parse error, ROLLBACK and return an IndexResult."""
     try:
-        if existing is not None:
-            _delete_existing(conn, existing[0])
-        try:
-            records = list(parse_file(path))
-        except IntakeParseError as exc:
-            conn.rollback()
-            return IndexResult(
-                path=path,
-                source_file_id=None,
-                error=exc.reason,
-                error_at_line=exc.lineno,
-            )
-        except (UnicodeDecodeError, OSError) as exc:
-            # Containment: a malformed-UTF-8 byte sequence or a read error on
-            # one file must not abort the whole tree run. Same pattern as the
-            # IntakeParseError / sqlite3.DatabaseError branches.
-            conn.rollback()
-            return IndexResult(
-                path=path,
-                source_file_id=None,
-                error=str(exc),
-                error_at_line=None,
-            )
-        try:
-            source_file_id, counts = _persist(conn, sig, records)
-            conn.commit()
-        except sqlite3.DatabaseError as exc:
-            # Containment: a per-file DB error (FK / UNIQUE / etc.) must not
-            # abort the whole tree run. Roll back this file and report it as a
-            # failure on the IndexResult; the orchestrator's _accumulate will
-            # collect it into IndexReport.errors.
-            conn.rollback()
-            return IndexResult(
-                path=path,
-                source_file_id=None,
-                error=str(exc),
-                error_at_line=None,
-            )
-    except BaseException:
+        return list(parse_file(path))
+    except IntakeParseError as exc:
         conn.rollback()
-        raise
+        return IndexResult(
+            path=path,
+            source_file_id=None,
+            error=exc.reason,
+            error_at_line=exc.lineno,
+        )
+    except (UnicodeDecodeError, OSError) as exc:
+        # Containment: a malformed-UTF-8 byte sequence or a read error on one
+        # file must not abort the whole tree run.
+        conn.rollback()
+        return IndexResult(
+            path=path,
+            source_file_id=None,
+            error=str(exc),
+            error_at_line=None,
+        )
 
+
+def _persist_or_rollback(
+    conn: Any,
+    path: Path,
+    sig: _FileSig,
+    records: list[IntakeRecord],
+) -> IndexResult:
+    """Persist records; on per-file DB error, ROLLBACK and return an IndexResult."""
+    try:
+        source_file_id, counts = _persist(conn, sig, records)
+        conn.commit()
+    except sqlite3.DatabaseError as exc:
+        # Containment: a per-file DB error (FK / UNIQUE / etc.) must not abort
+        # the whole tree run.
+        conn.rollback()
+        return IndexResult(
+            path=path,
+            source_file_id=None,
+            error=str(exc),
+            error_at_line=None,
+        )
     return IndexResult(
         path=path,
         source_file_id=source_file_id,

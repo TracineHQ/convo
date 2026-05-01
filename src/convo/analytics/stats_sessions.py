@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from convo.analytics._constants import SECONDS_PER_DAY
 from convo.read._db_access import open_ro
 from convo.read.filters import since_iso
 
@@ -52,8 +53,8 @@ def stats_sessions(
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     base_select = (
-        "SELECT started_at, "
-        "(julianday(ended_at) - julianday(started_at)) * 86400.0 AS duration_s "
+        "SELECT started_at, "  # noqa: S608
+        f"(julianday(ended_at) - julianday(started_at)) * {SECONDS_PER_DAY} AS duration_s "
         "FROM sessions"
     )
     sql = base_select + where_sql

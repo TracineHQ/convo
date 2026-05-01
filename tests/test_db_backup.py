@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,7 +34,7 @@ def test_backup_refuses_overwrite(db: Database, tmp_path: Path) -> None:
     seed_source_file(db, path="/seed/a.jsonl")
     dest = tmp_path / "snap.db"
     db.backup(dest)
-    with pytest.raises(FileExistsError, match=str(dest)):
+    with pytest.raises(FileExistsError, match=re.escape(str(dest))):
         db.backup(dest)
 
 

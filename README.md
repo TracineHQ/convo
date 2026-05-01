@@ -1,6 +1,8 @@
 # convo
 
-[![CI](https://github.com/TracineHQ/convo/actions/workflows/ci.yml/badge.svg)](https://github.com/TracineHQ/convo/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/TracineHQ/convo/ci.yml?branch=main&label=CI)](https://github.com/TracineHQ/convo/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)](https://www.python.org/)
 
 Index Claude Code session JSONLs into a local SQLite database, then search,
 inspect, snapshot, and analyze the result. v1 covers the intake pipeline,

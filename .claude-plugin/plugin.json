@@ -2,7 +2,9 @@
   "name": "convo",
   "version": "0.1.0",
   "description": "Index Claude Code session JSONLs into local SQLite. Provides search, inspect, and analytics over your conversation history.",
-  "author": { "name": "Anthony Ledesma" },
+  "author": { "name": "Anthony Ledesma", "url": "https://github.com/TracineHQ" },
   "homepage": "https://github.com/TracineHQ/convo",
-  "repository": "https://github.com/TracineHQ/convo"
+  "repository": "https://github.com/TracineHQ/convo",
+  "license": "Apache-2.0",
+  "keywords": ["claude-code", "claude-code-plugin", "search", "analytics", "sqlite", "fts5", "session-history"]
 }

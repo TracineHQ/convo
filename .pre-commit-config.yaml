@@ -54,3 +54,17 @@ repos:
         types: [python]
         pass_filenames: false
         require_serial: true
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.24.1
+    hooks:
+      - id: zizmor
+        # Scope to workflow files only; mirrors the CI workflows-lint job.
+        # Dependabot config has a separate cooldown finding tracked outside
+        # this task's ownership.
+        files: ^\.github/workflows/.*\.ya?ml$
+
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint

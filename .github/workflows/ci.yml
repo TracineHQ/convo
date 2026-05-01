@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+# Default to no permissions; jobs opt in to what they need.
+permissions: {}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,8 +17,12 @@ jobs:
   lint:
     name: Lint and format
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -32,8 +39,12 @@ jobs:
   vulture:
     name: Vulture dead-code scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -46,8 +57,12 @@ jobs:
   typecheck:
     name: Mypy strict
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -59,6 +74,8 @@ jobs:
 
   test:
     name: Test (Python ${{ matrix.python }} on ${{ matrix.os }})
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -67,6 +84,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -81,8 +100,12 @@ jobs:
   build:
     name: Build distribution
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -96,24 +119,64 @@ jobs:
           set -eu
           unzip -l dist/*.whl | grep -F 'convo/migrations/0001_init.sql' \
             || { echo "ERROR: 0001_init.sql missing from built wheel"; exit 1; }
+      - name: Upload built distributions
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 
   smoke:
-    name: Smoke (end-to-end command surface)
-    runs-on: ubuntu-latest
+    name: Smoke (Python ${{ matrix.python }} on ${{ matrix.os }})
+    needs: build
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Pin Python version
-        run: uv python pin 3.12
-      - name: Install convo as a tool
-        run: uv tool install .
+        run: uv python pin "${{ matrix.python }}"
+      - name: Download built distributions
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dist
+          path: dist
+      - name: Resolve wheel path
+        id: wheel
+        run: |
+          set -eu
+          wheel=$(python3 -c "import glob,sys; hits=sorted(glob.glob('dist/*.whl')); print(hits[0] if hits else '', end='')")
+          if [ -z "$wheel" ]; then
+            echo "ERROR: no wheel found in dist/" >&2
+            exit 1
+          fi
+          echo "path=$wheel" >> "$GITHUB_OUTPUT"
+          echo "Selected wheel: $wheel"
+      - name: Install convo from built wheel
+        env:
+          WHEEL_PATH: ${{ steps.wheel.outputs.path }}
+        run: uv tool install "$WHEEL_PATH"
       - name: Smoke test command surface
         env:
-          CONVO_DB: /tmp/smoke.db
-          CONVO_BACKUP_DIR: /tmp/smoke-backups
+          CONVO_DB: ${{ runner.temp }}/smoke.db
+          CONVO_BACKUP_DIR: ${{ runner.temp }}/smoke-backups
           CLAUDE_PROJECTS_DIR: tests/fixtures/qa-projects
         run: |
           set -eu
@@ -121,21 +184,37 @@ jobs:
           convo index
           convo info
           convo search "tool" --limit 5 --json
-          convo inspect $(convo search "tool" --limit 1 --json | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["search"]["hits"][0]["session_id"][:8])') --json
+          session=$(convo search "tool" --limit 1 --json | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["search"]["hits"][0]["session_id"][:8])')
+          convo inspect "$session" --json
           convo summary --since 30d --json
           convo diff --since 7d --json
           convo backup --auto
           convo snapshots --json
           convo restore --latest
-      - name: Smoke bin/convo wrapper
+      - name: Smoke bin/convo wrapper (POSIX)
+        if: runner.os != 'Windows'
         run: |
           PYTHONPATH=src ./bin/convo --help | head -3
+      - name: Smoke bin/convo.cmd wrapper (Windows)
+        if: runner.os == 'Windows'
+        # cmd is required: this step exercises the bin/convo.cmd wrapper
+        # which exists for native Windows cmd.exe / PowerShell users.
+        # Switching to pwsh/bash would defeat the purpose of the test.
+        # The `misfeature` finding is silenced in .github/zizmor.yml.
+        shell: cmd
+        run: |
+          set PYTHONPATH=src
+          call bin\convo.cmd --help
 
   detect-secrets:
     name: Scan for leaked secrets
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -148,8 +227,12 @@ jobs:
   bandit:
     name: Bandit security lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -160,8 +243,12 @@ jobs:
   pip-audit:
     name: Audit dependencies for CVEs
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
         with:
           enable-cache: true
@@ -170,3 +257,48 @@ jobs:
         run: uv export --format requirements-txt --no-hashes --no-emit-project --extra dev > requirements-audit.txt
       - name: Run pip-audit
         run: uv run --with pip-audit pip-audit -r requirements-audit.txt --strict
+
+  workflows-lint:
+    name: zizmor (workflow security audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e  # v0.5.3
+        with:
+          # Scope to workflow files only; the dependabot config in this repo
+          # lives outside this task's ownership and is audited separately.
+          inputs: .github/workflows/
+          # Default action behavior uploads SARIF to GHAS; the repo does not
+          # have GHAS enabled on private/free tier, so emit annotations only.
+          advanced-security: false
+          annotations: true
+
+  actionlint:
+    name: actionlint (workflow syntax + shellcheck)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Download actionlint
+        id: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          set -eu
+          bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          echo "bin=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
+      - name: Run actionlint
+        env:
+          ACTIONLINT_BIN: ${{ steps.actionlint.outputs.bin }}
+        run: |
+          set -eu
+          "$ACTIONLINT_BIN" -color

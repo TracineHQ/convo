@@ -1,0 +1,10 @@
+# zizmor configuration
+# https://docs.zizmor.sh/configuration/
+rules:
+  misfeature:
+    ignore:
+      # The Windows leg of the smoke matrix uses `shell: cmd` deliberately:
+      # we are smoke-testing bin/convo.cmd, the wrapper that exists for
+      # native Windows cmd.exe / PowerShell users. Switching to pwsh/bash
+      # would defeat the purpose of the test.
+      - ci.yml:204

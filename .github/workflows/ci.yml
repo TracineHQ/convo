@@ -141,7 +141,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Run bandit
-        run: uv run --with bandit bandit -r src/ -ll
+        run: uv run --with bandit bandit -c pyproject.toml -r src/ -ll
 
   pip-audit:
     name: Audit dependencies for CVEs

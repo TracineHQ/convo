@@ -3,7 +3,7 @@
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version("convo")
+    __version__ = version("tracine-convo")
 except PackageNotFoundError:  # source checkout without an installed dist
     __version__ = "0.0.0+unknown"
 

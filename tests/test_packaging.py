@@ -13,7 +13,7 @@ _DIST = Path(__file__).resolve().parent.parent / "dist"
 def test_migrations_present_in_built_wheel() -> None:
     if not _DIST.exists():
         pytest.skip("no dist/ directory; run `uv build` first")
-    wheels = sorted(_DIST.glob("convo-*.whl"))
+    wheels = sorted(_DIST.glob("tracine_convo-*.whl"))
     if not wheels:
         pytest.skip("no built wheel under dist/")
     newest = wheels[-1]

@@ -72,7 +72,7 @@ After calling convo:
    `timestamp` for each hit.
 3. If the user wants more detail, follow up with `convo inspect <prefix>`.
 4. If `convo` is not on PATH or the DB is empty, tell the user to install
-   convo (`pipx install convo`) and run `convo index`. Don't fail silently.
+   convo (`pipx install tracine-convo`) and run `convo index`. Don't fail silently.
 
 ## Examples
 

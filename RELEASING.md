@@ -28,7 +28,7 @@ actually being prepared — no `-dev0` suffix on `main` between releases.
 
       ```bash
       uv build
-      uv tool install ./dist/convo-X.Y.Z-*.whl --reinstall
+      uv tool install ./dist/tracine_convo-X.Y.Z-*.whl --reinstall
       convo --version    # expect: convo X.Y.Z
       uv tool uninstall convo
       ```
@@ -59,22 +59,22 @@ actually being prepared — no `-dev0` suffix on `main` between releases.
 - [ ] Open the run under the **Release** workflow in GitHub Actions.
 - [ ] The `publish-to-pypi` job pauses on the protected `pypi` environment
       (required reviewers). Approve the deployment.
-- [ ] Verify the release on [pypi.org/project/convo](https://pypi.org/project/convo/).
+- [ ] Verify the release on [pypi.org/project/tracine-convo](https://pypi.org/project/tracine-convo/).
       The new version must be the latest. Check that both wheel and sdist are
       present.
 - [ ] Verify the GitHub Release exists at
       `https://github.com/TracineHQ/convo/releases/tag/vX.Y.Z` with:
-  - [ ] `convo-X.Y.Z-py3-none-any.whl` attached.
-  - [ ] `convo-X.Y.Z.tar.gz` attached.
+  - [ ] `tracine_convo-X.Y.Z-py3-none-any.whl` attached.
+  - [ ] `tracine_convo-X.Y.Z.tar.gz` attached.
   - [ ] Body populated from the `## [X.Y.Z]` CHANGELOG section.
   - [ ] If it landed as draft, click **Publish release**.
 - [ ] Smoke-install from PyPI in a clean shell:
 
       ```bash
-      pipx install convo==X.Y.Z
+      pipx install tracine-convo==X.Y.Z
       convo --version    # expect: convo X.Y.Z
       convo info         # sanity: opens a DB without crashing
-      pipx uninstall convo
+      pipx uninstall tracine-convo
       ```
 
 ## 4. Claude Code marketplace submission
@@ -131,7 +131,7 @@ If `X.Y.Z` ships with a critical bug after PyPI publish:
       [PyPI yanking docs](https://docs.pypi.org/project-management/yanking/)
       and [PEP 592](https://peps.python.org/pep-0592/).
 - [ ] Yank via the PyPI web UI:
-      `https://pypi.org/manage/project/convo/release/X.Y.Z/` →
+      `https://pypi.org/manage/project/tracine-convo/release/X.Y.Z/` →
       **Options** → **Yank**. `uv publish` does not expose a yank command.
 - [ ] **Do not delete the git tag.** Leave `vX.Y.Z` in history so the bug is
       traceable.

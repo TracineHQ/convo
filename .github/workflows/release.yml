@@ -45,7 +45,7 @@ jobs:
       - name: Install built wheel as a tool
         run: |
           set -eu
-          wheel=$(ls dist/convo-*.whl)
+          wheel=$(ls dist/tracine_convo-*.whl)
           uv tool install "$wheel"
       - name: Smoke test the tagged artifact
         env:

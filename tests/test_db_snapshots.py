@@ -13,12 +13,11 @@ from unittest.mock import patch
 import pytest
 
 from convo import db as _db_module
+from convo.db import Database
 from tests._seed import seed_source_file
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from convo.db import Database
 
 
 _NAME_RE = re.compile(r"^convo-\d{8}-\d{6}-\d{6}\.db$")
@@ -165,4 +164,38 @@ def test_backup_snapshot_is_owner_only(db: Database, tmp_path: Path) -> None:
     seed_source_file(db, path="/seed/a.jsonl")
     snap = db.backup_snapshot(tmp_path)
     mode = stat.S_IMODE(snap.stat().st_mode)
+    assert mode == 0o600, f"expected 0o600, got 0o{mode:o}"
+
+
+def test_live_db_and_sidecars_are_owner_only(tmp_path: Path) -> None:
+    """Live DB and WAL/SHM sidecars must be 0o600. Prompts/responses live there too."""
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX permissions not enforced on Windows")
+    db_path = tmp_path / "convo.db"
+    with Database(db_path) as db:
+        # Force WAL sidecars by writing.
+        seed_source_file(db, path="/seed/a.jsonl")
+        assert db.conn is not None
+        db.conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        for path in (
+            db_path,
+            db_path.with_name(db_path.name + "-wal"),
+            db_path.with_name(db_path.name + "-shm"),
+        ):
+            if not path.exists():
+                continue
+            mode = stat.S_IMODE(path.stat().st_mode)
+            assert mode == 0o600, f"{path.name}: expected 0o600, got 0o{mode:o}"
+
+
+def test_restore_leaves_db_owner_only(db: Database, tmp_path: Path) -> None:
+    """Restored live DB must be 0o600, not the staging file's umask."""
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX permissions not enforced on Windows")
+    seed_source_file(db, path="/seed/a.jsonl")
+    snap = db.backup_snapshot(tmp_path)
+    db.restore_snapshot(snap)
+    mode = stat.S_IMODE(db.path.stat().st_mode)
     assert mode == 0o600, f"expected 0o600, got 0o{mode:o}"

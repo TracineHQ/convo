@@ -31,7 +31,7 @@ alone does not provide a working `convo` binary — step 1 is required.
 
 ## Quickstart
 
-After installing the plugin (or from-source CLI):
+After step 1 (and optionally step 2):
 
 ```sh
 convo index                          # populate from ~/.claude/projects/
@@ -80,10 +80,11 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   -- FTS5 search over messages, tool calls, and tool results. `SPAN` accepts
   `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefixes (`+required`,
   `-excluded`).
-- `convo inspect <session-id> [--json] [--full]` -- session timeline with
-  inline tool calls. Accepts a UUID prefix; ambiguous prefixes list
-  candidates. `--full` dumps message content verbatim (default truncates to
-  200 chars per message).
+- `convo inspect <session-id> | --latest [--json] [--full]` -- session
+  timeline with inline tool calls. Accepts a UUID prefix; ambiguous prefixes
+  list candidates. `--latest` resolves the most recently started session.
+  `--full` dumps message content verbatim (default truncates to 200 chars per
+  message).
 - `convo snapshots [--json]` -- list snapshot files with `name | size | age`
   columns, newest first.
 - `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)
@@ -144,7 +145,7 @@ permissions on the live DB as well:
 
 Future releases will add:
 
-- `convo stats hooks` and `convo stats skills` -- deferred to v1.1; both
+- `convo stats hooks` and `convo stats skills` -- deferred to a future release; both
   require a `0002_live_hooks.sql` schema addition to capture pre/post tool
   hook events and skill invocations from the JSONL.
 

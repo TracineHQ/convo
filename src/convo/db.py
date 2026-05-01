@@ -98,6 +98,14 @@ def _discover_migrations(
     return [(v, found[v][0], found[v][1]) for v in versions]
 
 
+def _chmod_sidecars(db_path: Path) -> None:
+    """Tighten WAL/SHM sidecars to 0o600 if present."""
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path.with_name(db_path.name + suffix)
+        if sidecar.exists():
+            sidecar.chmod(0o600)
+
+
 class Database:
     """Owned SQLite connection with migration + backup helpers."""
 
@@ -115,10 +123,13 @@ class Database:
                 _ERR_SQLITE_TOO_OLD.format(found=_sql.sqlite_version),
             )
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        first_create = not self.path.exists()
+        if not self.path.exists():
+            # Pre-create with 0o600 to avoid the TOCTOU window where sqlite
+            # would otherwise create the file at the process umask (often 0o644)
+            # before we could chmod it. Atomic perms-on-create.
+            fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            os.close(fd)
         self.conn = _sql.connect(self.path)
-        if first_create:
-            self.path.chmod(0o600)
         try:
             self.conn.executescript(
                 "PRAGMA journal_mode = WAL;"
@@ -134,6 +145,9 @@ class Database:
             raise RuntimeError(
                 _ERR_DB_UNREADABLE.format(path=self.path, reason=exc),
             ) from exc
+        # WAL mode creates -wal / -shm sidecars at process umask; tighten them
+        # to 0o600 since they hold uncommitted prompt/response data.
+        _chmod_sidecars(self.path)
         self.conn.row_factory = _sql.Row
         self.migrate()
         return self
@@ -224,11 +238,13 @@ class Database:
         staging = self.path.with_name(f"{self.path.name}.restoring")
         try:
             shutil.copyfile(src_path, staging)
+            staging.chmod(0o600)
             os.replace(staging, self.path)  # noqa: PTH105 — atomic-replace; tests patch os.replace
         except BaseException:
             staging.unlink(missing_ok=True)
             raise
         self.open()
+        _chmod_sidecars(self.path)
 
     def __enter__(self) -> Self:
         return self.open()

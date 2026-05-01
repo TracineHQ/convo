@@ -21,16 +21,27 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.12
     hooks:
+      # Scan the whole tree on every commit so latent drift in untouched
+      # files is caught, not just regressions in the diff.
       - id: ruff
-        args: [--fix]
+        args: [--fix, .]
+        pass_filenames: false
       - id: ruff-format
+        args: [.]
+        pass_filenames: false
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+  - repo: local
     hooks:
       - id: mypy
-        files: ^src/
-        additional_dependencies: []
+        name: mypy (whole-tree, strict)
+        # Run via `uv run` so we share the dev venv (pytest, hypothesis, etc.)
+        # and avoid mypy seeing untyped decorators in tests because the hook's
+        # own isolated env lacks pytest. Mirrors the vulture pattern below.
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
 
   - repo: local
     hooks:

@@ -1,8 +1,15 @@
 # convo
 
 [![CI](https://img.shields.io/github/actions/workflow/status/TracineHQ/convo/ci.yml?branch=main&label=CI)](https://github.com/TracineHQ/convo/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/TracineHQ/convo/badge)](https://scorecard.dev/viewer/?uri=github.com/TracineHQ/convo)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)](https://www.python.org/)
+[![PyPI version](https://img.shields.io/pypi/v/convo)](https://pypi.org/project/convo/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+> convo is independently maintained and is not affiliated with, endorsed by,
+> or sponsored by Anthropic. "Claude" and "Claude Code" are trademarks of
+> Anthropic; this project simply reads files Claude Code writes to your
+> local filesystem.
 
 Index Claude Code session JSONLs into a local SQLite database, then search,
 inspect, snapshot, and analyze the result. v1 covers the intake pipeline,
@@ -12,28 +19,55 @@ the storage layer, the read surface (`info`, `search`, `inspect`,
 
 ## Install
 
-### 1. Install the CLI (required)
+Three install paths, in priority order. All require Python 3.12+. Verify
+with `convo --version` after installing.
 
-```
-uv tool install git+https://github.com/TracineHQ/convo
-```
+### 1. Claude Code plugin (recommended)
 
-Requires Python 3.12+. Verify with `convo --version`.
-
-### 2. Install the Claude Code plugin (optional)
+Inside Claude Code:
 
 ```
 /plugin marketplace add TracineHQ/convo
 /plugin install convo@convo-marketplace
 ```
 
-Adds in-Claude skills (`/convo:search`, `/convo:summary`) and a thin
-`bin/convo` wrapper that defers to the CLI installed in step 1. The plugin
-alone does not provide a working `convo` binary — step 1 is required.
+Adds in-Claude skills (`/convo:search`, `/convo:summary`) alongside the
+CLI. This is the recommended path for anyone using convo from inside
+Claude Code.
+
+### 2. PyPI
+
+For end-users:
+
+```
+pipx install convo
+```
+
+For uv users:
+
+```
+uv tool install convo
+```
+
+For one-shot use without installing globally:
+
+```
+uvx convo --help
+```
+
+### 3. From source (fallback)
+
+```
+git clone git@github.com:TracineHQ/convo.git
+cd convo
+uv tool install .
+```
+
+Use this path if you want to track `main` directly or hack on convo locally.
 
 ## Quickstart
 
-After step 1 (and optionally step 2):
+Once `convo` is on your `PATH`:
 
 ```sh
 convo index                          # populate from ~/.claude/projects/

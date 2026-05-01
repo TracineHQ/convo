@@ -131,6 +131,10 @@ ignore = [
     # Bench scripts are exploratory; relax the rules we apply to library code.
     "D", "ANN", "PLR2004", "T201",
 ]
+"scripts/**" = [
+    # `scripts/` is intentionally not a package, uses stdout, and is minimal.
+    "INP001", "T201", "D",
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -148,6 +152,16 @@ disallow_any_generics = true
 disallow_subclassing_any = true
 disallow_untyped_decorators = true
 no_implicit_reexport = true
+enable_error_code = [
+    "redundant-self",
+    "explicit-override",
+    "possibly-undefined",
+    "truthy-bool",
+    "truthy-iterable",
+    "unused-awaitable",
+    "ignore-without-code",
+    "unimported-reveal",
+]
 files = ["src/convo", "tests"]
 
 [[tool.mypy.overrides]]

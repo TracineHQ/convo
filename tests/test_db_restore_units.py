@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -126,6 +127,11 @@ def test_restore_call_sequence_copy_chmod_replace(
     assert relevant[:3] == ["copyfile", "chmod", "replace"], relevant
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows ignores POSIX permission bits on file reads (always 0o666); "
+    "chmod call ordering is verified universally by test_restore_call_sequence_copy_chmod_replace.",
+)
 def test_restore_chmod_lands_before_replace(
     db: Database,
     tmp_path: Path,

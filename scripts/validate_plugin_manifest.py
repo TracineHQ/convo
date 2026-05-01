@@ -121,10 +121,7 @@ def _cross_check(
             continue
         loc = f"marketplace.json.plugins[{i}]"
         if plugin["name"] != plugin_name:
-            _fail(
-                f"{loc}: name {plugin['name']!r} does not match "
-                f"plugin.json name {plugin_name!r}"
-            )
+            _fail(f"{loc}: name {plugin['name']!r} does not match plugin.json name {plugin_name!r}")
         if plugin["version"] != plugin_version:
             _fail(
                 f"{loc}: version {plugin['version']!r} does not match "

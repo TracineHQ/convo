@@ -22,12 +22,14 @@ if [[ -z "$file_path" ]]; then
     exit 0
 fi
 
-# Only act on this project's Python source and tests.
+# Only act on Python files inside this project.
 project_dir="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+if [[ "$file_path" != "$project_dir"/* ]] || [[ "$file_path" != *.py ]]; then
+    exit 0
+fi
+# Skip vendored / build / virtualenv trees.
 case "$file_path" in
-    "$project_dir"/src/convo/*.py | "$project_dir"/tests/*.py)
-        ;;
-    *)
+    "$project_dir"/.venv/* | "$project_dir"/dist/* | "$project_dir"/build/* | "$project_dir"/.git/*)
         exit 0
         ;;
 esac

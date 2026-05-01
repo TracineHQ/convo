@@ -34,7 +34,7 @@ def test_stats_commands_top_frequency_and_whitespace_collapse(db: Database) -> N
     _seed_first_messages(db, sid="s4", contents=["baz"])
 
     report = stats_commands(db)
-    assert report.total_sessions_with_command == 4
+    assert report.total == 4
     counts = {c.command: c.count for c in report.top_commands}
     assert counts == {"foo bar": 3, "baz": 1}
     # Order: foo bar (3) before baz (1).
@@ -55,12 +55,12 @@ def test_stats_commands_uses_first_user_message_only(db: Database) -> None:
     _seed_first_messages(db, sid="s1", contents=["start", "middle", "end"])
     _seed_first_messages(db, sid="s2", contents=["start"])
     report = stats_commands(db)
-    assert report.total_sessions_with_command == 2
+    assert report.total == 2
     counts = {c.command: c.count for c in report.top_commands}
     assert counts == {"start": 2}
 
 
 def test_stats_commands_empty_db(db: Database) -> None:
     report = stats_commands(db)
-    assert report.total_sessions_with_command == 0
+    assert report.total == 0
     assert report.top_commands == ()

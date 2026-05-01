@@ -52,7 +52,7 @@ def test_stats_tools_prose(
     rc = main(["stats", "tools"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "total_calls" in out
+    assert "total" in out
     assert "Bash" in out
     assert "top by frequency" in out
     assert "error rates" in out
@@ -73,7 +73,7 @@ def test_stats_tools_json(
     assert payload["schema_version"] == 1
     body = payload["stats"]
     assert body["family"] == "tools"
-    assert body["total_calls"] == 1
+    assert body["total"] == 1
     assert isinstance(body["top_by_frequency"], list)
     assert body["top_by_frequency"][0]["name"] == "Bash"
 
@@ -89,7 +89,7 @@ def test_stats_commands_prose(
     rc = main(["stats", "commands"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "total_sessions_with_command" in out
+    assert "total" in out
     assert "run the build" in out
 
 
@@ -104,7 +104,7 @@ def test_stats_sessions_prose(
     rc = main(["stats", "sessions"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "total_sessions" in out
+    assert "total" in out
     assert "median_duration" in out
     assert "hour-of-day" in out
 
@@ -120,7 +120,7 @@ def test_stats_files_prose(
     rc = main(["stats", "files"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "total_files" in out
+    assert "total" in out
     assert "/data/x.jsonl" in out
 
 
@@ -135,7 +135,7 @@ def test_stats_model_prose(
     rc = main(["stats", "model"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "total_sessions" in out
+    assert "total" in out
     assert "opus-4" in out
 
 
@@ -152,7 +152,7 @@ def test_stats_model_json(
     payload = json.loads(capsys.readouterr().out)
     body = payload["stats"]
     assert body["family"] == "model"
-    assert body["total_sessions"] == 1
+    assert body["total"] == 1
     assert body["null_count"] == 0
     assert body["by_model"][0]["model"] == "opus-4"
 
@@ -208,4 +208,4 @@ def test_stats_empty_db_json(
     payload = json.loads(capsys.readouterr().out)
     assert payload["schema_version"] == 1
     assert payload["stats"]["family"] == "tools"
-    assert payload["stats"]["total_calls"] == 0
+    assert payload["stats"]["total"] == 0

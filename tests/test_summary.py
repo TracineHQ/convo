@@ -70,23 +70,23 @@ def test_gather_summary_all_subreports_populated(db: Database) -> None:
     assert report.since is None
     assert report.project is None
     # tools
-    assert report.tools.total_calls == 5
+    assert report.tools.total == 5
     names = {f.name for f in report.tools.top_by_frequency}
     assert names == {"Bash", "Read"}
     # commands
-    assert report.commands.total_sessions_with_command == 2
+    assert report.commands.total == 2
     assert {c.command for c in report.commands.top_commands} == {
         "run the build A",
         "run the build B",
     }
     # sessions
-    assert report.sessions.total_sessions == 2
+    assert report.sessions.total == 2
     assert report.sessions.sessions_with_duration == 2
     # files
-    assert report.files.total_files == 2
+    assert report.files.total == 2
     assert report.files.total_message_count == 2
     # model
-    assert report.model.total_sessions == 2
+    assert report.model.total == 2
     assert {m.model for m in report.model.by_model} == {"opus-4", "sonnet-4"}
 
 
@@ -95,17 +95,17 @@ def test_gather_summary_since_filter_narrows_all_subreports(db: Database) -> Non
     # since=1d drops anything from 2020 (old s1)
     report = gather_summary(db, since=timedelta(days=1))
     # tools: only Read remains
-    assert report.tools.total_calls == 2
+    assert report.tools.total == 2
     assert {f.name for f in report.tools.top_by_frequency} == {"Read"}
     # commands: only s2's command
-    assert report.commands.total_sessions_with_command == 1
+    assert report.commands.total == 1
     assert report.commands.top_commands[0].command == "run the build B"
     # sessions: only s2
-    assert report.sessions.total_sessions == 1
+    assert report.sessions.total == 1
     # files: only the file linked to s2
-    assert report.files.total_files == 1
+    assert report.files.total == 1
     # model: only sonnet-4
-    assert report.model.total_sessions == 1
+    assert report.model.total == 1
     assert report.model.by_model[0].model == "sonnet-4"
     # `since` echoed in the report
     assert report.since == timedelta(days=1)
@@ -114,24 +114,24 @@ def test_gather_summary_since_filter_narrows_all_subreports(db: Database) -> Non
 def test_gather_summary_project_filter_narrows_all_subreports(db: Database) -> None:
     _populate(db)
     report = gather_summary(db, project="/proj/B")
-    assert report.tools.total_calls == 2
+    assert report.tools.total == 2
     assert {f.name for f in report.tools.top_by_frequency} == {"Read"}
-    assert report.commands.total_sessions_with_command == 1
-    assert report.sessions.total_sessions == 1
-    assert report.files.total_files == 1
-    assert report.model.total_sessions == 1
+    assert report.commands.total == 1
+    assert report.sessions.total == 1
+    assert report.files.total == 1
+    assert report.model.total == 1
     assert report.project == "/proj/B"
 
 
 def test_gather_summary_empty_db(db: Database) -> None:
     report = gather_summary(db)
-    assert report.tools.total_calls == 0
+    assert report.tools.total == 0
     assert report.tools.top_by_frequency == ()
-    assert report.commands.total_sessions_with_command == 0
+    assert report.commands.total == 0
     assert report.commands.top_commands == ()
-    assert report.sessions.total_sessions == 0
+    assert report.sessions.total == 0
     assert report.sessions.median_duration_s is None
-    assert report.files.total_files == 0
+    assert report.files.total == 0
     assert report.files.top_files == ()
-    assert report.model.total_sessions == 0
+    assert report.model.total == 0
     assert report.model.by_model == ()

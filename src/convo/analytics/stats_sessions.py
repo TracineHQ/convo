@@ -26,7 +26,7 @@ _MIN_QUANTILE_SAMPLES: int = 2  # statistics.quantiles requires n >= 2.
 class SessionsReport:
     """Aggregate session-duration and hour-of-day distribution."""
 
-    total_sessions: int
+    total: int
     sessions_with_duration: int
     median_duration_s: float | None
     p95_duration_s: float | None
@@ -80,7 +80,7 @@ def stats_sessions(
     median = float(statistics.median(durations)) if durations else None
     p95: float | None = _p95(durations)
     return SessionsReport(
-        total_sessions=total,
+        total=total,
         sessions_with_duration=len(durations),
         median_duration_s=median,
         p95_duration_s=p95,

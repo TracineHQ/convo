@@ -52,7 +52,7 @@ class ToolErrorRate:
 class ToolsReport:
     """Aggregate tool-call statistics over a (since, project) window."""
 
-    total_calls: int
+    total: int
     top_by_frequency: tuple[ToolFreq, ...]
     top_by_median_duration: tuple[ToolDurationStat, ...]
     error_rates: tuple[ToolErrorRate, ...]
@@ -75,7 +75,7 @@ def stats_tools(
     finally:
         ro.close()
     return ToolsReport(
-        total_calls=total,
+        total=total,
         top_by_frequency=top_freq,
         top_by_median_duration=top_dur,
         error_rates=errors,

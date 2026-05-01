@@ -43,7 +43,7 @@ def test_stats_sessions_count_median_p95(db: Database) -> None:
         _insert_session(db, sfid, sid=sid, started_at=st, ended_at=en)
 
     report = stats_sessions(db)
-    assert report.total_sessions == 5
+    assert report.total == 5
     assert report.sessions_with_duration == 5
     # julianday-based duration has small float drift; allow tolerance.
     assert report.median_duration_s is not None
@@ -85,7 +85,7 @@ def test_stats_sessions_handles_null_timestamps(db: Database) -> None:
     )
 
     report = stats_sessions(db)
-    assert report.total_sessions == 2
+    assert report.total == 2
     assert report.sessions_with_duration == 1
     assert report.median_duration_s is not None
     assert abs(report.median_duration_s - 10.0) < 0.01
@@ -93,7 +93,7 @@ def test_stats_sessions_handles_null_timestamps(db: Database) -> None:
 
 def test_stats_sessions_empty_db(db: Database) -> None:
     report = stats_sessions(db)
-    assert report.total_sessions == 0
+    assert report.total == 0
     assert report.sessions_with_duration == 0
     assert report.median_duration_s is None
     assert report.p95_duration_s is None

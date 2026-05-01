@@ -37,7 +37,7 @@ class CommandFreq:
 class CommandsReport:
     """Aggregate "first user message" frequency over a (since, project) window."""
 
-    total_sessions_with_command: int
+    total: int
     top_commands: tuple[CommandFreq, ...]
 
 
@@ -91,7 +91,7 @@ def stats_commands(
     items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     top = tuple(CommandFreq(command=k, count=v) for k, v in items[:_TOP_LIMIT])
     total = sum(counts.values())
-    return CommandsReport(total_sessions_with_command=total, top_commands=top)
+    return CommandsReport(total=total, top_commands=top)
 
 
 def _normalize(content: str) -> str:

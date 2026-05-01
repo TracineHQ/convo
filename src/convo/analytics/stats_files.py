@@ -31,7 +31,7 @@ class FileActivity:
 class FilesReport:
     """Aggregate source_files statistics."""
 
-    total_files: int
+    total: int
     total_size_bytes: int
     total_message_count: int
     top_files: tuple[FileActivity, ...]
@@ -84,7 +84,7 @@ def _unfiltered(conn: sqlite3.Connection) -> FilesReport:
         for r in top_rows
     )
     return FilesReport(
-        total_files=total_files,
+        total=total_files,
         total_size_bytes=total_size,
         total_message_count=total_msgs,
         top_files=top,
@@ -135,7 +135,7 @@ def _filtered(conn: sqlite3.Connection, *, cutoff: str | None, project: str | No
         for r in top_rows
     )
     return FilesReport(
-        total_files=total_files,
+        total=total_files,
         total_size_bytes=total_size,
         total_message_count=total_msgs,
         top_files=top,

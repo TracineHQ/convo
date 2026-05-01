@@ -80,11 +80,11 @@ def test_summary_json_envelope(
     body = payload["summary"]
     for key in ("since", "project", "tools", "commands", "sessions", "files", "model"):
         assert key in body
-    assert body["tools"]["total_calls"] == 1
-    assert body["commands"]["total_sessions_with_command"] == 1
-    assert body["sessions"]["total_sessions"] == 1
-    assert body["files"]["total_files"] == 1
-    assert body["model"]["total_sessions"] == 1
+    assert body["tools"]["total"] == 1
+    assert body["commands"]["total"] == 1
+    assert body["sessions"]["total"] == 1
+    assert body["files"]["total"] == 1
+    assert body["model"]["total"] == 1
 
 
 def test_summary_with_since_and_project(

@@ -105,6 +105,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty stdout. Argparse-level errors (e.g. `--since potato`) keep their
   native argparse behaviour and still exit 2.
 
+### Changed
+
+- Stats family total field names normalized to uniform `total`. Previously
+  each family used a distinct name (`total_calls`, `total_sessions_with_command`,
+  `total_sessions`, `total_files`, `total_sessions`). Scripts can now loop
+  every family with a single accessor (`body["total"]`). Family-specific
+  extras on `stats files` (`total_size_bytes`, `total_message_count`) are
+  unchanged. Affects both `--json` payload and prose output.
+
 ### Notes
 
 - v1.0 is a fresh-install release. There is no upgrade path from any

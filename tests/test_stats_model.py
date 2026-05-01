@@ -29,7 +29,7 @@ def test_stats_model_histogram_and_null_count(db: Database) -> None:
     _insert_session(db, sfid, sid="s5", model=None)
 
     report = stats_model(db)
-    assert report.total_sessions == 5
+    assert report.total == 5
     assert report.null_count == 1
     counts = {m.model: m.session_count for m in report.by_model}
     assert counts == {"opus-4": 3, "sonnet-4": 1}
@@ -49,6 +49,6 @@ def test_stats_model_empty_string_treated_as_null(db: Database) -> None:
 
 def test_stats_model_empty_db(db: Database) -> None:
     report = stats_model(db)
-    assert report.total_sessions == 0
+    assert report.total == 0
     assert report.null_count == 0
     assert report.by_model == ()

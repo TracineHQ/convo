@@ -65,7 +65,7 @@ def _seed_calls(db: Database) -> None:
 def test_stats_tools_total_and_top_frequency(db: Database) -> None:
     _seed_calls(db)
     report = stats_tools(db)
-    assert report.total_calls == 11
+    assert report.total == 11
     names_in_order = [f.name for f in report.top_by_frequency]
     assert names_in_order == ["Bash", "Read", "Edit"]
     counts = {f.name: f.count for f in report.top_by_frequency}
@@ -101,7 +101,7 @@ def test_stats_tools_since_filter(db: Database) -> None:
     # Future cutoff drops the old s1 Bash calls.
     report = stats_tools(db, since=timedelta(days=1))
     # Only Read (3) + Edit (2) remain.
-    assert report.total_calls == 5
+    assert report.total == 5
     names = [f.name for f in report.top_by_frequency]
     assert "Bash" not in names
 
@@ -109,14 +109,14 @@ def test_stats_tools_since_filter(db: Database) -> None:
 def test_stats_tools_project_filter(db: Database) -> None:
     _seed_calls(db)
     report = stats_tools(db, project="/proj/B")
-    assert report.total_calls == 2
+    assert report.total == 2
     names = [f.name for f in report.top_by_frequency]
     assert names == ["Edit"]
 
 
 def test_stats_tools_empty_db(db: Database) -> None:
     report = stats_tools(db)
-    assert report.total_calls == 0
+    assert report.total == 0
     assert report.top_by_frequency == ()
     assert report.top_by_median_duration == ()
     assert report.error_rates == ()

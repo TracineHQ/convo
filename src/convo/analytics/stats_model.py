@@ -26,7 +26,7 @@ class ModelCount:
 class ModelReport:
     """Aggregate session-by-model stats."""
 
-    total_sessions: int
+    total: int
     null_count: int
     by_model: tuple[ModelCount, ...]
 
@@ -70,7 +70,7 @@ def stats_model(
             continue
         by_model.append(ModelCount(model=str(model), session_count=n))
     return ModelReport(
-        total_sessions=total,
+        total=total,
         null_count=null_count,
         by_model=tuple(by_model),
     )

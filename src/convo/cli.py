@@ -930,8 +930,8 @@ def _print_stats(
 
 
 def _print_stats_tools(report: ToolsReport) -> None:
-    print(f"total_calls  {report.total_calls}")
-    if report.total_calls == 0:
+    print(f"total  {report.total}")
+    if report.total == 0:
         print("(no data)")
         return
     print()
@@ -991,8 +991,8 @@ def _print_stats_tools(report: ToolsReport) -> None:
 
 
 def _print_stats_commands(report: CommandsReport) -> None:
-    print(f"total_sessions_with_command  {report.total_sessions_with_command}")
-    if report.total_sessions_with_command == 0:
+    print(f"total  {report.total}")
+    if report.total == 0:
         print("(no data)")
         return
     print()
@@ -1008,9 +1008,9 @@ def _print_stats_commands(report: CommandsReport) -> None:
 
 
 def _print_stats_sessions(report: SessionsReport) -> None:
-    print(f"total_sessions         {report.total_sessions}")
+    print(f"total                  {report.total}")
     print(f"sessions_with_duration {report.sessions_with_duration}")
-    if report.total_sessions == 0:
+    if report.total == 0:
         print("(no data)")
         return
     median = "n/a" if report.median_duration_s is None else f"{report.median_duration_s:.1f}s"
@@ -1027,10 +1027,10 @@ def _print_stats_sessions(report: SessionsReport) -> None:
 
 
 def _print_stats_files(report: FilesReport) -> None:
-    print(f"total_files          {report.total_files}")
+    print(f"total                {report.total}")
     print(f"total_size_bytes     {report.total_size_bytes}")
     print(f"total_message_count  {report.total_message_count}")
-    if report.total_files == 0:
+    if report.total == 0:
         print("(no data)")
         return
     print()
@@ -1049,9 +1049,9 @@ def _print_stats_files(report: FilesReport) -> None:
 
 
 def _print_stats_model(report: ModelReport) -> None:
-    print(f"total_sessions  {report.total_sessions}")
+    print(f"total  {report.total}")
     print(f"null_count      {report.null_count}")
-    if report.total_sessions == 0:
+    if report.total == 0:
         print("(no data)")
         return
     print()
@@ -1140,8 +1140,8 @@ def _print_summary_report(report: SummaryReport) -> None:
 
 
 def _print_summary_tools(report: ToolsReport) -> None:
-    print(f"tools  ({report.total_calls} calls)")
-    if report.total_calls == 0 or not report.top_by_frequency:
+    print(f"tools  ({report.total} calls)")
+    if report.total == 0 or not report.top_by_frequency:
         print("  (no data)")
         return
     top = report.top_by_frequency[:_SUMMARY_TOP_LIMIT]
@@ -1157,8 +1157,8 @@ def _print_summary_tools(report: ToolsReport) -> None:
 
 
 def _print_summary_commands(report: CommandsReport) -> None:
-    print(f"commands  ({report.total_sessions_with_command} sessions)")
-    if report.total_sessions_with_command == 0 or not report.top_commands:
+    print(f"commands  ({report.total} sessions)")
+    if report.total == 0 or not report.top_commands:
         print("  (no data)")
         return
     top = report.top_commands[:_SUMMARY_TOP_LIMIT]
@@ -1173,8 +1173,8 @@ def _print_summary_commands(report: CommandsReport) -> None:
 
 
 def _print_summary_sessions(report: SessionsReport) -> None:
-    print(f"sessions  ({report.total_sessions} total)")
-    if report.total_sessions == 0:
+    print(f"sessions  ({report.total} total)")
+    if report.total == 0:
         print("  (no data)")
         return
     median = "n/a" if report.median_duration_s is None else f"{report.median_duration_s:.1f}s"
@@ -1184,8 +1184,8 @@ def _print_summary_sessions(report: SessionsReport) -> None:
 
 
 def _print_summary_files(report: FilesReport) -> None:
-    print(f"files  ({report.total_files} files, {report.total_message_count} messages)")
-    if report.total_files == 0 or not report.top_files:
+    print(f"files  ({report.total} files, {report.total_message_count} messages)")
+    if report.total == 0 or not report.top_files:
         print("  (no data)")
         return
     top = report.top_files[:_SUMMARY_TOP_LIMIT]
@@ -1202,8 +1202,8 @@ def _print_summary_files(report: FilesReport) -> None:
 
 
 def _print_summary_model(report: ModelReport) -> None:
-    print(f"model  ({report.total_sessions} sessions, {report.null_count} unknown)")
-    if report.total_sessions == 0 or not report.by_model:
+    print(f"model  ({report.total} sessions, {report.null_count} unknown)")
+    if report.total == 0 or not report.by_model:
         print("  (no data)")
         return
     top = report.by_model[:_SUMMARY_TOP_LIMIT]

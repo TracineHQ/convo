@@ -34,7 +34,7 @@ def test_stats_files_unfiltered_totals_and_top_n(db: Database) -> None:
     _insert_source_file(db, path="/c.jsonl", size=300, message_count=10)
 
     report = stats_files(db)
-    assert report.total_files == 3
+    assert report.total == 3
     assert report.total_size_bytes == 600
     assert report.total_message_count == 35
     # top order: b(20), c(10), a(5)
@@ -59,7 +59,7 @@ def test_stats_files_project_filter(db: Database) -> None:
     db.conn.commit()
 
     report = stats_files(db, project="/proj/A")
-    assert report.total_files == 1
+    assert report.total == 1
     assert report.total_size_bytes == 100
     assert report.total_message_count == 5
     assert [f.path for f in report.top_files] == ["/a.jsonl"]
@@ -67,7 +67,7 @@ def test_stats_files_project_filter(db: Database) -> None:
 
 def test_stats_files_empty_db(db: Database) -> None:
     report = stats_files(db)
-    assert report.total_files == 0
+    assert report.total == 0
     assert report.total_size_bytes == 0
     assert report.total_message_count == 0
     assert report.top_files == ()

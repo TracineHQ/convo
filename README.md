@@ -132,8 +132,6 @@ permissions on the live DB as well:
 
 ### Known limitations
 
-- **Windows** is not supported in this version (`os.replace` against an open
-  DB raises `PermissionError`). CI matrix is Ubuntu + macOS.
 - **Restore is same-filesystem only.** The atomic-replace step writes a
   staging file next to the live DB and then renames it into place, so the
   staging step is always same-FS regardless of where the snapshot source

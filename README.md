@@ -42,6 +42,29 @@ convo inspect <session-id>           # use a prefix from the search hits
 convo snapshots                      # list backup snapshots
 ```
 
+`convo info` looks like this on a fresh DB:
+
+```
+schema_version   1
+db_size          156.0 KiB
+last_indexed_at  2026-05-01T04:57:28+00:00
+
+row counts:
+  source_files  1
+  sessions      1
+  messages      5
+  tool_calls    1
+  tool_results  1
+
+top projects by sessions:
+       1  /workspace/example
+
+snapshots:
+  dir          ~/.claude/convo-backups
+  count        0
+  total_bytes  0 B
+```
+
 Set `CONVO_DB` to point at a custom DB path; `CONVO_BACKUP_DIR` for snapshot
 location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
 

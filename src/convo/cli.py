@@ -135,7 +135,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _add_backup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    backup = sub.add_parser("backup", help="Snapshot the convo DB.")
+    backup = sub.add_parser(
+        "backup",
+        help="Snapshot the convo DB.",
+        epilog=(
+            "--auto writes to $CONVO_BACKUP_DIR (default: <CONVO_DB>'s parent / convo-backups). "
+            "Snapshot files are 0600. CONVO_DB selects the source DB."
+        ),
+    )
     backup_dest_group = backup.add_mutually_exclusive_group(required=True)
     backup_dest_group.add_argument(
         "dest",
@@ -160,6 +167,10 @@ def _add_restore_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     restore = sub.add_parser(
         "restore",
         help="Restore the convo DB from a snapshot. The snapshot file is preserved.",
+        epilog=(
+            "--latest picks the newest file in $CONVO_BACKUP_DIR (default: "
+            "<CONVO_DB>'s parent / convo-backups). CONVO_DB selects the destination DB."
+        ),
     )
     restore_src_group = restore.add_mutually_exclusive_group(required=True)
     restore_src_group.add_argument(

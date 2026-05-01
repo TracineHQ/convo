@@ -115,7 +115,10 @@ class Database:
                 _ERR_SQLITE_TOO_OLD.format(found=_sql.sqlite_version),
             )
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        first_create = not self.path.exists()
         self.conn = _sql.connect(self.path)
+        if first_create:
+            self.path.chmod(0o600)
         try:
             self.conn.executescript(
                 "PRAGMA journal_mode = WAL;"

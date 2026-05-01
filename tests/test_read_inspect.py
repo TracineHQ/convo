@@ -11,6 +11,7 @@ from convo.read.inspect import (
     SessionView,
     ToolCallView,
     inspect_session,
+    resolve_latest_session,
     resolve_session_id,
 )
 
@@ -226,3 +227,50 @@ def test_inspect_session_works_with_null_metadata(db: Database) -> None:
     assert view.model is None
     assert view.git_branch is None
     assert view.messages == ()
+
+
+def test_resolve_latest_session_picks_newest_started_at(db: Database) -> None:
+    """With three sessions, the newest `started_at` wins."""
+    assert db.conn is not None
+    db.conn.execute(
+        "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+        "VALUES (1, '/data/foo.jsonl', 0, 0, '2026-04-29T00:00:00Z')",
+    )
+    rows: list[tuple[str, str]] = [
+        ("old-session-id", "2026-01-01T00:00:00Z"),
+        ("middle-session-id", "2026-03-01T00:00:00Z"),
+        ("newest-session-id", "2026-04-29T00:00:00Z"),
+    ]
+    for sid, started in rows:
+        db.conn.execute(
+            "INSERT INTO sessions(id, source_file_id, started_at) VALUES (?, 1, ?)",
+            (sid, started),
+        )
+    db.conn.commit()
+
+    assert resolve_latest_session(db) == "newest-session-id"
+
+
+def test_resolve_latest_session_nulls_last(db: Database) -> None:
+    """Sessions with NULL `started_at` are sorted after timestamped ones."""
+    assert db.conn is not None
+    db.conn.execute(
+        "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+        "VALUES (1, '/data/foo.jsonl', 0, 0, '2026-04-29T00:00:00Z')",
+    )
+    db.conn.execute(
+        "INSERT INTO sessions(id, source_file_id, started_at) VALUES ('null-id', 1, NULL)",
+    )
+    db.conn.execute(
+        "INSERT INTO sessions(id, source_file_id, started_at) VALUES ('ts-id', 1, ?)",
+        ("2026-04-01T00:00:00Z",),
+    )
+    db.conn.commit()
+
+    # The timestamped row wins even though it sorts before in id order.
+    assert resolve_latest_session(db) == "ts-id"
+
+
+def test_resolve_latest_session_empty_db_raises(db: Database) -> None:
+    with pytest.raises(RuntimeError, match="no sessions in DB"):
+        resolve_latest_session(db)

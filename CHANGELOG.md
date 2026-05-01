@@ -89,6 +89,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wheel-build CI check that asserts `migrations/0001_init.sql` is present
   in the packaged distribution.
 - `just snapshots-clean` recipe to mirror `just db-reset` for local resets.
+- `convo backup [--json]` and `convo restore [--json]`: snapshot/restore
+  commands now emit a versioned envelope on stdout under `--json`
+  (`{"schema_version": 1, "backup": {"snapshot_path", "size_bytes"}}` and
+  `{"schema_version": 1, "restore": {"source"}}`), making them scriptable
+  alongside the other read commands.
+- `convo index --json`: response is now wrapped in the standard envelope
+  shape `{"schema_version": 1, "index": {...}}` (was a flat object), matching
+  every other JSON command.
+- JSON error envelope contract: when `--json` is set and a modeled error is
+  raised (`RuntimeError`, `ValueError`, `OSError`, `sqlite3.DatabaseError`,
+  `FileExistsError`), the CLI now emits
+  `{"schema_version": 1, "error": {"message": "..."}}` on stdout and leaves
+  stderr empty, so JSON consumers can `jq` the result instead of getting
+  empty stdout. Argparse-level errors (e.g. `--since potato`) keep their
+  native argparse behaviour and still exit 2.
 
 ### Notes
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -39,6 +40,30 @@ def test_restore_latest_round_trip(
         assert restored.conn is not None
         rows = restored.conn.execute("SELECT path FROM source_files").fetchall()
         assert [r[0] for r in rows] == ["/from-snap.jsonl"]
+
+
+def test_restore_latest_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`restore --latest --json` emits a versioned envelope with the source path."""
+    live = tmp_path / "convo.db"
+    snapshot_dir = tmp_path / "snaps"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    monkeypatch.setenv("CONVO_BACKUP_DIR", str(snapshot_dir))
+
+    with Database(live) as db:
+        seed_source_file(db, path="/from-snap.jsonl")
+        db.backup_snapshot()
+
+    rc = main(["restore", "--latest", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    source = payload["restore"]["source"]
+    assert source.startswith(str(snapshot_dir))
+    assert source.endswith(".db")
 
 
 def test_restore_latest_picks_newest_of_many(

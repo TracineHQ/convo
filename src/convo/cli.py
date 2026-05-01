@@ -12,6 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from convo import __version__ as convo_version
 from convo.analytics import (
     CommandsReport,
     Delta,
@@ -40,6 +41,7 @@ from convo.read.inspect import (
     SessionView,
     ToolCallView,
     inspect_session,
+    resolve_latest_session,
     resolve_session_id,
 )
 from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, search
@@ -54,6 +56,10 @@ _INFO_ENVELOPE_VERSION: int = 1
 _SEARCH_ENVELOPE_VERSION: int = 1
 _INSPECT_ENVELOPE_VERSION: int = 1
 _STATS_ENVELOPE_VERSION: int = 1
+_INDEX_ENVELOPE_VERSION: int = 1
+_BACKUP_ENVELOPE_VERSION: int = 1
+_RESTORE_ENVELOPE_VERSION: int = 1
+_ERROR_ENVELOPE_VERSION: int = 1
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
@@ -74,6 +80,24 @@ def _resolve_projects_dir(explicit: Path | str | None = None) -> Path:
     return DEFAULT_PROJECTS_DIR
 
 
+def _positive_int(s: str) -> int:
+    """Argparse type for `--limit`: rejects zero and negatives.
+
+    Returns the parsed integer if it is >= 1; otherwise raises
+    `argparse.ArgumentTypeError` so argparse exits 2 with a clean message
+    instead of silently accepting nonsense values.
+    """
+    try:
+        n = int(s)
+    except ValueError as exc:
+        msg = "--limit must be a positive integer"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if n <= 0:
+        msg = "--limit must be a positive integer"
+        raise argparse.ArgumentTypeError(msg)
+    return n
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="convo",
@@ -84,6 +108,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "CLAUDE_PROJECTS_DIR (default projects dir for `convo index`, "
             "defaults to ~/.claude/projects/)."
         ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"convo {convo_version}",
     )
     parser.add_argument(
         "--db",
@@ -119,6 +148,12 @@ def _add_backup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         action="store_true",
         help="Write a timestamped snapshot to the snapshot directory.",
     )
+    backup.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
 
 
 def _add_restore_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -137,6 +172,12 @@ def _add_restore_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "--latest",
         action="store_true",
         help="Restore from the newest snapshot in the snapshot directory.",
+    )
+    restore.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
     )
 
 
@@ -194,7 +235,7 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         epilog=(
             "Query is treated as a phrase by default. Prefix tokens with `+` "
             "to require or `-` to exclude (FTS5 NOT). Time spans for --since "
-            "use the shorthand <N><unit>: 7d, 24h, 90m, 30s."
+            "use the shorthand <N><unit>: 7d, 24h, 90m, 30s, 2w, 1y."
         ),
     )
     search_p.add_argument("query", help="Search query string.")
@@ -202,7 +243,7 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         "--since",
         type=parse_span,
         default=None,
-        help="Only include hits newer than this span (e.g. 7d, 24h, 90m, 30s).",
+        help="Only include hits newer than this span (e.g. 7d, 24h, 90m, 30s, 2w, 1y).",
     )
     search_p.add_argument(
         "--project",
@@ -216,7 +257,7 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     )
     search_p.add_argument(
         "--limit",
-        type=int,
+        type=_positive_int,
         default=_SEARCH_DEFAULT_LIMIT,
         help=f"Maximum hits to return (default: {_SEARCH_DEFAULT_LIMIT}).",
     )
@@ -238,9 +279,16 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
             "--full to dump verbatim."
         ),
     )
-    inspect_p.add_argument(
+    target = inspect_p.add_mutually_exclusive_group(required=True)
+    target.add_argument(
         "session_id",
+        nargs="?",
         help="Session id or unique prefix to inspect.",
+    )
+    target.add_argument(
+        "--latest",
+        action="store_true",
+        help="Inspect the most recently started session in the DB.",
     )
     inspect_p.add_argument(
         "--full",
@@ -294,7 +342,7 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         "--since",
         type=parse_span,
         default=None,
-        help="Only include rows newer than this span (e.g. 7d, 24h, 90m, 30s).",
+        help="Only include rows newer than this span (e.g. 7d, 24h, 90m, 30s, 2w, 1y).",
     )
     stats_p.add_argument(
         "--project",
@@ -315,7 +363,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(args)
     except (RuntimeError, ValueError, FileExistsError, OSError, sqlite3.DatabaseError) as exc:
-        print(f"convo: {exc}", file=sys.stderr)
+        if getattr(args, "as_json", False):
+            envelope = {
+                "schema_version": _ERROR_ENVELOPE_VERSION,
+                "error": {"message": str(exc)},
+            }
+            print(json.dumps(envelope))
+        else:
+            print(f"convo: {exc}", file=sys.stderr)
         return 1
 
 
@@ -345,19 +400,46 @@ def _backup_command(args: argparse.Namespace, db_path: Path) -> int:
     with Database(db_path) as db:
         if args.auto:
             written = db.backup_snapshot()
-            print(f"snapshot written: {written}")
+            snapshot_path = written
         else:
             db.backup(args.dest)
-            print(f"backed up to {args.dest}")
+            snapshot_path = args.dest
+    if args.as_json:
+        print(json.dumps(_build_backup_envelope(snapshot_path)))
+    elif args.auto:
+        print(f"snapshot written: {snapshot_path}")
+    else:
+        print(f"backed up to {snapshot_path}")
     return 0
+
+
+def _build_backup_envelope(snapshot_path: Path) -> dict[str, object]:
+    size_bytes = snapshot_path.stat().st_size
+    return {
+        "schema_version": _BACKUP_ENVELOPE_VERSION,
+        "backup": {
+            "snapshot_path": str(snapshot_path),
+            "size_bytes": size_bytes,
+        },
+    }
 
 
 def _restore_command(args: argparse.Namespace, db_path: Path) -> int:
     src: Path = _resolve_restore_src(args, db_path)
     with Database(db_path) as db:
         db.restore_snapshot(src)
-    print(f"restored from {src}")
+    if args.as_json:
+        print(json.dumps(_build_restore_envelope(src)))
+    else:
+        print(f"restored from {src}")
     return 0
+
+
+def _build_restore_envelope(src: Path) -> dict[str, object]:
+    return {
+        "schema_version": _RESTORE_ENVELOPE_VERSION,
+        "restore": {"source": str(src)},
+    }
 
 
 def _resolve_restore_src(args: argparse.Namespace, db_path: Path) -> Path:
@@ -481,18 +563,21 @@ def _envelope_status(report: IndexReport) -> str:
 
 def _build_envelope(report: IndexReport) -> dict[str, object]:
     return {
-        "status": _envelope_status(report),
-        "files_seen": report.files_seen,
-        "files_indexed": report.files_indexed,
-        "files_skipped": report.files_skipped_unchanged + report.files_skipped_empty,
-        "files_failed": report.files_failed,
-        "rows_inserted": dict(report.rows_inserted),
-        "unknown_record_types": dict(report.unknown_record_types),
-        "errors": [
-            {"path": str(path), "message": message, "line": line}
-            for path, message, line in report.errors
-        ],
-        "duration_ms": report.duration_ms,
+        "schema_version": _INDEX_ENVELOPE_VERSION,
+        "index": {
+            "status": _envelope_status(report),
+            "files_seen": report.files_seen,
+            "files_indexed": report.files_indexed,
+            "files_skipped": report.files_skipped_unchanged + report.files_skipped_empty,
+            "files_failed": report.files_failed,
+            "rows_inserted": dict(report.rows_inserted),
+            "unknown_record_types": dict(report.unknown_record_types),
+            "errors": [
+                {"path": str(path), "message": message, "line": line}
+                for path, message, line in report.errors
+            ],
+            "duration_ms": report.duration_ms,
+        },
     }
 
 
@@ -691,7 +776,10 @@ def _print_search_hits(hits: list[SearchHit]) -> None:
 
 def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
     with Database(db_path) as db:
-        resolved = resolve_session_id(db, args.session_id)
+        if args.latest:
+            resolved = resolve_latest_session(db)
+        else:
+            resolved = resolve_session_id(db, args.session_id)
         view = inspect_session(db, resolved)
     if args.as_json:
         print(json.dumps(_build_inspect_envelope(view, full=bool(args.full))))
@@ -997,7 +1085,7 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "--since",
         type=parse_span,
         default=None,
-        help="Only include rows newer than this span (e.g. 7d, 24h, 90m, 30s).",
+        help="Only include rows newer than this span (e.g. 7d, 24h, 90m, 30s, 2w, 1y).",
     )
     summary_p.add_argument(
         "--project",
@@ -1153,7 +1241,7 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         "--since",
         type=parse_span,
         default=None,
-        help="Window length (e.g. 7d, 24h, 90m, 30s). Default: 7d.",
+        help="Window length (e.g. 7d, 24h, 90m, 30s, 2w, 1y). Default: 7d.",
     )
     diff_p.add_argument(
         "--project",

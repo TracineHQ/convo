@@ -125,15 +125,15 @@ def test_top_level_help_lists_info(capsys: pytest.CaptureFixture[str]) -> None:
     assert "info" in out
 
 
-def test_info_json_error_goes_to_stderr_not_stdout(
+def test_info_json_error_emits_envelope_on_stdout(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When --json is requested but the command errors, stdout stays empty.
+    """When --json is requested and the command errors, stdout carries a JSON envelope.
 
-    The error envelope contract: errors print `convo: <msg>` to stderr (text),
-    NOT a truncated/partial JSON payload on stdout. This pins the contract so
-    JSON consumers can rely on stdout being either valid JSON or empty.
+    The error envelope contract: under --json, modeled errors emit
+    {"schema_version": 1, "error": {"message": "..."}} on stdout so JSON
+    consumers can `jq` the result. stderr stays clean to avoid double output.
     """
     # Point --db at a non-DB file so opening fails. (A merely-missing path would
     # be auto-created by Database.open, so we need an actively-bad target.)
@@ -142,5 +142,8 @@ def test_info_json_error_goes_to_stderr_not_stdout(
     rc = main(["--db", str(bad_db), "info", "--json"])
     captured = capsys.readouterr()
     assert rc == 1
-    assert captured.out == ""
-    assert captured.err.startswith("convo:")
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert isinstance(payload["error"]["message"], str)
+    assert payload["error"]["message"]

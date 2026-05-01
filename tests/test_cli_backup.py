@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -121,6 +122,47 @@ def test_unknown_subcommand_exits_2() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["nope"])
     assert exc.value.code == 2
+
+
+def test_backup_explicit_dest_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    live = tmp_path / "live.db"
+    out = tmp_path / "out.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+
+    assert main(["backup", str(out), "--json"]) == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert payload["backup"]["snapshot_path"] == str(out)
+    assert payload["backup"]["size_bytes"] == out.stat().st_size
+    assert payload["backup"]["size_bytes"] > 0
+
+
+def test_backup_auto_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    live = tmp_path / "live.db"
+    snaps = tmp_path / "snaps"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    monkeypatch.setenv("CONVO_BACKUP_DIR", str(snaps))
+    _populate(live)
+
+    assert main(["backup", "--auto", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 1
+    snapshot_path = payload["backup"]["snapshot_path"]
+    assert _AUTO_NAME_RE.search(snapshot_path)
+    written = next(snaps.iterdir())
+    assert payload["backup"]["snapshot_path"] == str(written)
+    assert payload["backup"]["size_bytes"] == written.stat().st_size
+    assert payload["backup"]["size_bytes"] > 0
 
 
 def test_subprocess_smoke(tmp_path: Path) -> None:

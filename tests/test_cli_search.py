@@ -212,7 +212,7 @@ def test_search_empty_query_json_stdout_clean(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """With --json, errors still go to stderr; stdout stays empty."""
+    """With --json, modeled errors emit a JSON error envelope on stdout."""
     live = tmp_path / "convo.db"
     monkeypatch.setenv("CONVO_DB", str(live))
     _populate(live)
@@ -220,8 +220,12 @@ def test_search_empty_query_json_stdout_clean(
     rc = main(["search", "", "--json"])
     captured = capsys.readouterr()
     assert rc == 1
-    assert captured.out == ""
-    assert captured.err.startswith("convo:")
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert "error" in payload
+    assert isinstance(payload["error"]["message"], str)
+    assert payload["error"]["message"]
 
 
 def test_search_invalid_since_errors(
@@ -286,3 +290,26 @@ def test_search_no_hits_prose(
     assert rc == 0
     out = capsys.readouterr().out
     assert "(no hits)" in out
+
+
+def test_search_limit_negative_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+    """`--limit -5` exits 2 with a clear argparse error.
+
+    Regression: a negative limit used to be silently accepted (the SQL LIMIT
+    clause ignored it and returned the full set), inconsistent with `--limit 0`
+    which returned no hits. Both are now rejected at parse time.
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        main(["search", "foo", "--limit", "-5"])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--limit must be a positive integer" in err
+
+
+def test_search_limit_zero_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+    """`--limit 0` exits 2: zero is a nonsense limit, treat the same as negatives."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["search", "foo", "--limit", "0"])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--limit must be a positive integer" in err

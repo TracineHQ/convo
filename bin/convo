@@ -1,4 +1,16 @@
 #!/usr/bin/env sh
-# convo — Claude Code session indexer / search / analytics CLI.
-# Plugin entry point: forwards to `python3 -m convo`.
-exec python3 -m convo "$@"
+# convo plugin wrapper. Requires the `convo` CLI installed via:
+#   uv tool install git+https://github.com/TracineHQ/convo
+#
+# The Claude Code plugin layer adds this script to PATH but does not pip-install
+# the `convo` Python package. We prefer a globally-installed `convo` binary
+# (e.g. from `uv tool install`), then fall back to `python3 -m convo` if the
+# package is importable on the system Python, then fail with a clear message.
+if command -v convo >/dev/null 2>&1 && [ "$(command -v convo)" != "$0" ]; then
+    exec convo "$@"
+fi
+if python3 -c "import convo" >/dev/null 2>&1; then
+    exec python3 -m convo "$@"
+fi
+echo "convo: not installed. Run: uv tool install git+https://github.com/TracineHQ/convo" >&2
+exit 1

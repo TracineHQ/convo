@@ -34,6 +34,34 @@ def test_parse_span_one_unit() -> None:
     assert parse_span("1s") == timedelta(seconds=1)
 
 
+def test_parse_span_weeks() -> None:
+    assert parse_span("1w") == timedelta(days=7)
+    assert parse_span("2w") == timedelta(days=14)
+
+
+def test_parse_span_years() -> None:
+    # `y` is approximated as 365 days; documented in `parse_span`.
+    assert parse_span("1y") == timedelta(days=365)
+    assert parse_span("3y") == timedelta(days=3 * 365)
+
+
+def test_parse_span_huge_value_rejected() -> None:
+    """Magnitudes that overflow `datetime.now(UTC) - timedelta(...)` raise ValueError.
+
+    Regression: `parse_span("999999999d")` previously returned a valid timedelta,
+    but `datetime.now(UTC) - timedelta(days=999999999)` raises `OverflowError`
+    inside `since_iso`. The fix is to bound the magnitude at parse time.
+    """
+    with pytest.raises(ValueError, match="--since out of range"):
+        parse_span("999999999d")
+
+
+def test_parse_span_year_above_cap_rejected() -> None:
+    # 101 years x 365 = 36865 > 36500 cap.
+    with pytest.raises(ValueError, match="--since out of range"):
+        parse_span("101y")
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -50,7 +78,8 @@ def test_parse_span_one_unit() -> None:
         " 7d",
         "7d ",
         "7dd",
-        "7y",
+        "7Y",
+        "7W",
         "P7D",
     ],
 )

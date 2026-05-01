@@ -5,34 +5,53 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 
-_SPAN_RE = re.compile(r"^(?P<n>[1-9][0-9]*)(?P<unit>[dhms])$")
-_UNIT_TO_KW: dict[str, str] = {
-    "d": "days",
-    "h": "hours",
-    "m": "minutes",
-    "s": "seconds",
+_SPAN_RE = re.compile(r"^(?P<n>[1-9][0-9]*)(?P<unit>[dhmswy])$")
+# Each unit converts the integer to a number of days; we then build a
+# `timedelta(days=...)` and bound the total against `_MAX_DAYS`. Using days
+# uniformly keeps the overflow check trivial regardless of unit.
+_UNIT_TO_DAYS: dict[str, float] = {
+    "d": 1.0,
+    "h": 1.0 / 24.0,
+    "m": 1.0 / (24.0 * 60.0),
+    "s": 1.0 / (24.0 * 60.0 * 60.0),
+    "w": 7.0,
+    # `y` is approximated as 365 days. Documented; leap years not corrected.
+    "y": 365.0,
 }
 
+# Cap to 100 years per unit. `datetime.now(UTC) - timedelta(days=N)` overflows
+# Python's `datetime.MINYEAR` for very large N; this bound is well within range
+# and large enough that no realistic `--since` query bumps into it.
+_MAX_DAYS: int = 36500
+
 _ERR_INVALID_SPAN = (
-    "invalid --since span: {value!r} (expected one of: <N>d, <N>h, <N>m, <N>s "
-    "with N >= 1, e.g. 7d, 24h, 90m, 30s)"
+    "invalid --since span: {value!r} (expected one of: <N>d, <N>h, <N>m, <N>s, "
+    "<N>w, <N>y with N >= 1, e.g. 7d, 24h, 90m, 30s, 2w, 1y)"
 )
+_ERR_OUT_OF_RANGE = "--since out of range; max is 36500 days"
 
 
 def parse_span(s: str) -> timedelta:
-    """Parse a shorthand duration like ``7d``, ``24h``, ``90m``, ``30s``.
+    """Parse a shorthand duration like ``7d``, ``24h``, ``90m``, ``30s``, ``2w``, ``1y``.
 
     Accepts a positive integer followed by a single unit character: ``d`` (days),
-    ``h`` (hours), ``m`` (minutes), ``s`` (seconds). Rejects every other shape
-    (zero/negative values, decimals, ISO durations, missing unit, trailing
-    whitespace) with ``ValueError``.
+    ``h`` (hours), ``m`` (minutes), ``s`` (seconds), ``w`` (weeks), ``y`` (years,
+    approximated as 365 days). Rejects every other shape (zero/negative values,
+    decimals, ISO durations, missing unit, trailing whitespace) with ``ValueError``.
+
+    Magnitudes that translate to more than 36500 days (100 years) are rejected
+    with ``ValueError`` to avoid downstream `datetime` overflow when the span is
+    subtracted from "now".
     """
     match = _SPAN_RE.match(s)
     if match is None:
         raise ValueError(_ERR_INVALID_SPAN.format(value=s))
     n = int(match.group("n"))
     unit = match.group("unit")
-    return timedelta(**{_UNIT_TO_KW[unit]: n})
+    days = n * _UNIT_TO_DAYS[unit]
+    if days > _MAX_DAYS:
+        raise ValueError(_ERR_OUT_OF_RANGE)
+    return timedelta(days=days)
 
 
 def since_iso(since: timedelta | None) -> str | None:

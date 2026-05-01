@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 _ERR_NO_MATCH = "no session matches {prefix}"
 _ERR_AMBIGUOUS = "session id {prefix} is ambiguous; candidates: {candidates}"
+_ERR_NO_SESSIONS = "no sessions in DB"
 _MORE_MARKER = "... (and more)"
 
 _RESOLVE_LIMIT: int = 5
@@ -95,6 +96,25 @@ def resolve_session_id(db: Database, prefix: str) -> str:
         shown.append(_MORE_MARKER)
     candidates = ", ".join(shown)
     raise RuntimeError(_ERR_AMBIGUOUS.format(prefix=prefix, candidates=candidates))
+
+
+def resolve_latest_session(db: Database) -> str:
+    """Return the most recent session id by `started_at DESC`, NULLs last.
+
+    Raises ``RuntimeError("no sessions in DB")`` when the table is empty.
+    """
+    ro = open_ro(db.path)
+    try:
+        # NULLs LAST: ORDER BY started_at IS NULL puts non-NULLs first, then
+        # ORDER BY started_at DESC picks the newest among the timestamped rows.
+        row = ro.execute(
+            "SELECT id FROM sessions ORDER BY (started_at IS NULL), started_at DESC LIMIT 1",
+        ).fetchone()
+    finally:
+        ro.close()
+    if row is None:
+        raise RuntimeError(_ERR_NO_SESSIONS)
+    return str(row[0])
 
 
 def inspect_session(db: Database, session_id: str) -> SessionView:

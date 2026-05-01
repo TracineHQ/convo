@@ -243,12 +243,12 @@ def test_top_level_help_lists_inspect(capsys: pytest.CaptureFixture[str]) -> Non
     assert "inspect" in out
 
 
-def test_inspect_json_error_clean_stdout(
+def test_inspect_json_error_envelope_on_stdout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Errors print to stderr; stdout stays empty even with --json requested."""
+    """With --json, modeled errors emit a JSON error envelope on stdout."""
     live = tmp_path / "convo.db"
     monkeypatch.setenv("CONVO_DB", str(live))
     _populate(live)
@@ -256,5 +256,53 @@ def test_inspect_json_error_clean_stdout(
     rc = main(["inspect", "no-such-session", "--json"])
     captured = capsys.readouterr()
     assert rc == 1
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["schema_version"] == 1
+    assert isinstance(payload["error"]["message"], str)
+    assert payload["error"]["message"]
+
+
+def test_inspect_latest_on_populated_db(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`convo inspect --latest` resolves to the newest started_at session."""
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+
+    rc = main(["inspect", "--latest", "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    # _populate seeds a single session whose id is _SID; --latest must pick it.
+    assert payload["inspect"]["session"]["id"] == _SID
+
+
+def test_inspect_latest_empty_db_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`convo inspect --latest` on an empty DB exits 1 with `no sessions in DB`."""
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    # Bootstrap the schema but insert nothing.
+    with Database(live):
+        pass
+
+    rc = main(["inspect", "--latest"])
+    captured = capsys.readouterr()
+    assert rc == 1
     assert captured.out == ""
-    assert captured.err.startswith("convo:")
+    assert "convo: no sessions in DB" in captured.err
+
+
+def test_inspect_no_target_errors(capsys: pytest.CaptureFixture[str]) -> None:
+    """`convo inspect` with neither session_id nor --latest exits 2."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["inspect"])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "one of the arguments" in err or "required" in err

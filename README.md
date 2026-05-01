@@ -10,25 +10,24 @@ the storage layer, the read surface (`info`, `search`, `inspect`,
 
 ## Install
 
-### As a Claude Code plugin (recommended)
+### 1. Install the CLI (required)
+
+```
+uv tool install git+https://github.com/TracineHQ/convo
+```
+
+Requires Python 3.12+. Verify with `convo --version`.
+
+### 2. Install the Claude Code plugin (optional)
 
 ```
 /plugin marketplace add TracineHQ/convo
 /plugin install convo@convo-marketplace
 ```
 
-This installs `convo` as a plugin and adds the `convo` binary to your
-PATH while the plugin is active. Requires Python 3.12+ on your system.
-
-### From source (fallback)
-
-For environments without Claude Code (CI, scripts):
-
-```
-uv tool install git+https://github.com/TracineHQ/convo
-```
-
-Verify with `convo --help`.
+Adds in-Claude skills (`/convo:search`, `/convo:summary`) and a thin
+`bin/convo` wrapper that defers to the CLI installed in step 1. The plugin
+alone does not provide a working `convo` binary — step 1 is required.
 
 ## Quickstart
 

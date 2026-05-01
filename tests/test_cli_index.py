@@ -78,15 +78,17 @@ def test_index_json_envelope(
     assert rc == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert payload["status"] == "success"
-    assert payload["files_seen"] == 2
-    assert payload["files_indexed"] == 2
-    assert payload["files_skipped"] == 0
-    assert payload["files_failed"] == 0
-    assert payload["rows_inserted"]["messages"] == 2
-    assert payload["unknown_record_types"] == {}
-    assert payload["errors"] == []
-    assert isinstance(payload["duration_ms"], int)
+    assert payload["schema_version"] == 1
+    body = payload["index"]
+    assert body["status"] == "success"
+    assert body["files_seen"] == 2
+    assert body["files_indexed"] == 2
+    assert body["files_skipped"] == 0
+    assert body["files_failed"] == 0
+    assert body["rows_inserted"]["messages"] == 2
+    assert body["unknown_record_types"] == {}
+    assert body["errors"] == []
+    assert isinstance(body["duration_ms"], int)
 
 
 def test_index_dry_run_writes_nothing(
@@ -112,8 +114,8 @@ def test_index_dry_run_json(
     rc = main(["index", "--projects-dir", str(projects_dir), "--dry-run", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "success"
-    assert payload["files_indexed"] == 2
+    assert payload["index"]["status"] == "success"
+    assert payload["index"]["files_indexed"] == 2
 
 
 @pytest.mark.usefixtures("live_db")
@@ -126,9 +128,9 @@ def test_index_empty_dir(
     rc = main(["index", "--projects-dir", str(empty), "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "success"
-    assert payload["files_seen"] == 0
-    assert payload["files_indexed"] == 0
+    assert payload["index"]["status"] == "success"
+    assert payload["index"]["files_seen"] == 0
+    assert payload["index"]["files_indexed"] == 0
 
 
 @pytest.mark.usefixtures("live_db")
@@ -147,12 +149,13 @@ def test_index_partial_with_corrupt_file(
     rc = main(["index", "--projects-dir", str(projects_dir), "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "partial"
-    assert payload["files_indexed"] == 2
-    assert payload["files_failed"] == 1
-    assert len(payload["errors"]) == 1
-    assert payload["errors"][0]["line"] == 2
-    assert "Invalid JSON" in payload["errors"][0]["message"]
+    body = payload["index"]
+    assert body["status"] == "partial"
+    assert body["files_indexed"] == 2
+    assert body["files_failed"] == 1
+    assert len(body["errors"]) == 1
+    assert body["errors"][0]["line"] == 2
+    assert "Invalid JSON" in body["errors"][0]["message"]
 
 
 @pytest.mark.usefixtures("live_db")
@@ -166,8 +169,8 @@ def test_index_full_reindexes(
     rc = main(["index", "--projects-dir", str(projects_dir), "--full", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["files_indexed"] == 2
-    assert payload["files_skipped"] == 0
+    assert payload["index"]["files_indexed"] == 2
+    assert payload["index"]["files_skipped"] == 0
 
 
 @pytest.mark.usefixtures("live_db")
@@ -243,7 +246,7 @@ def test_index_unknown_records_in_envelope(
     rc = main(["index", "--projects-dir", str(root), "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["unknown_record_types"] == {"alien": 1}
+    assert payload["index"]["unknown_record_types"] == {"alien": 1}
 
 
 @pytest.mark.usefixtures("live_db")
@@ -280,9 +283,10 @@ def test_index_status_error_when_all_fail(
     rc = main(["index", "--projects-dir", str(root), "--json"])
     assert rc == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "error"
-    assert payload["files_failed"] == 1
-    assert payload["files_indexed"] == 0
+    body = payload["index"]
+    assert body["status"] == "error"
+    assert body["files_failed"] == 1
+    assert body["files_indexed"] == 0
 
 
 @pytest.mark.usefixtures("live_db")
@@ -303,14 +307,14 @@ def test_index_partial_on_idempotent_rerun_with_persistent_failure(
 
     rc = main(["index", "--projects-dir", str(root), "--json"])
     assert rc == 0
-    first = json.loads(capsys.readouterr().out)
+    first = json.loads(capsys.readouterr().out)["index"]
     assert first["status"] == "partial"
     assert first["files_indexed"] == 1
     assert first["files_failed"] == 1
 
     rc = main(["index", "--projects-dir", str(root), "--json"])
     assert rc == 0
-    second = json.loads(capsys.readouterr().out)
+    second = json.loads(capsys.readouterr().out)["index"]
     assert second["status"] == "partial"
     assert second["files_indexed"] == 0
     assert second["files_failed"] == 1

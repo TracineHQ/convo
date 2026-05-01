@@ -156,15 +156,13 @@ class Database:
             if version <= current:
                 continue
             applied_at = datetime.now(UTC).isoformat()
-            script = (
-                "BEGIN EXCLUSIVE;\n"
-                f"{sql}\n"
-                f"INSERT INTO schema_migrations(version, filename, applied_at) "
-                f"VALUES ({int(version)}, '{filename}', '{applied_at}');\n"
-                f"PRAGMA user_version = {int(version)};\n"
-                "COMMIT;"
+            self.conn.executescript("BEGIN EXCLUSIVE;\n" + sql)
+            self.conn.execute(
+                "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
+                (int(version), filename, applied_at),
             )
-            self.conn.executescript(script)
+            self.conn.execute(f"PRAGMA user_version = {int(version)}")
+            self.conn.execute("COMMIT")
         result: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
         return result
 

@@ -2,8 +2,7 @@
 
 ## Supported versions
 
-Until convo reaches v1.0, only the latest minor release is supported with
-security fixes.
+The latest released minor version receives security fixes.
 
 ## Reporting a vulnerability
 

@@ -24,7 +24,7 @@ def _user_text_record(uuid: str, text: str, *, parent: str | None = None) -> dic
         "parentUuid": parent,
         "sessionId": _SESSION_ID,
         "timestamp": "2026-04-29T00:00:00Z",
-        "cwd": "/Users/dev/develop/convo",
+        "cwd": "/workspace/convo",
         "gitBranch": "main",
         "message": {"content": text},
     }
@@ -37,7 +37,7 @@ def _assistant_with_tool_use(uuid: str, *, parent: str | None = None) -> dict[st
         "parentUuid": parent,
         "sessionId": _SESSION_ID,
         "timestamp": "2026-04-29T00:01:00Z",
-        "cwd": "/Users/dev/develop/convo",
+        "cwd": "/workspace/convo",
         "gitBranch": "main",
         "requestId": "req_1",
         "message": {
@@ -58,7 +58,7 @@ def _user_with_tool_result(uuid: str, *, parent: str) -> dict[str, object]:
         "parentUuid": parent,
         "sessionId": _SESSION_ID,
         "timestamp": "2026-04-29T00:02:00Z",
-        "cwd": "/Users/dev/develop/convo",
+        "cwd": "/workspace/convo",
         "gitBranch": "main",
         "message": {
             "content": [
@@ -125,7 +125,7 @@ def test_index_file_inserts_all_rows(db: Database, session_path: Path) -> None:
         "SELECT id, project_path, started_at, ended_at, model, git_branch FROM sessions",
     ).fetchone()
     assert sess["id"] == _SESSION_ID
-    assert sess["project_path"] == "/Users/dev/develop/convo"
+    assert sess["project_path"] == "/workspace/convo"
     assert sess["started_at"] == "2026-04-29T00:00:00Z"
     assert sess["ended_at"] == "2026-04-29T00:02:00Z"
     assert sess["model"] == "claude-haiku-4-5"

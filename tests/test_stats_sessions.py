@@ -29,7 +29,6 @@ def _insert_session(
 
 
 def test_stats_sessions_count_median_p95(db: Database) -> None:
-
     sfid = seed_source_file(db, path="/data/s.jsonl")
     # 5 sessions with durations 10s, 20s, 30s, 40s, 1000s
     cases = [

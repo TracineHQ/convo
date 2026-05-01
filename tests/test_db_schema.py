@@ -97,20 +97,6 @@ def test_source_files_kind_default_is_transcript(db: Database) -> None:
     assert kind == "transcript"
 
 
-def test_source_files_kind_accepts_guard_decisions(db: Database) -> None:
-    assert db.conn is not None
-    db.conn.execute(
-        "INSERT INTO source_files(path, kind, size, mtime_ns, last_indexed_at) "
-        "VALUES ('/g.jsonl', 'guard_decisions', 0, 0, ?)",
-        (_NOW,),
-    )
-    db.conn.commit()
-    kind = db.conn.execute(
-        "SELECT kind FROM source_files WHERE path = '/g.jsonl'",
-    ).fetchone()[0]
-    assert kind == "guard_decisions"
-
-
 def test_source_files_kind_rejects_bogus(db: Database) -> None:
     assert db.conn is not None
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):

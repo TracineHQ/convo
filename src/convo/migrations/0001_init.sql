@@ -1,13 +1,12 @@
 PRAGMA foreign_keys = ON;
 
--- Source files indexed into the DB. Two kinds in v0.1:
---   - 'transcript'      Claude Code's own session JSONLs at ~/.claude/projects/*.jsonl
---   - 'guard_decisions' guard plugin's append log at ~/.claude/guard-decisions.jsonl
+-- Source files indexed into the DB. Currently one kind:
+--   - 'transcript' Claude Code's own session JSONLs at ~/.claude/projects/*.jsonl
 CREATE TABLE source_files (
     id              INTEGER PRIMARY KEY,
     path            TEXT NOT NULL UNIQUE,
     kind            TEXT NOT NULL DEFAULT 'transcript'
-                    CHECK (kind IN ('transcript', 'guard_decisions')),
+                    CHECK (kind IN ('transcript')),
     size            INTEGER NOT NULL,
     mtime_ns        INTEGER NOT NULL,
     sha256          TEXT,

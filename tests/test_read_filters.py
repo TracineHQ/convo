@@ -89,7 +89,6 @@ def test_parse_span_invalid(value: str) -> None:
 
 
 def test_since_iso_none_returns_none() -> None:
-
     assert since_iso(None) is None
 
 

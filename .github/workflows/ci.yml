@@ -112,17 +112,15 @@ jobs:
         run: |
           PYTHONPATH=src ./bin/convo --help | head -3
 
-  gitleaks:
+  detect-secrets:
     name: Scan for leaked secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
       - name: Install dev deps
         run: uv sync --extra dev
-      - name: Run gitleaks via pre-commit
-        run: uv run pre-commit run gitleaks --all-files
+      - name: Run detect-secrets via pre-commit
+        run: uv run pre-commit run detect-secrets --all-files

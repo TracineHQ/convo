@@ -1,11 +1,10 @@
 """Map `IntakeRecord` instances onto schema row tuples.
 
-The mapper is a pure function: it takes a parsed record plus session context
-and yields `(table_name, row_tuple)` pairs in column order matching
-`INSERT_SQL[table_name]`. The orchestrator (Phase A3) wires the output to
-`executemany`.
+Pure function: takes a parsed record plus session context and yields
+`(table_name, row_tuple)` pairs in column order matching `INSERT_SQL[table_name]`.
+The orchestrator wires the output to `executemany`.
 
-Mapping rules (see `docs/plan/intake-pipeline/INDEX.md` Phase A2):
+Mapping rules:
 
 * `UserMessage` with string content   -> 1 messages row
 * `UserMessage` with list content     -> 1 messages row
@@ -19,12 +18,8 @@ Mapping rules (see `docs/plan/intake-pipeline/INDEX.md` Phase A2):
 * `FileHistorySnapshot`               -> dropped
 * `UnknownRecord`                     -> dropped
 
-Schema note (deliberate deviation from the plan): the live `tool_results`
-table at migration 0001 has columns `(tool_call_id PK, message_id, is_error,
-output_text)`. There is no separate `id` / `session_id` / `output_json` /
-`has_newlines` on `tool_results` — the plan's prose described an aspirational
-shape. The mapper persists what the schema actually carries and serializes
-list/dict content payloads as JSON into `output_text`.
+`tool_results` carries `(tool_call_id PK, message_id, is_error, output_text)`;
+list/dict payloads are JSON-encoded into `output_text`.
 """
 
 from __future__ import annotations
@@ -216,7 +211,7 @@ def map_record(  # noqa: PLR0913 — context bag is the FK contract; see docstri
     record: IntakeRecord,
     *,
     session_id: str,
-    source_file_id: int,  # noqa: ARG001 — reserved for Phase A3 wiring
+    source_file_id: int,  # noqa: ARG001 — kept for orchestrator call symmetry
     seq_counter: dict[str, int],
     existing_message_ids: frozenset[str] = frozenset(),
     existing_tool_call_ids: frozenset[str] = frozenset(),

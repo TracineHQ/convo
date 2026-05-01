@@ -1,13 +1,7 @@
 """`convo diff` — current-vs-previous window comparison.
 
-Runs the same aggregations as the `stats_*` families over two consecutive windows
-of equal length and reports per-bucket deltas.
-
-Why this module hand-rolls its own SQL instead of calling the family functions:
-the existing `stats_*(db, *, since=...)` shape models "rows newer than now-since",
-i.e. only a lower bound. The previous window needs a closed `[lower, upper)`
-range. Rather than ripple a new `until` parameter through every family (and its
-tests), `_window` re-runs the aggregations with both bounds in one pass.
+Runs the same aggregations as the `stats_*` families over two consecutive
+[lower, upper) windows of equal length and reports per-bucket deltas.
 """
 
 from __future__ import annotations

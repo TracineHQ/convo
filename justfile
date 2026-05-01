@@ -38,14 +38,6 @@ test:
 test-fast:
     uv run pytest -q
 
-# Run benchmark scripts (writes results under bench/results/)
-bench:
-    @echo "bench: TODO; tracked in CHANGELOG [Future work]"
-
-# Live demo for README recordings
-demo:
-    @echo "demo: TODO; tracked in CHANGELOG [Future work]"
-
 # Reset the local convo database (uses default location)
 db-reset:
     rm -f ~/.claude/convo.db ~/.claude/convo.db-journal ~/.claude/convo.db-wal ~/.claude/convo.db-shm

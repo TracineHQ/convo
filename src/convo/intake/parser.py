@@ -1,23 +1,9 @@
 """JSONL line and file parser for Claude Code session records.
 
-Decision (mixed-block assistant records):
-    The pre-flight survey (`docs/plan/intake-pipeline/record-types-survey.md`)
-    confirmed that a single assistant turn frequently emits multiple content
-    blocks of mixed types in one record — for example `thinking + tool_use`
-    or `thinking + text + tool_use`. The survey counts 25 thinking blocks,
-    18 tool_use blocks, and 9 text blocks across only 52 assistant records;
-    the only way that adds up is by mixing.
-
-    The parser therefore yields exactly ONE `AssistantMessage` per JSONL line,
-    with every block (text / thinking / tool_use, in source order) gathered
-    under `.blocks`. Splitting these into separate `messages` and `tool_calls`
-    schema rows is the mapper's job (Phase A2). Keeping the line-to-record
-    mapping 1:1 lets the orchestrator track file offsets and idempotency
-    cleanly and lets the mapper own the schema-shape decision in one place.
-
-    The same rule applies to user records: one `UserMessage` per line, with
-    `tool_result` blocks and any text content surfaced under `.blocks` /
-    `.text_content`.
+Yields one record per JSONL line. Assistant turns may contain mixed content
+blocks (text / thinking / tool_use) gathered under `.blocks` in source order;
+splitting those into schema rows is the mapper's job. User records carry
+`tool_result` blocks and text content the same way.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Typed record dataclasses yielded by the JSONL line parser.
 
-The `IntakeRecord` union covers every top-level `type` value seen in real Claude
-Code session JSONLs (see `docs/plan/intake-pipeline/record-types-survey.md`).
+The `IntakeRecord` union covers every top-level `type` value seen in Claude
+Code session JSONLs.
 Block dataclasses (`ToolUseBlock`, `ToolResultBlock`, `TextBlock`,
 `ThinkingBlock`) live inside `UserMessage.blocks` / `AssistantMessage.blocks`;
 they are not part of the top-level union because they are not first-class JSONL

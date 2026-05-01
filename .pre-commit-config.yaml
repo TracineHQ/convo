@@ -26,7 +26,8 @@ repos:
         files: ^src/
         additional_dependencies: []
 
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
     hooks:
-      - id: gitleaks
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]

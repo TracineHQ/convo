@@ -31,9 +31,9 @@ Inside Claude Code:
 /plugin install convo@convo-marketplace
 ```
 
-Adds in-Claude skills (`/convo:search`, `/convo:summary`) alongside the
-CLI. This is the recommended path for anyone using convo from inside
-Claude Code.
+This is the recommended path for anyone using convo from inside Claude Code.
+See [What you get when you install the plugin](#what-you-get-when-you-install-the-plugin)
+for the full surface.
 
 ### 2. PyPI
 
@@ -64,6 +64,37 @@ uv tool install .
 ```
 
 Use this path if you want to track `main` directly or hack on convo locally.
+
+## What you get when you install the plugin
+
+Installing convo as a Claude Code plugin (path 1 above) wires up three things
+on top of the CLI:
+
+**Auto-index after every session.** A `SessionEnd` hook runs `convo index`
+when each Claude Code session ends, so search results stay current without
+manual upkeep. Idempotent and fast (sha256-skipped); no-ops gracefully if
+`convo` isn't on `PATH`.
+
+**Six slash commands** available inline in Claude Code:
+
+- `/convo:search <query>` — FTS5 search over messages, tool calls, and tool
+  results. Default `--limit 20`.
+- `/convo:summary [--since SPAN]` — activity dashboard (tools, commands,
+  sessions, files, model). Defaults to 7 days.
+- `/convo:diff [--since SPAN]` — current vs previous window comparison with
+  deltas. Defaults to 7 days.
+- `/convo:inspect <session-id-prefix | --latest>` — full message timeline for
+  one session.
+- `/convo:stats` — tool-call frequency and error rates across all indexed
+  sessions.
+- `/convo:info` — DB overview (row counts, last index time, top projects,
+  snapshots).
+
+**A `searching-conversation-history` skill** Claude itself can invoke when you
+ask history-recall questions like "did I solve this before?", "what was that
+fix for X?", or "summarize last week". The skill calls `convo search` /
+`convo summary` with `--json`, parses the result, and surfaces matched session
+IDs and excerpts back to you.
 
 ## Quickstart
 

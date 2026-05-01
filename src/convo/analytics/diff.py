@@ -253,11 +253,12 @@ def _sessions_durations(
         params.append(project)
     where_sql = " AND ".join(where)
     base_sql = (
-        f"SELECT (julianday(ended_at) - julianday(started_at)) * {SECONDS_PER_DAY} "  # noqa: S608
+        "SELECT (julianday(ended_at) - julianday(started_at)) * ? "
         "AS duration_s FROM sessions WHERE "
     )
     sql = base_sql + where_sql  # WHERE built from fixed allow-list; binds parameterized.
-    rows = conn.execute(sql, params).fetchall()
+    bind_params: list[object] = [SECONDS_PER_DAY, *params]
+    rows = conn.execute(sql, bind_params).fetchall()
     return [float(r["duration_s"]) for r in rows if r["duration_s"] is not None]
 
 

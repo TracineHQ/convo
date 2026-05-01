@@ -130,3 +130,29 @@ jobs:
         run: uv sync --extra dev
       - name: Run detect-secrets via pre-commit
         run: uv run pre-commit run detect-secrets --all-files
+
+  bandit:
+    name: Bandit security lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Run bandit
+        run: uv run --with bandit bandit -r src/ -ll
+
+  pip-audit:
+    name: Audit dependencies for CVEs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3.2.4
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Export requirements
+        run: uv export --format requirements-txt --no-hashes --no-emit-project --extra dev > requirements-audit.txt
+      - name: Run pip-audit
+        run: uv run --with pip-audit pip-audit -r requirements-audit.txt --strict

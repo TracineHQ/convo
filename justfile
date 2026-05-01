@@ -60,3 +60,10 @@ hooks-run:
 
 # Mirror the CI matrix locally as closely as possible
 ci: lint typecheck format-check test
+
+# Run security scanners: bandit (static AST) + pip-audit (CVE check on deps)
+security:
+    uv run --with bandit bandit -c pyproject.toml -r src/ -ll
+    uv export --format requirements-txt --no-hashes --no-emit-project --extra dev > requirements-audit.txt
+    uv run --with pip-audit pip-audit -r requirements-audit.txt --strict --disable-pip --no-deps
+    rm -f requirements-audit.txt

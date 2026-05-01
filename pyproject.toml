@@ -154,3 +154,12 @@ module = "tests.*"
 # Tests can be looser; the source must be strict.
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+
+[tool.bandit]
+# Skip B608 (hardcoded_sql_expressions). Ruff's S608 covers the same rule and
+# is the project's authoritative source for SQL-injection guidance. Every
+# dynamic-WHERE site that builds SQL via f-strings binds user values through
+# `?` placeholders and joins WHERE fragments from a fixed, in-source allow-list
+# (see per-module comments). Suppressing globally here avoids duplicating
+# per-line `# nosec` markers next to each existing `# noqa: S608`.
+skips = ["B608"]

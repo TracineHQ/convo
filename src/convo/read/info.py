@@ -47,12 +47,17 @@ class InfoReport:
 
 def _row_counts(db: Database) -> dict[str, int]:
     assert db.conn is not None
-    counts: dict[str, int] = {}
-    for table in _COUNTED_TABLES:
-        # Table names are a fixed allow-list defined above; safe to interpolate.
-        row = db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608
-        counts[table] = int(row[0])
-    return counts
+    # Single literal query (no f-string) keyed off `_COUNTED_TABLES`. Order of
+    # the SELECT projections must match the tuple above.
+    row = db.conn.execute(
+        "SELECT "
+        "(SELECT COUNT(*) FROM source_files), "
+        "(SELECT COUNT(*) FROM sessions), "
+        "(SELECT COUNT(*) FROM messages), "
+        "(SELECT COUNT(*) FROM tool_calls), "
+        "(SELECT COUNT(*) FROM tool_results)"
+    ).fetchone()
+    return dict(zip(_COUNTED_TABLES, (int(c) for c in row), strict=True))
 
 
 def _last_indexed_at(db: Database) -> str | None:

@@ -1,5 +1,10 @@
 """`convo search` — FTS5-backed search across messages, tool_calls, tool_results."""
 
+# Several queries in this module assemble WHERE clauses by joining a fixed
+# allow-list of condition fragments. All user-supplied values are bound via
+# `?` placeholders. The f-string SQL trips ruff S608 on shape; suppressions
+# are per-line on the affected expressions.
+
 from __future__ import annotations
 
 import sqlite3

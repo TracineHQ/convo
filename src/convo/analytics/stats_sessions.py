@@ -53,15 +53,16 @@ def stats_sessions(
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
     base_select = (
-        "SELECT started_at, "  # noqa: S608
-        f"(julianday(ended_at) - julianday(started_at)) * {SECONDS_PER_DAY} AS duration_s "
+        "SELECT started_at, "
+        "(julianday(ended_at) - julianday(started_at)) * ? AS duration_s "
         "FROM sessions"
     )
     sql = base_select + where_sql
+    bind_params: list[object] = [SECONDS_PER_DAY, *params]
 
     ro = open_ro(db.path)
     try:
-        rows = ro.execute(sql, params).fetchall()
+        rows = ro.execute(sql, bind_params).fetchall()
     finally:
         ro.close()
 

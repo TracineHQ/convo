@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/TracineHQ/convo/ci.yml?branch=main&label=CI)](https://github.com/TracineHQ/convo/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/TracineHQ/convo/badge)](https://scorecard.dev/viewer/?uri=github.com/TracineHQ/convo)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg)](https://www.python.org/)
-[![PyPI version](https://img.shields.io/pypi/v/convo)](https://pypi.org/project/convo/)
+[![PyPI version](https://img.shields.io/pypi/v/tracine-convo)](https://pypi.org/project/tracine-convo/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 > convo is independently maintained and is not affiliated with, endorsed by,
@@ -37,22 +37,24 @@ for the full surface.
 
 ### 2. PyPI
 
+The PyPI distribution is `tracine-convo`; the installed CLI command is `convo`.
+
 For end-users:
 
 ```
-pipx install convo
+pipx install tracine-convo
 ```
 
 For uv users:
 
 ```
-uv tool install convo
+uv tool install tracine-convo
 ```
 
 For one-shot use without installing globally:
 
 ```
-uvx convo --help
+uvx --from tracine-convo convo --help
 ```
 
 ### 3. From source (fallback)

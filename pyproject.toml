@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "convo"
+name = "tracine-convo"
 version = "0.1.0"
 description = "Global conversation index and query tool for Claude Code. SQLite-backed full-text search, tool-call analytics, session inspection."
 readme = "README.md"

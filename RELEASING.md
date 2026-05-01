@@ -79,30 +79,77 @@ actually being prepared — no `-dev0` suffix on `main` between releases.
 
 ## 4. Claude Code marketplace submission
 
-- [ ] Confirm `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
+The community marketplace mirror at
+[anthropics/claude-plugins-community](https://github.com/anthropics/claude-plugins-community)
+is read-only and synced nightly from Anthropic's internal review pipeline.
+**PRs opened against that repo are auto-closed.** Submit via the in-app form
+instead.
+
+### Pre-submission checks
+
+- [ ] `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
       reflect the released `X.Y.Z` (already validated in section 1).
-- [ ] Submit to Anthropic's plugin directory. As of 2026-05 the documented
-      submission entrypoint is the form at
-      [clau.de/plugin-directory-submission](https://clau.de/plugin-directory-submission)
-      (also reachable as
-      [platform.claude.com/plugins/submit](https://platform.claude.com/plugins/submit)).
-      The community marketplace mirror lives at
-      [anthropics/claude-plugins-community](https://github.com/anthropics/claude-plugins-community)
-      (read-only — do not open a PR there). **Verify the current flow before
-      submitting** — Anthropic has iterated on this and the form URL is the
-      authoritative source.
-- [ ] Submission requires the public repo URL and the path to
-      `.claude-plugin/marketplace.json`. Plugins go through automated review
-      before listing; "Anthropic Verified" is a separate, additional review.
-- [ ] Wait for the acceptance email / GitHub notification.
-- [ ] Once listed, smoke-test from inside Claude Code:
+- [ ] Local plugin smoke (in any Claude Code session, against the source tree):
+      ```
+      claude --plugin-dir /path/to/convo
+      ```
+      Confirm `/convo:search`, `/convo:summary`, `/convo:diff`, `/convo:inspect`,
+      `/convo:stats`, `/convo:info` autocomplete and run. Confirm the
+      `searching-conversation-history` skill activates on a history-recall
+      question. Confirm the SessionEnd hook fires (run `convo info` after
+      ending a session and verify `last_indexed_at` advanced).
+- [ ] PyPI publish is live at
+      [pypi.org/project/tracine-convo](https://pypi.org/project/tracine-convo/) —
+      the marketplace listing assumes users can `pipx install tracine-convo` to
+      get the `convo` binary the plugin shells out to.
+
+### Submit via the in-app form
+
+Pick one entrypoint (both submit to the same review pipeline):
+
+- **Claude.ai**: [claude.ai/settings/plugins/submit](https://claude.ai/settings/plugins/submit)
+- **Console**: [platform.claude.com/plugins/submit](https://platform.claude.com/plugins/submit)
+
+Submission inputs (have these ready):
+
+- Public repo URL: `https://github.com/TracineHQ/convo`
+- Path to plugin manifest: `.claude-plugin/plugin.json`
+- Path to marketplace manifest: `.claude-plugin/marketplace.json`
+- Released version: matches the `version` field in both manifests and the git
+  tag `vX.Y.Z`
+- Description: pulled from `marketplace.json` `plugins[0].description`
+- Category: `developer-tools` (already set in `marketplace.json`)
+- License: `Apache-2.0` (already in `plugin.json`)
+
+### After submission
+
+- [ ] Plugins go through automated security scanning before being added to
+      the community marketplace. Wait for the acceptance email / GitHub
+      notification.
+- [ ] Once listed, smoke from a clean Claude Code session:
 
       ```
       /plugin marketplace add TracineHQ/convo
-      /plugin install convo
+      /plugin install convo@convo-marketplace
       ```
 
-      Confirm the plugin appears and the version matches `X.Y.Z`.
+      Confirm the plugin appears in `/plugin list` and the installed version
+      matches `X.Y.Z`.
+
+- [ ] "Anthropic Verified" status is a separate, additional review and is not
+      automatic on first listing. Apply later via the same in-app form once
+      the plugin has community traction.
+
+### Updating after listing
+
+The community-marketplace `marketplace.json` is synced nightly from
+Anthropic's internal pipeline. To ship an update:
+
+1. Cut a new release through this checklist (section 1 onward).
+2. Re-run the submission form for the new version (or follow whatever
+   "update existing listing" path the form provides — check before
+   re-submitting from scratch).
+3. The synced mirror picks up the new version on its next nightly sync.
 
 ## 5. Post-release housekeeping
 

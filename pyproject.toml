@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "convo"
 version = "0.1.0"
-description = "Global conversation index and query tool for Claude Code. Tool-call analytics, anti-pattern detection, session inspection."
+description = "Global conversation index and query tool for Claude Code. SQLite-backed full-text search, tool-call analytics, session inspection."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -16,7 +16,6 @@ keywords = [
     "agent-observability",
     "tool-call-analytics",
     "llm-tooling",
-    "anti-pattern-detection",
     "sqlite",
     "fts5",
 ]

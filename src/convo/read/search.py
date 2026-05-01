@@ -232,7 +232,7 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
         params.append(filters.tool)
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
-        f"tc.started_at AS timestamp, {_snippet('tool_calls_fts', -1)} AS excerpt, "
+        f"tc.started_at AS timestamp, {_snippet('tool_calls_fts', 1)} AS excerpt, "
         f"s.project_path AS project"
     )
     sql = (

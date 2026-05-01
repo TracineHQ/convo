@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v convo >/dev/null 2>&1 && convo index >/dev/null 2>&1 || true"
+          }
+        ]
+      }
+    ]
+  }
+}

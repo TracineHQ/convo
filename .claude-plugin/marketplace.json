@@ -1,0 +1,14 @@
+{
+  "name": "convo-marketplace",
+  "owner": { "name": "Anthony Ledesma" },
+  "plugins": [
+    {
+      "name": "convo",
+      "source": ".",
+      "description": "Index Claude Code session JSONLs into local SQLite with search, inspect, and analytics.",
+      "version": "0.1.0",
+      "category": "developer-tools",
+      "tags": ["claude-code", "observability", "session-history", "analytics"]
+    }
+  ]
+}

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "convo"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Global conversation index and query tool for Claude Code. Tool-call analytics, anti-pattern detection, session inspection."
 readme = "README.md"
 license = "Apache-2.0"

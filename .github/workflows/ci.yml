@@ -25,6 +25,8 @@ jobs:
         run: uv run ruff check .
       - name: Ruff format
         run: uv run ruff format --check .
+      - name: Validate plugin manifests
+        run: python3 scripts/validate_plugin_manifest.py
 
   typecheck:
     name: Mypy strict
@@ -76,6 +78,39 @@ jobs:
           set -eu
           unzip -l dist/*.whl | grep -F 'convo/migrations/0001_init.sql' \
             || { echo "ERROR: 0001_init.sql missing from built wheel"; exit 1; }
+
+  smoke:
+    name: Smoke (end-to-end command surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Pin Python version
+        run: uv python pin 3.12
+      - name: Install convo as a tool
+        run: uv tool install .
+      - name: Smoke test command surface
+        env:
+          CONVO_DB: /tmp/smoke.db
+          CONVO_BACKUP_DIR: /tmp/smoke-backups
+          CLAUDE_PROJECTS_DIR: tests/fixtures/qa-projects
+        run: |
+          set -eu
+          mkdir -p "$CONVO_BACKUP_DIR"
+          convo index
+          convo info
+          convo search "tool" --limit 5 --json
+          convo inspect $(convo search "tool" --limit 1 --json | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["search"]["hits"][0]["session_id"][:8])') --json
+          convo summary --since 30d --json
+          convo diff --since 7d --json
+          convo backup --auto
+          convo snapshots --json
+          convo restore --latest
+      - name: Smoke bin/convo wrapper
+        run: |
+          PYTHONPATH=src ./bin/convo --help | head -3
 
   gitleaks:
     name: Scan for leaked secrets

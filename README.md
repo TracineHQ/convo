@@ -1,5 +1,7 @@
 # convo
 
+[![CI](https://github.com/TracineHQ/convo/actions/workflows/ci.yml/badge.svg)](https://github.com/TracineHQ/convo/actions/workflows/ci.yml)
+
 Index Claude Code session JSONLs into a local SQLite database, then search,
 inspect, snapshot, and analyze the result. v1 covers the intake pipeline,
 the storage layer, the read surface (`info`, `search`, `inspect`,
@@ -8,16 +10,41 @@ the storage layer, the read surface (`info`, `search`, `inspect`,
 
 ## Install
 
-convo is intended to ship as a Claude Code plugin/extension. Until that
-landing slot exists, install from source:
+### As a Claude Code plugin (recommended)
 
-```bash
-uv tool install git+https://github.com/<your-org>/convo
-# or, from a local clone:
-uv tool install /path/to/convo
+```
+/plugin marketplace add TracineHQ/convo
+/plugin install convo@convo-marketplace
+```
+
+This installs `convo` as a plugin and adds the `convo` binary to your
+PATH while the plugin is active. Requires Python 3.12+ on your system.
+
+### From source (fallback)
+
+For environments without Claude Code (CI, scripts):
+
+```
+uv tool install git+https://github.com/TracineHQ/convo
 ```
 
 Verify with `convo --help`.
+
+## Quickstart
+
+After installing the plugin (or from-source CLI):
+
+```sh
+convo index                          # populate from ~/.claude/projects/
+convo info                           # quick overview: row counts, projects, last index
+convo search "kafka" --since 7d      # FTS5 over messages, tool calls, tool results
+convo summary --since 7d             # tool/command/session/file/model dashboard
+convo inspect <session-id>           # use a prefix from the search hits
+convo snapshots                      # list backup snapshots
+```
+
+Set `CONVO_DB` to point at a custom DB path; `CONVO_BACKUP_DIR` for snapshot
+location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
 
 ## Available commands
 
@@ -48,17 +75,6 @@ Verify with `convo --help`.
   five families in one report.
 - `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
   window comparison with deltas. Default span 7d.
-
-Example session:
-
-```bash
-convo index
-convo info
-convo search "kafka" --since 7d --limit 10
-convo summary --since 7d
-convo inspect <session-id>   # use a prefix from the search hits above
-convo snapshots
-```
 
 ## Storage
 
@@ -106,7 +122,6 @@ permissions on the live DB as well:
 
 Future releases will add:
 
-- Claude Code plugin/extension packaging (primary distribution target).
 - `convo stats hooks` and `convo stats skills` -- deferred to v1.1; both
   require a `0002_live_hooks.sql` schema addition to capture pre/post tool
   hook events and skill invocations from the JSONL.

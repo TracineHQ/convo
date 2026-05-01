@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# convo — Claude Code session indexer / search / analytics CLI.
+# Plugin entry point: forwards to `python3 -m convo`.
+exec python3 -m convo "$@"

@@ -45,7 +45,6 @@ Thumbs.db
 !.claude/hooks/*.sh
 .outputs/
 .worktrees/
-.semgrep/
 .semgrepignore
 
 # Bench results

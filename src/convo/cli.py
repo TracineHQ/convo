@@ -19,6 +19,7 @@ from convo.analytics import (
     DeltaReport,
     DiffReport,
     FilesReport,
+    HooksReport,
     ModelReport,
     SessionsReport,
     SummaryReport,
@@ -31,11 +32,13 @@ from convo.analytics import (
     gather_summary,
     stats_commands,
     stats_files,
+    stats_hooks,
     stats_model,
     stats_sessions,
     stats_tools,
 )
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
+from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
 from convo.read.filters import parse_span
 from convo.read.info import InfoReport, ProjectCount, gather_info
@@ -63,7 +66,7 @@ _INDEX_ENVELOPE_VERSION: int = 1
 _BACKUP_ENVELOPE_VERSION: int = 1
 _RESTORE_ENVELOPE_VERSION: int = 1
 _ERROR_ENVELOPE_VERSION: int = 1
-_STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model")
+_STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
 _UNKNOWN_PROJECT_LABEL: str = "(unknown)"
@@ -127,6 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_backup_parser(sub)
     _add_restore_parser(sub)
     _add_index_parser(sub)
+    _add_index_guard_parser(sub)
     _add_info_parser(sub)
     _add_search_parser(sub)
     _add_inspect_parser(sub)
@@ -222,6 +226,37 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help="Scan and report what would change without writing.",
     )
     index_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _add_index_guard_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    guard_p = sub.add_parser(
+        "index-guard",
+        help="Index guard's JSONL decision log into the convo DB.",
+        epilog=(
+            "Path resolution: --path > $GUARD_DECISIONS_PATH > "
+            "~/.claude/guard-decisions.jsonl. Idempotent on unchanged files."
+        ),
+    )
+    guard_p.add_argument(
+        "--path",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit guard JSONL path "
+            "(default: $GUARD_DECISIONS_PATH or ~/.claude/guard-decisions.jsonl)."
+        ),
+    )
+    guard_p.add_argument(
+        "--full",
+        action="store_true",
+        help="Re-index regardless of recorded sha256.",
+    )
+    guard_p.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -395,6 +430,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         "backup": _backup_command,
         "restore": _restore_command,
         "index": _index_command,
+        "index-guard": _index_guard_command,
         "info": _info_command,
         "search": _search_command,
         "inspect": _inspect_command,
@@ -629,6 +665,47 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
     else:
         _print_summary(report)
     return 1 if _envelope_status(report) == "error" else 0
+
+
+def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
+    log_path = resolve_guard_log_path(args.path)
+    if log_path is None:
+        msg = "no guard JSONL log found"
+        if args.as_json:
+            envelope = {
+                "schema_version": _INDEX_ENVELOPE_VERSION,
+                "guard": {"status": "no_log", "path": None, "inserted_rows": {}},
+            }
+            print(json.dumps(envelope))
+        else:
+            print(f"convo: {msg}", file=sys.stderr)
+        return 0
+    with Database(db_path) as db:
+        result = index_guard_file(db, log_path, force=args.full)
+    if args.as_json:
+        envelope = {
+            "schema_version": _INDEX_ENVELOPE_VERSION,
+            "guard": {
+                "path": str(log_path),
+                "skipped_reason": result.skipped_reason,
+                "error": result.error,
+                "inserted_rows": dict(result.inserted_rows),
+                "source_file_id": result.source_file_id,
+            },
+        }
+        print(json.dumps(envelope))
+    else:
+        if result.error is not None:
+            print(f"convo: error indexing {log_path}: {result.error}", file=sys.stderr)
+            return 1
+        if result.skipped_reason is not None:
+            print(f"{log_path}  ({result.skipped_reason})")
+        else:
+            inserted = result.inserted_rows.get("guard_decisions", 0)
+            quarantined = result.inserted_rows.get("quarantined", 0)
+            tail = f", {quarantined} quarantined" if quarantined else ""
+            print(f"{log_path}  indexed {inserted} decisions{tail}")
+    return 0
 
 
 def _info_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -892,13 +969,17 @@ def _print_message(idx: int, msg: MessageView, *, full: bool) -> None:
 
 _STATS_FAMILY_FUNCS: dict[
     str,
-    Callable[..., ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport],
+    Callable[
+        ...,
+        ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport | HooksReport,
+    ],
 ] = {
     "tools": stats_tools,
     "commands": stats_commands,
     "sessions": stats_sessions,
     "files": stats_files,
     "model": stats_model,
+    "hooks": stats_hooks,
 }
 
 
@@ -916,7 +997,7 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
 
 def _build_stats_envelope(
     family: str,
-    report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport,
+    report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport | HooksReport,
 ) -> dict[str, object]:
     body: dict[str, object] = {"family": family, **dataclasses.asdict(report)}
     return {"schema_version": _STATS_ENVELOPE_VERSION, "stats": body}
@@ -924,7 +1005,7 @@ def _build_stats_envelope(
 
 def _print_stats(
     family: str,
-    report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport,
+    report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport | HooksReport,
 ) -> None:
     if family == "tools":
         assert isinstance(report, ToolsReport)
@@ -941,6 +1022,9 @@ def _print_stats(
     elif family == "model":
         assert isinstance(report, ModelReport)
         _print_stats_model(report)
+    elif family == "hooks":
+        assert isinstance(report, HooksReport)
+        _print_stats_hooks(report)
 
 
 def _print_stats_tools(report: ToolsReport) -> None:
@@ -1082,6 +1166,35 @@ def _print_stats_model(report: ModelReport) -> None:
     print(f"  {'-' * name_w}  {'-' * count_w}")
     for m in report.by_model:
         print(f"  {m.model.ljust(name_w)}  {str(m.session_count).rjust(count_w)}")
+
+
+def _print_stats_hooks(report: HooksReport) -> None:
+    print(f"total  {report.total}")
+    if report.total == 0:
+        print("(no data)")
+        return
+    print()
+    print("top by hook:")
+    if not report.top_by_hook:
+        print("  (none)")
+    else:
+        name_w = max(len("hook_id"), *(len(h.hook_id) for h in report.top_by_hook))
+        count_w = max(len("count"), *(len(str(h.count)) for h in report.top_by_hook))
+        print(f"  {'hook_id'.ljust(name_w)}  {'count'.rjust(count_w)}")
+        print(f"  {'-' * name_w}  {'-' * count_w}")
+        for h in report.top_by_hook:
+            print(f"  {h.hook_id.ljust(name_w)}  {str(h.count).rjust(count_w)}")
+    print()
+    print("by decision:")
+    if not report.by_decision:
+        print("  (none)")
+        return
+    dec_w = max(len("decision"), *(len(d.decision) for d in report.by_decision))
+    count_w = max(len("count"), *(len(str(d.count)) for d in report.by_decision))
+    print(f"  {'decision'.ljust(dec_w)}  {'count'.rjust(count_w)}")
+    print(f"  {'-' * dec_w}  {'-' * count_w}")
+    for d in report.by_decision:
+        print(f"  {d.decision.ljust(dec_w)}  {str(d.count).rjust(count_w)}")
 
 
 _SUMMARY_ENVELOPE_VERSION: int = 1

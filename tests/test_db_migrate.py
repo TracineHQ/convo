@@ -20,8 +20,14 @@ _BASE_TABLES = {
     "source_files",
     "tool_calls",
     "tool_results",
+    "guard_decisions",
 }
-_FTS_TABLES = {"messages_fts", "tool_calls_fts", "tool_results_fts"}
+_FTS_TABLES = {
+    "messages_fts",
+    "tool_calls_fts",
+    "tool_results_fts",
+    "guard_decisions_fts",
+}
 
 
 def _write(p: Path, body: str = "-- noop\n") -> None:
@@ -77,10 +83,10 @@ def test_open_refuses_db_from_future_version(db_path: Path) -> None:
     raw.close()
 
 
-def test_fresh_db_has_user_version_1_and_expected_tables(db_path: Path) -> None:
+def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
         rows = db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -90,13 +96,16 @@ def test_fresh_db_has_user_version_1_and_expected_tables(db_path: Path) -> None:
         assert names >= _FTS_TABLES
 
         migrations = db.conn.execute(
-            "SELECT version, filename, applied_at FROM schema_migrations",
+            "SELECT version, filename, applied_at FROM schema_migrations ORDER BY version",
         ).fetchall()
-        assert len(migrations) == 1
+        assert len(migrations) == 2
         assert migrations[0][0] == 1
         assert migrations[0][1] == "0001_init.sql"
+        assert migrations[1][0] == 2
+        assert migrations[1][1] == "0002_guard_decisions.sql"
         # Parses as ISO-8601:
         datetime.fromisoformat(migrations[0][2])
+        datetime.fromisoformat(migrations[1][2])
 
 
 def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
@@ -109,7 +118,7 @@ def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
         rows = db.conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
-        assert rows[0] == 1
+        assert rows[0] == 2
         second = db.conn.execute(
             "SELECT applied_at FROM schema_migrations WHERE version = 1",
         ).fetchone()[0]

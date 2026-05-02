@@ -63,7 +63,7 @@ def test_info_json_envelope(
 
     assert payload["schema_version"] == 1
     info = payload["info"]
-    assert info["db_schema_version"] == 1
+    assert info["db_schema_version"] == 2
     assert info["row_counts"]["source_files"] == 1
     assert info["row_counts"]["sessions"] == 1
     assert info["row_counts"]["messages"] == 1

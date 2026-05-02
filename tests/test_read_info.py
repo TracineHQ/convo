@@ -67,7 +67,7 @@ def test_gather_info_reports_all_fields(db: Database) -> None:
     report = gather_info(db)
 
     assert isinstance(report, InfoReport)
-    assert report.schema_version == 1
+    assert report.schema_version == 2
     assert report.row_counts == {
         "source_files": 4,
         "sessions": 4,

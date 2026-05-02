@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 DEFAULT_DB_PATH: Path = Path.home() / ".claude" / "convo.db"
 SNAPSHOT_DIR_NAME: str = "convo-backups"
-SCHEMA_VERSION: int = 1
+SCHEMA_VERSION: int = 2
 _MIN_SQLITE: tuple[int, int, int] = (3, 37, 0)
 _MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 

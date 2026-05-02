@@ -1,0 +1,89 @@
+rules:
+  - id: mock-without-autospec
+    patterns:
+      - pattern: MagicMock(...)
+      - pattern-not: MagicMock(..., spec=..., ...)
+      - pattern-not: MagicMock(..., spec_set=..., ...)
+      - pattern-not: MagicMock(..., autospec=..., ...)
+    paths:
+      include:
+        - "**/tests/**/*.py"
+        - "**/test_*.py"
+    message: >
+      Use mocker.create_autospec(ClassName, spec_set=True, instance=True) —
+      bare MagicMock misses interface drift.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: best-practice
+
+  - id: patch-without-autospec
+    pattern-either:
+      - patterns:
+          - pattern: patch(...)
+          - pattern-not: patch(..., autospec=..., ...)
+      - patterns:
+          - pattern: patch.object(...)
+          - pattern-not: patch.object(..., autospec=..., ...)
+      - patterns:
+          - pattern: mocker.patch(...)
+          - pattern-not: mocker.patch(..., autospec=..., ...)
+      - patterns:
+          - pattern: mocker.patch.object(...)
+          - pattern-not: mocker.patch.object(..., autospec=..., ...)
+    paths:
+      include:
+        - "**/tests/**/*.py"
+        - "**/test_*.py"
+    message: >
+      Add autospec=True — without it, patched mocks accept any signature.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: best-practice
+
+  - id: bare-except
+    pattern: |
+      try:
+          ...
+      except:
+          ...
+    paths:
+      include:
+        - "**/*.py"
+    message: >
+      Catch specific exceptions — bare except swallows SystemExit and
+      KeyboardInterrupt. Use `except Exception:` at minimum.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      category: correctness
+
+  - id: blanket-type-ignore
+    pattern-regex: "#\\s*type:\\s*ignore(?!\\[)"
+    paths:
+      include:
+        - "**/src/**/*.py"
+    message: >
+      Specify the error code: `# type: ignore[assignment]`. Blanket ignores
+      hide unrelated errors.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: best-practice
+
+  - id: tracine-no-print-in-lib
+    pattern: print(...)
+    paths:
+      include:
+        - "**/src/convo/**/*.py"
+      exclude:
+        - "**/src/convo/cli.py"
+        - "**/src/convo/__main__.py"
+    message: >
+      Library code should not call print(). Emit to sys.stderr or use logging;
+      reserve print() for the CLI entry layer.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      category: best-practice

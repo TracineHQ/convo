@@ -72,3 +72,13 @@ repos:
     rev: v1.7.12
     hooks:
       - id: actionlint
+
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.159.0
+    hooks:
+      - id: semgrep
+        # Local rules only; report-only on warnings (don't block commit).
+        # ERROR-severity rules (like bare-except) still fail with --error.
+        args: ["--config=.semgrep/", "--error", "--quiet", "--metrics=off"]
+        pass_filenames: false
+        always_run: true

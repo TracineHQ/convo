@@ -14,6 +14,12 @@ from convo.analytics.diff import (
 )
 from convo.analytics.stats_commands import CommandFreq, CommandsReport, stats_commands
 from convo.analytics.stats_files import FileActivity, FilesReport, stats_files
+from convo.analytics.stats_hooks import (
+    DecisionFreq,
+    HookFreq,
+    HooksReport,
+    stats_hooks,
+)
 from convo.analytics.stats_model import ModelCount, ModelReport, stats_model
 from convo.analytics.stats_sessions import SessionsReport, stats_sessions
 from convo.analytics.stats_tools import (
@@ -28,11 +34,14 @@ from convo.analytics.summary import SummaryReport, gather_summary
 __all__ = [
     "CommandFreq",
     "CommandsReport",
+    "DecisionFreq",
     "Delta",
     "DeltaReport",
     "DiffReport",
     "FileActivity",
     "FilesReport",
+    "HookFreq",
+    "HooksReport",
     "ModelCount",
     "ModelReport",
     "SessionsReport",
@@ -46,6 +55,7 @@ __all__ = [
     "gather_summary",
     "stats_commands",
     "stats_files",
+    "stats_hooks",
     "stats_model",
     "stats_sessions",
     "stats_tools",

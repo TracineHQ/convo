@@ -43,7 +43,7 @@ def test_backup_explicit_dest(
 
     with Database(out) as restored:
         assert restored.conn is not None
-        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_backup_auto_writes_timestamped(
@@ -184,4 +184,4 @@ def test_subprocess_smoke(tmp_path: Path) -> None:
 
     with Database(out) as restored:
         assert restored.conn is not None
-        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 2

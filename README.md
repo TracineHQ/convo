@@ -162,9 +162,9 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
 - `convo restore --latest` -- shorthand for restoring the newest snapshot in
   `$CONVO_BACKUP_DIR`.
 - `convo stats <family> [--since SPAN] [--project P] [--json]` -- analytics
-  families: `tools`, `commands`, `sessions`, `files`, `model`.
+  families: `tools`, `commands`, `sessions`, `files`, `model`, `hooks`.
 - `convo summary [--since SPAN] [--project P] [--json]` -- composite of all
-  five families in one report.
+  six families in one report.
 - `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
   window comparison with deltas. Default span 7d.
 
@@ -212,9 +212,8 @@ permissions on the live DB as well:
 
 Future releases will add:
 
-- `convo stats hooks` and `convo stats skills` -- deferred to a future release; both
-  require a `0002_live_hooks.sql` schema addition to capture pre/post tool
-  hook events and skill invocations from the JSONL.
+- `convo stats skills` -- deferred to a future release; requires a schema
+  addition to capture skill invocations from the JSONL.
 
 ## License
 

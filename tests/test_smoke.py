@@ -29,4 +29,3 @@ def test_cli_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
     assert excinfo.value.code == 0
     out = capsys.readouterr().out.strip()
     assert out == f"convo {convo.__version__}"
-    assert out == "convo 0.1.0"

@@ -13,6 +13,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+## [1.0.0] - 2026-05-06
+
+First stable release. Marketplace submission. Public CLI surface, JSON
+envelope schemas, and on-disk DB layout are now subject to semantic
+versioning.
+
+### Added
+
+- `convo stats hooks` — analytics over guard's PreToolUse decision log.
+  Reports per-hook decision counts and top denied commands. Path discovery
+  follows the contract in `guard/docs/JSONL_FORMAT.md` §3.2: explicit path
+  → `$GUARD_DECISIONS_PATH` → `~/.claude/guard-decisions.jsonl`.
+- `guard_decisions` table plus its FTS5 mirror via migration
+  `0002_guard_decisions.sql`. One row per JSONL line; indexed on
+  `session_id`, `hook_id`, `decision`, `timestamp`, and `tool_name`.
+- `intake/guard.py` ingestion module — sha256-idempotent reader for
+  guard's decision JSONL, mirroring the transcript ingest path's
+  per-file error containment.
+- `convo summary` now composes six analytics families (`tools`,
+  `commands`, `sessions`, `files`, `model`, `hooks`).
+- Regression invariants in `tests/test_version_consistency.py`:
+  release-workflow PyPI URL must match `pyproject.toml` `[project].name`,
+  and every registered stats family must appear in `README.md`.
+
+### Changed
+
+- `convo summary` output covers six families instead of five.
+
+### Fixed
+
+- Release workflow `environment.url` now references the `tracine-convo`
+  PyPI distribution (was still pointing at the legacy `convo` URL after
+  the rename in v0.1.0).
+- README roadmap no longer lists `convo stats hooks` as deferred — the
+  feature has shipped.
+
 ## [0.1.0] - 2026-04-30
 
 Initial public release.

@@ -346,3 +346,32 @@ def test_index_guard_explicit_path_missing_returns_1(
     err = capsys.readouterr().err
     assert "path not found" in err
     assert str(missing) in err
+
+
+@pytest.mark.usefixtures("live_db")
+def test_index_guard_explicit_path_missing_json_returns_1(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "does-not-exist.jsonl"
+    rc = main(["index-guard", "--path", str(missing), "--json"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    envelope = json.loads(out)
+    assert envelope["guard"]["status"] == "no_log"
+
+
+@pytest.mark.usefixtures("live_db")
+def test_index_guard_no_path_no_log_returns_0(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Auto-discovery with no log present is a clean exit-0 (the user didn't
+    # ask for a specific file). Pinned so the explicit-miss → 1 change above
+    # doesn't regress the no-arg case.
+    monkeypatch.setenv("GUARD_DECISIONS_PATH", str(tmp_path / "nope.jsonl"))
+    rc = main(["index-guard"])
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "no guard JSONL log found" in err

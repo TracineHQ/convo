@@ -333,3 +333,16 @@ def test_index_projects_dir_pointing_at_file_errors(
     err = capsys.readouterr().err
     assert err.startswith("convo: ")
     assert "not a directory" in err
+
+
+@pytest.mark.usefixtures("live_db")
+def test_index_guard_explicit_path_missing_returns_1(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "does-not-exist.jsonl"
+    rc = main(["index-guard", "--path", str(missing)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "path not found" in err
+    assert str(missing) in err

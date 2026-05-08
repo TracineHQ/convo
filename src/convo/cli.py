@@ -268,6 +268,10 @@ def _add_info_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     info_p = sub.add_parser(
         "info",
         help="Print an overview of the convo DB (row counts, last index time, snapshots).",
+        epilog=(
+            "Reports row counts per table, the most recent index timestamp, "
+            "and the snapshot directory contents. Read-only; no DB writes."
+        ),
     )
     info_p.add_argument(
         "--json",
@@ -379,7 +383,8 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             "commands (first-user-message histogram), "
             "sessions (count, median/p95 duration, hour-of-day), "
             "files (source_files counts and top-N by message_count), "
-            "model (sessions per model)."
+            "model (sessions per model), "
+            "hooks (guard decision counts by hook_id and decision)."
         ),
     )
     stats_p.add_argument(
@@ -670,7 +675,10 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
 def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
     log_path = resolve_guard_log_path(args.path)
     if log_path is None:
-        msg = "no guard JSONL log found"
+        # Explicit --path that doesn't resolve is an error (exit 1). Auto-discovery
+        # finding nothing is a clean exit-0 — the user didn't ask for a specific file.
+        explicit_miss = args.path is not None
+        msg = f"path not found: {args.path}" if explicit_miss else "no guard JSONL log found"
         if args.as_json:
             envelope = {
                 "schema_version": _INDEX_ENVELOPE_VERSION,
@@ -679,7 +687,7 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
             print(json.dumps(envelope))
         else:
             print(f"convo: {msg}", file=sys.stderr)
-        return 0
+        return 1 if explicit_miss else 0
     with Database(db_path) as db:
         result = index_guard_file(db, log_path, force=args.full)
     if args.as_json:

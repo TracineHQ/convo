@@ -9,9 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `convo info` `--help` now has an epilog describing the output sections.
+- `convo stats` `--help` epilog now lists the `hooks` family alongside the
+  legacy five.
+
 ### Changed
 
+- `convo index-guard --path /missing.jsonl` now exits 1 with
+  `convo: path not found: ...` to stderr. Auto-discovery with no `--path`
+  argument and no log present is unchanged (clean exit 0). CI scripts that
+  point at a specific path can now detect misconfiguration.
+
 ### Fixed
+
+- `.github/workflows/codeql.yml` gains a top-level `permissions: contents: read`
+  default. Closes Scorecard `TokenPermissionsID` alert.
+- `.github/workflows/ci.yml` actionlint installer is now SHA-pinned instead
+  of tag-pinned. Closes Scorecard `PinnedDependenciesID` alert.
 
 ## [1.0.0] - 2026-05-06
 

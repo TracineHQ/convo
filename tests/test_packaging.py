@@ -20,3 +20,4 @@ def test_migrations_present_in_built_wheel() -> None:
     with zipfile.ZipFile(newest) as zf:
         names = set(zf.namelist())
     assert "convo/migrations/0001_init.sql" in names, sorted(names)
+    assert "convo/migrations/0002_guard_decisions.sql" in names, sorted(names)

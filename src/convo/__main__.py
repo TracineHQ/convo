@@ -15,12 +15,18 @@ import sys
 
 from convo.cli import main
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     try:
         rc = main()
     except BrokenPipeError:
         rc = 0
-    with contextlib.suppress(BrokenPipeError):
+    except OSError as exc:
+        # Windows raises OSError errno 22/232 on broken pipes, not BrokenPipeError.
+        if sys.platform == "win32" and exc.errno in (22, 232):
+            rc = 0
+        else:
+            raise
+    with contextlib.suppress(BrokenPipeError, OSError):
         sys.stdout.flush()
     with contextlib.suppress(OSError):
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())

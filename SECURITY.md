@@ -46,8 +46,13 @@ that in mind:
 - All SQL parameters are bound via `?`-placeholders. Constants interpolated
   via f-strings are typed literals (e.g. integer table limits, float
   `SECONDS_PER_DAY`).
-- The live DB and snapshot files are written `0o600`; WAL/SHM sidecars are
-  chmodded to match.
+- The live DB and snapshot files are written `0o600` on POSIX; WAL/SHM
+  sidecars are chmodded to match. **On Windows, POSIX mode bits are ignored
+  by the OS** — `os.open(..., 0o600)` and `Path.chmod(0o600)` succeed but
+  do not restrict access. The DB inherits the parent directory's ACL,
+  which is owner-only for the typical `%USERPROFILE%\.claude\` install but
+  not guaranteed for shared-user or CI environments. Tightening to
+  per-user ACL on Windows is a known limitation.
 - Restore is atomic-replace and same-filesystem only; staging files are
   unlinked on partial failure.
 

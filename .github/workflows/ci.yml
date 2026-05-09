@@ -90,8 +90,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - name: Pin Python version
-        run: uv python pin ${{ matrix.python }}
+          python-version: ${{ matrix.python }}
       - name: Install dev deps
         run: uv sync --extra dev
       - name: Run tests with coverage
@@ -151,8 +150,7 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - name: Pin Python version
-        run: uv python pin "${{ matrix.python }}"
+          python-version: ${{ matrix.python }}
       - name: Download built distributions
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
@@ -292,9 +290,13 @@ jobs:
         id: actionlint
         env:
           ACTIONLINT_VERSION: 1.7.12
+          # Pin the install script by full commit SHA, not by tag — Scorecard
+          # PinnedDependenciesID flags tag-pinned download-then-run as
+          # bypassable (a tag can be re-pointed). This SHA is v1.7.12.
+          ACTIONLINT_SCRIPT_SHA: 914e7df21a07ef503a81201c76d2b11c789d3fca  # pragma: allowlist secret
         run: |
           set -eu
-          bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          bash <(curl -fsSL "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SCRIPT_SHA}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
           echo "bin=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
       - name: Run actionlint
         env:

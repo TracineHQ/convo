@@ -156,22 +156,26 @@ def test_restore_unlinks_sidecars_before_replace(
     assert observed["shm_existed_at_replace"] is False
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permissions not enforced on Windows",
+)
 def test_backup_snapshot_is_owner_only(db: Database, tmp_path: Path) -> None:
     """Snapshot files must be 0o600 — they may contain prompt/response text."""
 
-    if sys.platform == "win32":
-        pytest.skip("POSIX permissions not enforced on Windows")
     seed_source_file(db, path="/seed/a.jsonl")
     snap = db.backup_snapshot(tmp_path)
     mode = stat.S_IMODE(snap.stat().st_mode)
     assert mode == 0o600, f"expected 0o600, got 0o{mode:o}"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permissions not enforced on Windows",
+)
 def test_live_db_and_sidecars_are_owner_only(tmp_path: Path) -> None:
     """Live DB and WAL/SHM sidecars must be 0o600. Prompts/responses live there too."""
 
-    if sys.platform == "win32":
-        pytest.skip("POSIX permissions not enforced on Windows")
     db_path = tmp_path / "convo.db"
     with Database(db_path) as db:
         # Force WAL sidecars by writing.
@@ -189,11 +193,13 @@ def test_live_db_and_sidecars_are_owner_only(tmp_path: Path) -> None:
             assert mode == 0o600, f"{path.name}: expected 0o600, got 0o{mode:o}"
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permissions not enforced on Windows",
+)
 def test_restore_leaves_db_owner_only(db: Database, tmp_path: Path) -> None:
     """Restored live DB must be 0o600, not the staging file's umask."""
 
-    if sys.platform == "win32":
-        pytest.skip("POSIX permissions not enforced on Windows")
     seed_source_file(db, path="/seed/a.jsonl")
     snap = db.backup_snapshot(tmp_path)
     db.restore_snapshot(snap)

@@ -89,6 +89,51 @@ def seed_tool_result(
     db.conn.commit()
 
 
+def seed_guard_decision(
+    db: Database,
+    source_file_id: int,
+    *,
+    line_no: int = 1,
+    hook_id: str = "guard.bash",
+    decision: str = "deny",
+    cwd: str = "/proj/A",
+    timestamp: str = _NOW,
+    schema_version: int = 1,
+    mode: str = "enforce",
+    event: str = "PreToolUse",
+    tool_name: str = "Bash",
+    reason: str = "test",
+    session_id: str = "sess-1",
+    raw_json: str = "{}",
+) -> int:
+    """Insert one guard_decisions row for stats_hooks / FTS / filter tests."""
+    assert db.conn is not None
+    cur = db.conn.execute(
+        "INSERT INTO guard_decisions"
+        "(source_file_id, line_no, schema_version, mode, timestamp, hook_id,"
+        " event, tool_name, decision, reason, session_id, cwd, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            source_file_id,
+            line_no,
+            schema_version,
+            mode,
+            timestamp,
+            hook_id,
+            event,
+            tool_name,
+            decision,
+            reason,
+            session_id,
+            cwd,
+            raw_json,
+        ),
+    )
+    db.conn.commit()
+    assert cur.lastrowid is not None
+    return cur.lastrowid
+
+
 def seed_full_chain(
     db: Database,
     *,

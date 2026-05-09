@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from convo.db import Database, _discover_migrations
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _BASE_TABLES = {
     "messages",
@@ -106,6 +103,64 @@ def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) ->
         # Parses as ISO-8601:
         datetime.fromisoformat(migrations[0][2])
         datetime.fromisoformat(migrations[1][2])
+
+
+def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
+    """A v1-only DB populated with messages should upgrade to v2 cleanly:
+    0002 adds guard_decisions tables but must not touch the v1 tables."""
+    # Build a v1-only DB by applying just 0001_init.sql.
+    raw = sqlite3.connect(db_path)
+    init_sql = (
+        Path(__file__).resolve().parent.parent / "src/convo/migrations/0001_init.sql"
+    ).read_text(
+        encoding="utf-8",
+    )
+    raw.executescript("BEGIN EXCLUSIVE;\n" + init_sql)
+    raw.execute(
+        "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
+        (1, "0001_init.sql", datetime.now(tz=UTC).isoformat()),
+    )
+    raw.execute("PRAGMA user_version = 1")
+    raw.execute("COMMIT")
+    # Insert some real data so we can verify it survives the upgrade.
+    raw.execute(
+        "INSERT INTO source_files"
+        "(path, kind, size, mtime_ns, last_indexed_at) "
+        "VALUES (?, 'transcript', ?, ?, ?)",
+        ("/tmp/keep.jsonl", 100, 0, "2026-05-08T00:00:00Z"),
+    )
+    raw.commit()
+    raw.close()
+
+    # Now open via Database — that triggers migrate() and applies 0002.
+    with Database(db_path) as db:
+        assert db.conn is not None
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+
+        # 0002 added the guard_decisions tables.
+        rows = db.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+        ).fetchall()
+        names = {r[0] for r in rows}
+        assert "guard_decisions" in names
+        assert "guard_decisions_fts" in names
+
+        # v1 row survived.
+        kept = db.conn.execute(
+            "SELECT path FROM source_files WHERE path = ?",
+            ("/tmp/keep.jsonl",),
+        ).fetchone()
+        assert kept is not None
+        assert kept[0] == "/tmp/keep.jsonl"
+
+        # Both migration rows now in schema_migrations.
+        migrations = [
+            (r[0], r[1])
+            for r in db.conn.execute(
+                "SELECT version, filename FROM schema_migrations ORDER BY version",
+            )
+        ]
+        assert migrations == [(1, "0001_init.sql"), (2, "0002_guard_decisions.sql")]
 
 
 def test_reopen_does_not_rerun_migration(db_path: Path) -> None:

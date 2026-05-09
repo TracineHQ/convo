@@ -9,7 +9,7 @@
 # Stdin: tool input JSON from Claude Code.
 # Required tools: jq, uv, the project's dev deps (`uv sync --extra dev`).
 
-set -uo pipefail
+set -euo pipefail
 
 # Read the tool input JSON from stdin.
 input=$(cat)

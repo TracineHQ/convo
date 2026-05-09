@@ -127,6 +127,7 @@ class Database:
             # Pre-create with 0o600 to avoid the TOCTOU window where sqlite
             # would otherwise create the file at the process umask (often 0o644)
             # before we could chmod it. Atomic perms-on-create.
+            # Windows: mode arg silently ignored; file inherits parent ACL.
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
             os.close(fd)
         self.conn = _sql.connect(self.path)

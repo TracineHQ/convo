@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, cast, override
 
 from convo import __version__ as convo_version
 from convo.analytics import (
@@ -104,6 +104,57 @@ def _positive_int(s: str) -> int:
     return n
 
 
+def _version_string() -> str:
+    """Multi-line ``--version`` payload — name, version, install path, repo URL.
+
+    Mirrors `gh --version`. Concrete install path makes bug reports
+    self-identifying (which wheel? editable? site-packages?).
+    """
+    install_dir = str(Path(__file__).resolve().parent)
+    return (
+        f"convo {convo_version}\n"
+        f"tracine-convo from {install_dir}\n"
+        "https://github.com/TracineHQ/convo"
+    )
+
+
+class _RawVersionAction(argparse.Action):
+    """Print ``--version`` text verbatim (preserves newlines).
+
+    argparse's built-in ``version`` action runs the string through
+    ``HelpFormatter._fill_text`` which collapses newlines to spaces.
+    """
+
+    def __init__(
+        self,
+        option_strings: list[str],
+        dest: str = argparse.SUPPRESS,
+        default: str = argparse.SUPPRESS,
+        version: str = "",
+        help: str = "show program's version number and exit",  # noqa: A002
+    ) -> None:
+        super().__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            nargs=0,
+            help=help,
+        )
+        self._version = version
+
+    @override
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        del namespace, values, option_string
+        sys.stdout.write(self._version + "\n")
+        parser.exit(0)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="convo",
@@ -117,8 +168,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--version",
-        action="version",
-        version=f"convo {convo_version}",
+        action=_RawVersionAction,
+        version=_version_string(),
     )
     parser.add_argument(
         "--db",
@@ -203,10 +254,16 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     index_p = sub.add_parser(
         "index",
         help="Index Claude Code session JSONLs into the convo DB.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Walks <projects-dir>/<slug>/*.jsonl. Skips files whose sha256 is "
-            "already recorded in source_files. With --full, every file is "
-            "re-indexed. CLAUDE_PROJECTS_DIR overrides the default projects dir."
+            "Walks <projects-dir>/<slug>/*.jsonl. Skips files whose sha256 is\n"
+            "already recorded in source_files. With --full, every file is\n"
+            "re-indexed. CLAUDE_PROJECTS_DIR overrides the default projects dir.\n"
+            "\n"
+            "Examples:\n"
+            "  convo index\n"
+            "  convo index --full --json\n"
+            "  convo index --projects-dir /path/to/projects --dry-run\n"
         ),
     )
     index_p.add_argument(
@@ -285,10 +342,17 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     search_p = sub.add_parser(
         "search",
         help="Search messages, tool calls, and tool results via FTS5.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Query is treated as a phrase by default. Prefix tokens with `+` "
-            "to require or `-` to exclude (FTS5 NOT). Time spans for --since "
-            "use the shorthand <N><unit>: 7d, 24h, 90m, 30s, 2w, 1y."
+            "Query is treated as a phrase by default. Prefix tokens with `+`\n"
+            "to require or `-` to exclude (FTS5 NOT). Time spans for --since\n"
+            "use the shorthand <N><unit>: 7d, 24h, 90m, 30s, 2w, 1y.\n"
+            "\n"
+            "Examples:\n"
+            "  convo search 'TypeError'\n"
+            "  convo search 'flaky test' --since 7d\n"
+            "  convo search '+migration -rollback' --tool Bash --limit 50\n"
+            "  convo search 'auth' --project /Users/dev/myapp --json\n"
         ),
     )
     search_p.add_argument("query", help="Search query string.")
@@ -326,10 +390,16 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     inspect_p = sub.add_parser(
         "inspect",
         help="Show a session's header and message timeline.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "session-id may be a full id or any unique prefix. "
-            "Default: message content is truncated to 200 characters; pass "
-            "--full to dump verbatim."
+            "session-id may be a full id or any unique prefix.\n"
+            "Default: message content is truncated to 200 characters; pass\n"
+            "--full to dump verbatim.\n"
+            "\n"
+            "Examples:\n"
+            "  convo inspect abc123\n"
+            "  convo inspect --latest\n"
+            "  convo inspect abc123 --full --json\n"
         ),
     )
     target = inspect_p.add_mutually_exclusive_group(required=True)
@@ -377,14 +447,20 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     stats_p = sub.add_parser(
         "stats",
         help="Aggregate analytics over the indexed convo DB.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Family chooses which aggregation to run: "
-            "tools (call frequency / median duration / error rate), "
-            "commands (first-user-message histogram), "
-            "sessions (count, median/p95 duration, hour-of-day), "
-            "files (source_files counts and top-N by message_count), "
-            "model (sessions per model), "
-            "hooks (guard decision counts by hook_id and decision)."
+            "Family chooses which aggregation to run:\n"
+            "  tools     call frequency / median duration / error rate\n"
+            "  commands  first-user-message histogram\n"
+            "  sessions  count, median/p95 duration, hour-of-day\n"
+            "  files     source_files counts and top-N by message_count\n"
+            "  model     sessions per model\n"
+            "  hooks     guard decision counts by hook_id and decision\n"
+            "\n"
+            "Examples:\n"
+            "  convo stats tools\n"
+            "  convo stats sessions --since 7d\n"
+            "  convo stats hooks --project /Users/dev/myapp --json\n"
         ),
     )
     stats_p.add_argument(

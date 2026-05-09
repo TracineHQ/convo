@@ -3,7 +3,7 @@
 # src/convo/migrations/. Pipes the file through `sqlite3 :memory:` to
 # verify it parses; exits 2 with stderr on parse error.
 
-set -uo pipefail
+set -euo pipefail
 
 input=$(cat)
 file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')

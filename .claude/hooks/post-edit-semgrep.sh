@@ -9,7 +9,7 @@
 # Stdin: tool input JSON from Claude Code.
 # Required tools: jq, uv. Semgrep is fetched on demand via `uvx`.
 
-set -uo pipefail
+set -euo pipefail
 
 input=$(cat)
 file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')
@@ -37,20 +37,22 @@ cd "$project_dir" || exit 0
 
 # Pinned to the same version the pre-commit hook uses (.pre-commit-config.yaml).
 # `uvx` caches across runs, so the second invocation is fast.
-out=$(
+#
+# Branch on semgrep's exit code, not on output text. With `--error`, semgrep
+# returns non-zero whenever a rule fires; the prior emoji/keyword grep on
+# stdout was fragile (would silently pass if semgrep changed output format
+# or locale stripped the emoji glyphs) and also swallowed crashes.
+if out=$(
     uvx --from 'semgrep==1.159.0' semgrep \
         --config=.semgrep/ \
         --error \
         --quiet \
         --metrics=off \
         --no-git-ignore \
-        "$file_path" 2>&1 || true
-)
-
-# Strip the "no findings" banner; only surface real findings.
-if printf '%s' "$out" | grep -qE '(❯❱|Severity:|Finding:|Findings:)'; then
-    printf '%s\n' "$out" >&2
-    exit 2
+        "$file_path" 2>&1
+); then
+    exit 0
 fi
 
-exit 0
+printf '%s\n' "$out" >&2
+exit 2

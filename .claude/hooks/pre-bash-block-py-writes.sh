@@ -9,7 +9,7 @@
 #
 # Exit 2 + stderr is fed back to Claude as actionable feedback.
 
-set -uo pipefail
+set -euo pipefail
 
 input=$(cat)
 command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
@@ -17,6 +17,13 @@ command=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 if [[ -z "$command" ]]; then
     exit 0
 fi
+
+# Strip shell line comments so a path token inside a `#`-comment can't
+# trigger a false positive. Per-line so multi-line / `;`-joined commands
+# still get each line scrubbed. Imperfect for `#` inside quoted strings, but
+# the prior version had no comment handling at all and live triggered on a
+# comment containing `> /Users/.../src/convo/foo.py`.
+command_clean=$(printf '%s\n' "$command" | sed -E 's/(^|[[:space:]])#.*$//')
 
 # Patterns to block (case-insensitive on the keyword, paths kept literal):
 #   1. Output redirect into a .py file under src/convo or tests/
@@ -29,17 +36,20 @@ fi
 # We deliberately allow writes anywhere outside src/convo/ and tests/ (e.g.
 # /tmp scratch files, build artifacts, generated docs).
 
-# Bash =~ uses POSIX ERE (no non-greedy quantifiers, no lookarounds), so we
-# match the path token greedily and rely on the alternation anchor inside it.
-py_path='(src/convo/|tests/)[^[:space:]<>|;&]+\.py'
+# Match relative AND absolute paths under src/convo/ or tests/. Prior version
+# only matched the relative shape, so `> /Users/dev/.../src/convo/foo.py`
+# bypassed the block. Bash =~ uses POSIX ERE (no non-greedy / lookaround),
+# so we match the path prefix greedily and anchor on the literal segment
+# names.
+py_path='([^[:space:]<>|;&]*/)?(src/convo/|tests/)[^[:space:]<>|;&]+\.py'
 
 block=""
 
-if [[ "$command" =~ \>\>?[[:space:]]*[^[:space:]]*${py_path} ]]; then
+if [[ "$command_clean" =~ \>\>?[[:space:]]*[^[:space:]]*${py_path} ]]; then
     block="output redirect"
-elif [[ "$command" =~ (^|[[:space:];|\&\|])tee[[:space:]]+(-a[[:space:]]+)?[^[:space:]]*${py_path} ]]; then
+elif [[ "$command_clean" =~ (^|[[:space:];|\&\|])tee[[:space:]]+(-a[[:space:]]+)?[^[:space:]]*${py_path} ]]; then
     block="tee"
-elif [[ "$command" =~ (^|[[:space:];|\&])sed[[:space:]]+-i[^[:space:]]*([[:space:]]+[^[:space:]]+)*[[:space:]]+[^[:space:]]*${py_path} ]]; then
+elif [[ "$command_clean" =~ (^|[[:space:];|\&])sed[[:space:]]+-i[^[:space:]]*([[:space:]]+[^[:space:]]+)*[[:space:]]+[^[:space:]]*${py_path} ]]; then
     block="sed -i"
 fi
 

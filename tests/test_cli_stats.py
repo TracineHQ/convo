@@ -172,7 +172,7 @@ def test_stats_help_lists_all_families(capsys: pytest.CaptureFixture[str]) -> No
     with pytest.raises(SystemExit):
         main(["stats", "--help"])
     out = capsys.readouterr().out
-    for family in ("tools", "commands", "sessions", "files", "model"):
+    for family in ("tools", "commands", "sessions", "files", "model", "hooks"):
         assert family in out
 
 
@@ -186,7 +186,7 @@ def test_stats_empty_db_no_crash(
     # Bootstrap empty DB
     with Database(live):
         pass
-    for family in ("tools", "commands", "sessions", "files", "model"):
+    for family in ("tools", "commands", "sessions", "files", "model", "hooks"):
         capsys.readouterr()  # drain
         rc = main(["stats", family])
         assert rc == 0

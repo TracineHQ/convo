@@ -9,9 +9,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `convo info` `--help` now has an epilog describing the output sections.
+- `convo stats` `--help` epilog now lists the `hooks` family alongside the
+  legacy five.
+- `index`, `search`, `inspect`, and `stats` now show concrete `Examples:`
+  blocks in their `--help` output.
+- `convo --version` now prints a `gh`-style three-line block: name+version,
+  install path, repo URL.
+- `tests/test_stats_hooks.py` covers the previously-untested `stats hooks`
+  analytics module (counts by hook/decision, since/project filters).
+- `tests/test_db_migrate.py::test_upgrade_v1_to_v2_preserves_data` exercises
+  the v1→v2 migration on a populated DB.
+- `seed_guard_decision()` helper in `tests/_seed.py` for `guard_decisions`
+  rows.
+- `.gitattributes` enforces LF line endings on text files for Windows
+  parity.
+
 ### Changed
 
+- `convo index-guard --path /missing.jsonl` now exits 1 with
+  `convo: path not found: ...` to stderr. Auto-discovery with no `--path`
+  argument and no log present is unchanged (clean exit 0).
+- `.github/workflows/ci.yml` test+smoke jobs now use `setup-uv`'s
+  `python-version` input instead of a separate `uv python pin` step,
+  saving roughly 28 s per Windows run.
+- `__main__.py` now also catches `OSError` errno 22/232 on Windows for
+  broken-pipe handling.
+- Three Windows skips in `tests/test_db_snapshots.py` converted from
+  inline `pytest.skip()` to `@pytest.mark.skipif`.
+
 ### Fixed
+
+- `.github/workflows/codeql.yml` gains a top-level `permissions: contents: read`
+  default. Closes Scorecard `TokenPermissionsID` alert.
+- `.github/workflows/ci.yml` actionlint installer is now SHA-pinned instead
+  of tag-pinned. Closes Scorecard `PinnedDependenciesID` alert.
+- `.claude/hooks/pre-bash-block-py-writes.sh` strips shell line comments
+  before regex-matching (was triggering false positives on path tokens
+  inside `#` comments) and now also matches absolute-path redirects under
+  `src/convo/` and `tests/`.
+- `.claude/hooks/post-edit-semgrep.sh` now branches on semgrep's exit code
+  instead of grepping its stdout for emoji/keywords (the prior approach
+  silently passed if output formatting changed).
+- All four `.claude/hooks/*.sh` scripts now use `set -euo pipefail`.
+
+### Documented
+
+- `SECURITY.md` notes that POSIX mode bits (`0o600`) are silently ignored
+  on Windows; the DB inherits the parent directory's NTFS ACL.
 
 ## [1.0.0] - 2026-05-06
 

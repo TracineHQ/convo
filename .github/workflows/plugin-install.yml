@@ -1,0 +1,102 @@
+name: Plugin install
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  local-marketplace:
+    name: Local manifest install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - run: claude --version
+
+      - name: Validate marketplace manifest
+        run: claude plugin validate ./.claude-plugin/marketplace.json
+
+      - name: Add this branch as a local marketplace
+        run: claude plugin marketplace add ./
+
+      - name: Install convo from local marketplace
+        run: claude plugin install convo@tracinehq
+
+      - name: Assert plugin loaded cleanly
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUTPUT=$(claude plugin list)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "convo@tracinehq" || { echo "FAIL: convo not in plugin list"; exit 1; }
+          if echo "$OUTPUT" | grep -q "failed to load"; then
+            echo "FAIL: convo reported 'failed to load'"
+            exit 1
+          fi
+          if echo "$OUTPUT" | grep -q "Status: ✘"; then
+            echo "FAIL: convo reported a non-enabled status"
+            exit 1
+          fi
+          echo "OK: convo installed from local manifest and enabled."
+
+  user-facing-install:
+    name: Documented install path (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: '20'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - run: claude --version
+
+      - name: Add unified TracineHQ marketplace (README path)
+        run: claude plugin marketplace add TracineHQ/plugins
+
+      - name: Install convo from unified marketplace (README path)
+        run: claude plugin install convo@tracine
+
+      - name: Assert plugin loaded cleanly
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUTPUT=$(claude plugin list)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "convo@tracine" || { echo "FAIL: convo not in plugin list"; exit 1; }
+          if echo "$OUTPUT" | grep -q "failed to load"; then
+            echo "FAIL: convo reported 'failed to load'"
+            exit 1
+          fi
+          if echo "$OUTPUT" | grep -q "Status: ✘"; then
+            echo "FAIL: convo reported a non-enabled status"
+            exit 1
+          fi
+          echo "OK: convo installed via documented path and enabled."

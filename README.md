@@ -27,13 +27,22 @@ with `convo --version` after installing.
 Inside Claude Code:
 
 ```
-/plugin marketplace add TracineHQ/convo
-/plugin install convo@convo-marketplace
+/plugin marketplace add TracineHQ/plugins
+/plugin install convo@tracine
 ```
 
-This is the recommended path for anyone using convo from inside Claude Code.
-See [What you get when you install the plugin](#what-you-get-when-you-install-the-plugin)
+This installs convo from the unified [TracineHQ plugin catalog](https://github.com/TracineHQ/plugins).
+The same marketplace also hosts [guard](https://github.com/TracineHQ/guard); once
+the marketplace is registered you can install either with one command. See
+[What you get when you install the plugin](#what-you-get-when-you-install-the-plugin)
 for the full surface.
+
+Standalone alternative (skip the catalog and install convo directly from this repo):
+
+```
+/plugin marketplace add TracineHQ/convo
+/plugin install convo@tracinehq
+```
 
 ### 2. PyPI
 

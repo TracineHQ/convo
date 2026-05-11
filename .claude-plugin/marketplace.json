@@ -4,12 +4,12 @@
   "owner": { "name": "TracineHQ", "url": "https://github.com/TracineHQ" },
   "metadata": {
     "description": "TracineHQ's Claude Code plugin catalog.",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
       "name": "convo",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "Index Claude Code session JSONLs into local SQLite. Auto-indexes after every session, adds /convo:search, /convo:summary, /convo:diff, /convo:inspect, /convo:stats, /convo:info, and a skill that lets Claude search your history when asked.",
       "author": { "name": "Anthony Ledesma", "url": "https://github.com/TracineHQ" },
       "source": "./",

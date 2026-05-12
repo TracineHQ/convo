@@ -1,0 +1,52 @@
+name: Release cut
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version (X.Y.Z, no leading v)'
+        required: true
+      blurb:
+        description: 'Optional 1-sentence release intro paragraph'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: TracineHQ/actions/cut-release@e57ed5389b35f6f3980d42c385e9ec68833054a0  # v1.0.0
+        id: bump
+        with:
+          version: ${{ inputs.version }}
+          plugin-name: convo
+          blurb: ${{ inputs.blurb }}
+
+      - name: Commit, tag, push
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new-version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          set -eu
+          git config user.name "$ACTOR"
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+          # gh writes a credential helper config scoped to github.com without
+          # persisting creds back into .git/config.
+          gh auth setup-git
+          git commit -am "Cut $NEW_VERSION release"
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+          git push --follow-tags

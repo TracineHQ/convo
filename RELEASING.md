@@ -6,7 +6,7 @@ Tags are `vX.Y.Z`.
 
 This repo's convention: `pyproject.toml` `version` always reflects the
 **last released version** on `main`. Bump only when the next release is
-actually being prepared — no `-dev0` suffix on `main` between releases.
+actually being prepared. No `-dev0` suffix on `main` between releases.
 
 ## 1. Pre-tag checklist
 
@@ -99,9 +99,9 @@ instead.
       question. Confirm the SessionEnd hook fires (run `convo info` after
       ending a session and verify `last_indexed_at` advanced).
 - [ ] PyPI publish is live at
-      [pypi.org/project/tracine-convo](https://pypi.org/project/tracine-convo/) —
-      the marketplace listing assumes users can `pipx install tracine-convo` to
-      get the `convo` binary the plugin shells out to.
+      [pypi.org/project/tracine-convo](https://pypi.org/project/tracine-convo/).
+      The marketplace listing assumes users can `pipx install tracine-convo`
+      to get the `convo` binary the plugin shells out to.
 
 ### Submit via the in-app form
 
@@ -130,7 +130,7 @@ Submission inputs (have these ready):
 
       ```
       /plugin marketplace add TracineHQ/convo
-      /plugin install convo@convo-marketplace
+      /plugin install convo@tracinehq
       ```
 
       Confirm the plugin appears in `/plugin list` and the installed version
@@ -147,7 +147,7 @@ Anthropic's internal pipeline. To ship an update:
 
 1. Cut a new release through this checklist (section 1 onward).
 2. Re-run the submission form for the new version (or follow whatever
-   "update existing listing" path the form provides — check before
+   "update existing listing" path the form provides; check before
    re-submitting from scratch).
 3. The synced mirror picks up the new version on its next nightly sync.
 

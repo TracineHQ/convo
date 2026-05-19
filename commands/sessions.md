@@ -8,7 +8,7 @@ disable-model-invocation: true
 # /convo:sessions
 
 Wraps `convo sessions`, which emits a v2 envelope when `--format=json` is
-passed. Parses at `data.sessions.items[*]`. See `JSON-ENVELOPE.md` at the
+passed. Parses at `sessions.items[*]`. See `JSON-ENVELOPE.md` at the
 repo root for the contract.
 
 List sessions ordered by start time descending. Accepts `--project <prefix>`

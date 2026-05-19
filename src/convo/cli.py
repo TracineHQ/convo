@@ -371,14 +371,15 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         help="Search messages, tool calls, and tool results via FTS5.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Query is treated as a phrase by default. Prefix tokens with `+`\n"
-            "to require or `-` to exclude (FTS5 NOT). Time spans for --since\n"
-            "use the shorthand <N><unit>: 7d, 24h, 90m, 30s, 2w, 1y.\n"
+            "Tokens are ANDed by default across whitespace-separated terms;\n"
+            'quote literals as "phrase" for phrase search; OR keyword between\n'
+            "terms; -token excludes. Time spans for --since use the shorthand\n"
+            "<N><unit>: 7d, 24h, 90m, 30s, 2w, 1y.\n"
             "\n"
             "Examples:\n"
             "  convo search 'TypeError'\n"
             "  convo search 'flaky test' --since 7d\n"
-            "  convo search '+migration -rollback' --tool Bash --limit 50\n"
+            "  convo search 'migration -rollback' --tool Bash\n"
             "  convo search 'auth' --project /Users/dev/myapp --json\n"
         ),
     )
@@ -392,12 +393,12 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     search_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     search_p.add_argument(
         "--tool",
         default=None,
-        help="Restrict tool_call/tool_result hits to this tool name (exact match).",
+        help="Prefix match by default; use --tool-exact for strict equality.",
     )
     search_p.add_argument(
         "--limit",
@@ -1879,7 +1880,9 @@ def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     p = sub.add_parser("sessions", help="list sessions, optionally filtered")
     p.add_argument("--project", type=str, default=None)
     p.add_argument("--since", type=str, default=None)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument(
+        "--limit", type=int, default=20, help="Maximum sessions to return (default: 20)."
+    )
     p.add_argument("--format", choices=["prose", "json"], default="prose")
     p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
 

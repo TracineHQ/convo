@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from convo.read import filters as _filters_mod
-from convo.read.filters import parse_span, since_iso
+from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
 
 
 def test_parse_span_days() -> None:
@@ -139,3 +140,52 @@ def test_since_iso_includes_fractional_seconds_for_lex_compare() -> None:
         f"record {record_ts!r} should be included (>= cutoff {cutoff!r}) "
         "but lex-compare excludes it"
     )
+
+
+def _make_projects_db(tmp_path) -> sqlite3.Connection:
+    """Create a test DB with sample sessions."""
+    db = tmp_path / "projects.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE sessions (id TEXT, project_path TEXT)")
+    rows = [
+        ("s1", "/Users/dev/develop/tracine-ops"),
+        ("s2", "/Users/dev/develop/convo"),
+        ("s3", "/Users/dev/develop/uu-rolecapacity-bff"),
+        ("s4", "/Users/dev/develop/ai-toolkit"),
+    ]
+    conn.executemany("INSERT INTO sessions VALUES (?, ?)", rows)
+    conn.commit()
+    return conn
+
+
+def test_resolve_exact_path(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    assert resolve_project_path(conn, "/Users/dev/develop/tracine-ops") == (
+        "/Users/dev/develop/tracine-ops"
+    )
+
+
+def test_resolve_basename(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    assert resolve_project_path(conn, "tracine-ops") == "/Users/dev/develop/tracine-ops"
+
+
+def test_resolve_substring_unambiguous(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    assert resolve_project_path(conn, "ai-toolkit") == "/Users/dev/develop/ai-toolkit"
+
+
+def test_resolve_ambiguous_raises_with_candidates(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    with pytest.raises(ProjectResolveError) as exc_info:
+        resolve_project_path(conn, "develop")
+    msg = str(exc_info.value)
+    assert "develop" in msg
+    assert "tracine-ops" in msg
+    assert "convo" in msg
+
+
+def test_resolve_no_match_raises(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    with pytest.raises(ProjectResolveError):
+        resolve_project_path(conn, "nonexistent-project")

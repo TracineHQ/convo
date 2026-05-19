@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from convo.read._db_access import open_ro
+from convo.read.prose import TimelineEvent
 
 if TYPE_CHECKING:
     import sqlite3
@@ -19,6 +21,18 @@ _ERR_NO_SESSIONS = "no sessions in DB"
 _MORE_MARKER = "... (and more)"
 
 _RESOLVE_LIMIT: int = 5
+_DEFAULT_MESSAGE_CAP: int = 50
+
+# Base SQL fragments — kept as plain string constants so S608 does not fire on
+# the dynamic callers that append a LIMIT clause or IN-list placeholders.
+_MSG_SELECT = (
+    "SELECT id, role, timestamp, content, seq"
+    " FROM messages WHERE session_id = ?"
+    " ORDER BY seq, timestamp"
+)
+_TC_SELECT_BASE = (
+    "SELECT id, message_id, name, input_json, started_at, seq FROM tool_calls WHERE message_id IN ("
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +62,11 @@ class MessageView:
 
 @dataclass(frozen=True, slots=True)
 class SessionView:
-    """Full session view: header metadata + ordered message timeline."""
+    """Full session view: header metadata + ordered message timeline.
+
+    ``truncated`` is True when the message list was capped at ``_DEFAULT_MESSAGE_CAP``.
+    ``total_messages`` is the total count in the session (may be > len(messages)).
+    """
 
     id: str
     started_at: str | None
@@ -57,6 +75,8 @@ class SessionView:
     model: str | None
     git_branch: str | None
     messages: tuple[MessageView, ...]
+    truncated: bool = False
+    total_messages: int = 0
 
 
 def resolve_session_id(db: Database, prefix: str) -> str:
@@ -117,19 +137,23 @@ def resolve_latest_session(db: Database) -> str:
     return str(row[0])
 
 
-def inspect_session(db: Database, session_id: str) -> SessionView:
+def inspect_session(db: Database, session_id: str, *, full: bool = False) -> SessionView:
     """Build a `SessionView` for `session_id` (which must be an exact id).
 
     Read-only: opens a fresh `mode=ro` URI connection to `db.path` so it can run
     while a writer holds the main DB. Does not mutate or rely on `db.conn`.
+
+    With ``full=False`` (default), messages are capped at ``_DEFAULT_MESSAGE_CAP``.
+    With ``full=True``, all messages are returned.
     """
     ro = open_ro(db.path)
     try:
         header = _fetch_header(ro, session_id)
-        messages = _fetch_messages(ro, session_id)
+        messages, total_messages = _fetch_messages(ro, session_id, full=full)
     finally:
         ro.close()
 
+    truncated = not full and total_messages > _DEFAULT_MESSAGE_CAP
     return SessionView(
         id=session_id,
         started_at=header["started_at"],
@@ -138,6 +162,8 @@ def inspect_session(db: Database, session_id: str) -> SessionView:
         model=header["model"],
         git_branch=header["git_branch"],
         messages=messages,
+        truncated=truncated,
+        total_messages=total_messages,
     )
 
 
@@ -158,23 +184,33 @@ def _fetch_header(conn: sqlite3.Connection, session_id: str) -> dict[str, str | 
     }
 
 
-def _fetch_messages(conn: sqlite3.Connection, session_id: str) -> tuple[MessageView, ...]:
-    msg_rows = conn.execute(
-        "SELECT id, role, timestamp, content, seq "
-        "FROM messages WHERE session_id = ? "
-        "ORDER BY seq, timestamp",
+def _fetch_messages(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    full: bool = False,
+) -> tuple[tuple[MessageView, ...], int]:
+    """Return ``(messages, total_count)``.
+
+    When ``full=False``, fetches at most ``_DEFAULT_MESSAGE_CAP`` messages.
+    ``total_count`` is always the real count in the session.
+    """
+    total_count: int = conn.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
         (session_id,),
-    ).fetchall()
+    ).fetchone()[0]
+
+    _lim = "" if full else f" LIMIT {_DEFAULT_MESSAGE_CAP}"
+    msg_rows = conn.execute(_MSG_SELECT + _lim, (session_id,)).fetchall()
 
     if not msg_rows:
-        return ()
+        return (), total_count
 
-    tc_rows = conn.execute(
-        "SELECT id, message_id, name, input_json, started_at, seq "
-        "FROM tool_calls WHERE session_id = ? "
-        "ORDER BY message_id, seq",
-        (session_id,),
-    ).fetchall()
+    # Only fetch tool_calls for the messages we actually loaded.
+    loaded_ids = [str(m["id"]) for m in msg_rows]
+    _ph = ",".join("?" * len(loaded_ids))
+    _tc_q = _TC_SELECT_BASE + _ph + ") ORDER BY message_id, seq"
+    tc_rows = conn.execute(_tc_q, loaded_ids).fetchall()
 
     by_message: dict[str, list[ToolCallView]] = {}
     for tc in tc_rows:
@@ -198,4 +234,168 @@ def _fetch_messages(conn: sqlite3.Connection, session_id: str) -> tuple[MessageV
                 tool_calls=tuple(by_message.get(mid, ())),
             ),
         )
-    return tuple(out)
+    return tuple(out), total_count
+
+
+# ---------------------------------------------------------------------------
+# build_timeline
+# ---------------------------------------------------------------------------
+
+_PREVIEW_LEN = 80
+
+
+def _parse_ts(raw: object) -> datetime | None:
+    """Parse an ISO-8601 timestamp string; return None on failure."""
+    if raw is None:
+        return None
+    s = str(raw)
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _ts_offset(raw: object, first_ts: datetime | None) -> int:
+    """Return seconds since *first_ts*, or 0 if either timestamp is missing."""
+    if first_ts is None:
+        return 0
+    ts = _parse_ts(raw)
+    if ts is None:
+        return 0
+    return max(0, int((ts - first_ts).total_seconds()))
+
+
+def _group_by_message(
+    raw_events: list[TimelineEvent],
+) -> list[list[TimelineEvent]]:
+    """Group flat event list into per-message groups (tool_calls follow their parent)."""
+    grouped: list[list[TimelineEvent]] = []
+    current: list[TimelineEvent] = []
+    for ev in raw_events:
+        if ev.role == "tool_call":
+            current.append(ev)
+        else:
+            if current:
+                grouped.append(current)
+            current = [ev]
+    if current:
+        grouped.append(current)
+    return grouped
+
+
+def _build_events(
+    msg_rows: list[object],
+    tc_rows: list[object],
+    first_ts: datetime | None,
+) -> list[TimelineEvent]:
+    """Convert DB rows to a flat ordered list of TimelineEvent."""
+    by_message: dict[str, list[tuple[object, str, str]]] = {}
+    for tc in tc_rows:
+        row = tc  # sqlite3.Row
+        mid = str(row["message_id"])  # type: ignore[index]
+        by_message.setdefault(mid, []).append(
+            (row["started_at"], str(row["name"]), str(row["input_json"]))  # type: ignore[index]
+        )
+
+    events: list[TimelineEvent] = []
+    for m in msg_rows:
+        row_m = m  # sqlite3.Row
+        mid = str(row_m["id"])  # type: ignore[index]
+        content = "" if row_m["content"] is None else str(row_m["content"])  # type: ignore[index]
+        preview = content.replace("\n", " ")[:_PREVIEW_LEN]
+        events.append(
+            TimelineEvent(
+                offset_seconds=_ts_offset(row_m["timestamp"], first_ts),  # type: ignore[index]
+                role=str(row_m["role"]),  # type: ignore[index]
+                tool=None,
+                preview=preview,
+            )
+        )
+        for tc_ts, tc_name, tc_input in by_message.get(mid, []):
+            tc_preview = tc_input.replace("\n", " ")[:_PREVIEW_LEN]
+            fallback_ts = row_m["timestamp"]  # type: ignore[index]
+            events.append(
+                TimelineEvent(
+                    offset_seconds=_ts_offset(
+                        tc_ts if tc_ts is not None else fallback_ts, first_ts
+                    ),
+                    role="tool_call",
+                    tool=tc_name,
+                    preview=tc_preview,
+                )
+            )
+    return events
+
+
+def build_timeline(
+    db: Database,
+    session_id: str,
+    *,
+    from_message: int | None = None,
+    to_message: int | None = None,
+) -> tuple[list[TimelineEvent], dict[str, Any]]:
+    """Return ``(events, meta)`` for ``convo inspect --timeline``.
+
+    ``meta`` keys: ``project``, ``duration_seconds``, ``message_count``,
+    ``tool_call_count``.
+    """
+    ro = open_ro(db.path)
+    try:
+        header_row = ro.execute(
+            "SELECT project_path, started_at, ended_at FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if header_row is None:
+            raise RuntimeError(_ERR_NO_MATCH.format(prefix=session_id))
+
+        project: str | None = (
+            None if header_row["project_path"] is None else str(header_row["project_path"])
+        )
+
+        msg_rows = ro.execute(
+            "SELECT id, role, timestamp, content, seq "
+            "FROM messages WHERE session_id = ? "
+            "ORDER BY seq, timestamp",
+            (session_id,),
+        ).fetchall()
+
+        tc_rows = ro.execute(
+            "SELECT message_id, name, input_json, started_at, seq "
+            "FROM tool_calls WHERE session_id = ? "
+            "ORDER BY message_id, seq",
+            (session_id,),
+        ).fetchall()
+    finally:
+        ro.close()
+
+    message_count = len(msg_rows)
+    tool_call_count = len(tc_rows)
+
+    first_ts: datetime | None = None
+    if msg_rows:
+        first_ts = _parse_ts(msg_rows[0]["timestamp"])
+    if first_ts is None:
+        first_ts = _parse_ts(header_row["started_at"])
+
+    events = _build_events(msg_rows, tc_rows, first_ts)
+
+    if from_message is not None or to_message is not None:
+        grouped = _group_by_message(events)
+        lo = (from_message - 1) if from_message is not None else 0
+        hi = to_message if to_message is not None else len(grouped)
+        events = [ev for group in grouped[lo:hi] for ev in group]
+
+    last_ts: datetime | None = None
+    if msg_rows:
+        last_ts = _parse_ts(msg_rows[-1]["timestamp"])
+    duration_seconds = 0
+    if first_ts is not None and last_ts is not None and last_ts > first_ts:
+        duration_seconds = int((last_ts - first_ts).total_seconds())
+
+    meta: dict[str, Any] = {
+        "project": project,
+        "duration_seconds": duration_seconds,
+        "message_count": message_count,
+        "tool_call_count": tool_call_count,
+    }
+    return events, meta

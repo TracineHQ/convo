@@ -7,6 +7,10 @@ disable-model-invocation: true
 
 # /convo:summary
 
+Wraps `convo summary`, which emits a v2 envelope when `--format=json` is
+passed. Parses at `summary.*`. See `JSON-ENVELOPE.md` at the repo root
+for the contract.
+
 Print convo's activity rollup. Defaults to the last 7 days; pass
 `--since 30d` (or any `<N><unit>` span) to widen the window.
 

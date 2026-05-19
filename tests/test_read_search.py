@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING
 import pytest
 
 from convo.db import Database
-from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, search
+from convo.read.search import (
+    SNIPPET_POST,
+    SNIPPET_PRE,
+    SearchHit,
+    build_fts_query,
+    extract_indices_and_clean,
+    search,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -258,3 +265,178 @@ def test_search_perf_smoke(db: Database) -> None:
 
     assert len(hits) >= 250  # roughly half the corpus matches
     assert elapsed < 0.5, f"search took {elapsed:.3f}s — perf budget is 500ms"
+
+
+# ---------------------------------------------------------------------------
+# build_fts_query unit tests (v2 AND-default semantics)
+# ---------------------------------------------------------------------------
+
+
+def test_default_is_and_across_tokens() -> None:
+    fts = build_fts_query("kafka migration")
+    # AND-default: both phrases present, no OR
+    assert '"kafka"' in fts
+    assert '"migration"' in fts
+    assert "OR" not in fts
+    assert "NOT" not in fts
+
+
+def test_quoted_phrase_is_literal() -> None:
+    fts = build_fts_query('"kafka migration"')
+    assert fts == '"kafka migration"'
+
+
+def test_or_keyword_uppercase() -> None:
+    fts = build_fts_query("kafka OR rabbitmq")
+    assert '"kafka"' in fts
+    assert "OR" in fts
+    assert '"rabbitmq"' in fts
+
+
+def test_or_keyword_pipe() -> None:
+    fts = build_fts_query("kafka | rabbitmq")
+    assert '"kafka"' in fts
+    assert "OR" in fts
+    assert '"rabbitmq"' in fts
+
+
+def test_minus_excludes() -> None:
+    fts = build_fts_query("kafka -retry")
+    assert '"kafka"' in fts
+    assert "NOT" in fts
+    assert '"retry"' in fts
+
+
+def test_plus_prefix_is_no_op() -> None:
+    # +token used to mean "required" under old behavior; AND-default makes
+    # it a no-op. Should still produce a valid query.
+    fts = build_fts_query("+kafka migration")
+    assert '"kafka"' in fts
+    assert '"migration"' in fts
+
+
+def test_empty_raises() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        build_fts_query("")
+
+
+def test_short_token_raises() -> None:
+    with pytest.raises(ValueError, match="at least 3 characters"):
+        build_fts_query("ka")  # trigram tokenizer needs >=3 chars
+
+
+# ---------------------------------------------------------------------------
+# Task 7: --session, --excerpt-chars, --tool-exact
+# ---------------------------------------------------------------------------
+
+
+def test_session_filter_restricts_to_one_session(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = list(search(db, "kafka", session="s1"))
+    assert hits
+    for h in hits:
+        assert h.session_id == "s1"
+
+
+def test_session_filter_prefix_match(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits_s = list(search(db, "kafka", session="s"))
+    hits_s1 = list(search(db, "kafka", session="s1"))
+    assert len(hits_s) >= len(hits_s1)
+
+
+def test_excerpt_chars_controls_snippet_size(db: Database) -> None:
+    _seed_search_corpus(db)
+    short = list(search(db, "kafka", excerpt_chars=50, limit=20))
+    long = list(search(db, "kafka", excerpt_chars=500, limit=20))
+    if short and long:
+        s_ids = {h.id for h in short}
+        for hit in long:
+            if hit.id in s_ids:
+                short_excerpt = next(h.excerpt for h in short if h.id == hit.id)
+                assert len(hit.excerpt) >= len(short_excerpt)
+                return
+
+
+def test_tool_exact_match_filters_strictly(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits_prefix = list(search(db, "kafka", tool="B"))
+    hits_exact_b = list(search(db, "kafka", tool="B", tool_exact=True))
+    assert len(hits_exact_b) <= len(hits_prefix)
+
+
+def test_excerpt_chars_caps_at_fts5_max(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = list(search(db, "kafka", excerpt_chars=10000, limit=5))
+    assert isinstance(hits, list)
+
+
+def test_message_hit_has_role(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = [h for h in search(db, "kafka") if h.kind == "message"]
+    assert hits, "expected at least one message hit"
+    for h in hits:
+        assert h.role in {"user", "assistant", "system"}, f"unexpected role: {h.role!r}"
+        assert h.tool_origin is None
+
+
+def test_tool_call_hit_carries_tool_name_in_origin(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = [h for h in search(db, "kafka") if h.kind == "tool_call"]
+    if hits:
+        assert hits[0].role is None
+        assert hits[0].tool_origin is not None
+
+
+def test_tool_result_hit_has_tool_origin(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = [h for h in search(db, "kafka") if h.kind == "tool_result"]
+    if hits:
+        assert hits[0].role is None
+        assert hits[0].tool_origin is not None
+
+
+# ---------------------------------------------------------------------------
+# extract_indices_and_clean tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_indices_one_match() -> None:
+    raw = f"...we need to fix the {SNIPPET_PRE}kafka{SNIPPET_POST} consumer..."
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean == "...we need to fix the [kafka] consumer..."
+    assert len(indices) == 1
+    start, end = indices[0]
+    assert clean[start:end] == "kafka"
+
+
+def test_extract_indices_multiple_matches() -> None:
+    raw = f"{SNIPPET_PRE}foo{SNIPPET_POST} then {SNIPPET_PRE}bar{SNIPPET_POST}"
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean == "[foo] then [bar]"
+    assert len(indices) == 2
+    f_start, f_end = indices[0]
+    b_start, b_end = indices[1]
+    assert clean[f_start:f_end] == "foo"
+    assert clean[b_start:b_end] == "bar"
+
+
+def test_extract_indices_no_matches() -> None:
+    raw = "just plain text"
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean == "just plain text"
+    assert indices == []
+
+
+def test_extract_indices_unterminated_sentinel() -> None:
+    # Defensive: an unclosed PRE should not raise; treat the rest as match content
+    raw = f"{SNIPPET_PRE}kafka and stuff"
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean.startswith("[")
+    assert len(indices) == 1
+
+
+def test_extract_indices_empty_input() -> None:
+    clean, indices = extract_indices_and_clean("")
+    assert clean == ""
+    assert indices == []

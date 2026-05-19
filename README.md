@@ -12,10 +12,10 @@
 > local filesystem.
 
 Index Claude Code session JSONLs into a local SQLite database, then search,
-inspect, snapshot, and analyze the result. v1 covers the intake pipeline,
+inspect, snapshot, and analyze the result. Covers the intake pipeline,
 the storage layer, the read surface (`info`, `search`, `inspect`,
-`snapshots`, `restore --latest`), and analytics (`stats`, `summary`,
-`diff`).
+`snapshots`, `restore --latest`), analytics (`stats`, `summary`, `diff`),
+and discovery commands (`projects`, `tools`, `sessions`).
 
 ## Install
 
@@ -86,20 +86,23 @@ when each Claude Code session ends, so search results stay current without
 manual upkeep. Idempotent and fast (sha256-skipped); no-ops gracefully if
 `convo` isn't on `PATH`.
 
-**Six slash commands** available inline in Claude Code:
+**Nine slash commands** available inline in Claude Code:
 
-- `/convo:search <query>` — FTS5 search over messages, tool calls, and tool
-  results. Default `--limit 20`.
-- `/convo:summary [--since SPAN]` — activity dashboard (tools, commands,
+- `/convo:search <query>` -- FTS5 search over messages, tool calls, and tool
+  results. Default `--limit 10`.
+- `/convo:summary [--since SPAN]` -- activity dashboard (tools, commands,
   sessions, files, model). Defaults to 7 days.
-- `/convo:diff [--since SPAN]` — current vs previous window comparison with
+- `/convo:diff [--since SPAN]` -- current vs previous window comparison with
   deltas. Defaults to 7 days.
-- `/convo:inspect <session-id-prefix | --latest>` — full message timeline for
+- `/convo:inspect <session-id-prefix | --latest>` -- full message timeline for
   one session.
-- `/convo:stats` — tool-call frequency and error rates across all indexed
+- `/convo:stats` -- tool-call frequency and error rates across all indexed
   sessions.
-- `/convo:info` — DB overview (row counts, last index time, top projects,
+- `/convo:info` -- DB overview (row counts, last index time, top projects,
   snapshots).
+- `/convo:projects` -- list indexed projects with session counts.
+- `/convo:tools` -- list tool names with call counts.
+- `/convo:sessions` -- list recent sessions with timestamps and message counts.
 
 **A `searching-conversation-history` skill** Claude itself can invoke when you
 ask history-recall questions like "did I solve this before?", "what was that
@@ -123,7 +126,7 @@ convo snapshots                      # list backup snapshots
 `convo info` looks like this on a fresh DB:
 
 ```
-schema_version   1
+schema_version   2
 db_size          156.0 KiB
 last_indexed_at  2026-05-01T04:57:28+00:00
 
@@ -156,8 +159,8 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   time, top 5 projects by session count, snapshot directory size.
 - `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N] [--json]`
   -- FTS5 search over messages, tool calls, and tool results. `SPAN` accepts
-  `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefixes (`+required`,
-  `-excluded`).
+  `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefix exclusion (`-excluded`);
+  `+required` AND-syntax is not supported in v2.
 - `convo inspect <session-id> | --latest [--json] [--full]` -- session
   timeline with inline tool calls. Accepts a UUID prefix; ambiguous prefixes
   list candidates. `--latest` resolves the most recently started session.
@@ -176,6 +179,15 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   six families in one report.
 - `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
   window comparison with deltas. Default span 7d.
+- `convo projects [--json]` -- list indexed projects with session counts and
+  last-seen timestamps.
+- `convo tools [--json]` -- list tool names with total call counts and
+  last-seen timestamps.
+- `convo sessions [--since SPAN] [--project P] [--limit N] [--json]` -- list
+  recent sessions with project, message count, and timestamps.
+
+The JSON envelope shape for every command is documented in
+[JSON-ENVELOPE.md](JSON-ENVELOPE.md).
 
 ## Storage
 
@@ -200,7 +212,7 @@ prevent corruption.
 
 Snapshot files are written `0600` (owner read/write only) regardless of the
 process umask, since convo data may include prompt/response content. The live
-DB at `~/.claude/convo.db` still inherits the process umask — set
+DB at `~/.claude/convo.db` still inherits the process umask -- set
 `umask 077` in the shell or cron line that creates it if you want owner-only
 permissions on the live DB as well:
 

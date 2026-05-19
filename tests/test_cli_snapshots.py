@@ -67,7 +67,7 @@ def test_snapshots_json_envelope(
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     body = payload["snapshots"]
     assert body["snapshot_dir"] == str(snapshot_dir)
     assert len(body["entries"]) == 1

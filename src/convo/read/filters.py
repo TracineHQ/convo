@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import sqlite3
 
 _SPAN_RE = re.compile(r"^(?P<n>[1-9][0-9]*)(?P<unit>[dhmswy])$")
 # Each unit converts the integer to a number of days; we then build a
@@ -79,3 +83,65 @@ def since_iso(since: timedelta | None) -> str | None:
         return None
     cutoff = datetime.now(UTC) - since
     return cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+class ProjectResolveError(ValueError):
+    """Raised when --project cannot be resolved unambiguously."""
+
+
+def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
+    """Resolve a --project value to an exact project_path.
+
+    Tries in order:
+      1. Exact match on sessions.project_path
+      2. Basename match (last path component)
+      3. Substring match anywhere in path
+
+    Raises :class:`ProjectResolveError` if ambiguous (multiple matches)
+    or if no candidates exist.
+    """
+    # 1. Exact match
+    row = conn.execute(
+        "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?",
+        (value,),
+    ).fetchone()
+    if row is not None:
+        return str(row[0])
+
+    # 2. Basename match: last path component equals value
+    candidates_basename = [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT DISTINCT project_path FROM sessions "
+            "WHERE project_path IS NOT NULL "
+            "AND substr(project_path, length(project_path) - length(?) - 1) "
+            "= ('/' || ?)",
+            (value, value),
+        )
+    ]
+    if len(candidates_basename) == 1:
+        return candidates_basename[0]
+    if len(candidates_basename) > 1:
+        candidates_str = ", ".join(candidates_basename)
+        msg = f"--project {value!r} is ambiguous; candidates: {candidates_str}"
+        raise ProjectResolveError(msg)
+
+    # 3. Substring match anywhere
+    candidates_substring = [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT DISTINCT project_path FROM sessions WHERE project_path LIKE ?",
+            (f"%{value}%",),
+        )
+    ]
+    if len(candidates_substring) == 1:
+        return candidates_substring[0]
+    if len(candidates_substring) > 1:
+        candidates_str = ", ".join(candidates_substring)
+        msg = f"--project {value!r} is ambiguous; candidates: {candidates_str}"
+        raise ProjectResolveError(msg)
+
+    msg = (
+        f"--project {value!r} matched no known project. Run `convo projects` to list valid values."
+    )
+    raise ProjectResolveError(msg)

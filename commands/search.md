@@ -7,6 +7,10 @@ disable-model-invocation: true
 
 # /convo:search
 
+Wraps `convo search`, which emits a v2 envelope when `--format=json` is
+passed. Parses at `search.hits[*]`. See `JSON-ENVELOPE.md` at the repo
+root for the contract.
+
 Run convo's full-text search over indexed session history and display the
 results verbatim.
 

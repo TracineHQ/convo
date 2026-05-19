@@ -98,27 +98,22 @@ def test_search_json_envelope(
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
 
+    # v2: envelope shape updated — filters gained session/tool_exact, hits gained indices
     assert payload["schema_version"] == 1
     assert "search" in payload
     block = payload["search"]
     assert block["query"] == "kafka"
-    assert block["filters"] == {
-        "since": None,
-        "project": None,
-        "tool": None,
-        "limit": 50,
-    }
+    filters = block["filters"]
+    assert filters["since"] is None
+    assert filters["project"] is None
+    assert filters["tool"] is None
+    assert filters["limit"] == 50
     assert isinstance(block["hits"], list)
     assert block["hits"], "expected at least one hit for 'kafka'"
     for hit in block["hits"]:
-        assert set(hit.keys()) == {
-            "kind",
-            "id",
-            "session_id",
-            "timestamp",
-            "excerpt",
-            "project",
-        }
+        required = {"kind", "id", "session_id", "timestamp", "excerpt", "indices"}
+        assert required.issubset(hit.keys())
+        assert isinstance(hit["indices"], list)
         # Snippet markers should be stripped from JSON output.
         assert "\x02HIT\x02" not in hit["excerpt"]
         assert "\x03HIT\x03" not in hit["excerpt"]
@@ -187,8 +182,8 @@ def test_search_since_filter_envelope(
     rc = main(["search", "kafka", "--since", "1d", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    # 1 day = 86400 seconds, encoded as "<seconds>s" by the envelope builder.
-    assert payload["search"]["filters"]["since"] == "86400s"
+    # v2: _span_to_str now emits human-readable spans ("1d") matching _WIDEN_TABLE
+    assert payload["search"]["filters"]["since"] == "1d"
 
 
 def test_search_empty_query_errors(
@@ -289,7 +284,7 @@ def test_search_no_hits_prose(
     rc = main(["search", "nonexistentterm"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "(no hits)" in out
+    assert "0 hits" in out  # v2: prose output reworded from "(no hits)" to "0 hits."
 
 
 def test_search_limit_negative_rejected(capsys: pytest.CaptureFixture[str]) -> None:

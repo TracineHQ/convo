@@ -40,7 +40,7 @@ from convo.analytics import (
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
-from convo.read.filters import parse_span
+from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path
 from convo.read.info import InfoReport, ProjectCount, gather_info
 from convo.read.inspect import (
     MessageView,
@@ -50,8 +50,16 @@ from convo.read.inspect import (
     resolve_latest_session,
     resolve_session_id,
 )
-from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, search
+from convo.read.prose import SearchRenderConfig, render_search_hits
+from convo.read.search import (
+    SNIPPET_POST,
+    SNIPPET_PRE,
+    SearchHit,
+    extract_indices_and_clean,
+    search,
+)
 from convo.read.snapshots import SnapshotInfo, list_snapshots
+from convo.read.suggestions import Suggestion, generate_suggestions
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -382,7 +390,36 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         "--json",
         dest="as_json",
         action="store_true",
-        help="Emit a single JSON envelope on stdout instead of prose.",
+        help="Alias for --format=json (deprecated, use --format=json).",
+    )
+    search_p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
+    search_p.add_argument(
+        "--excerpt-chars",
+        type=int,
+        default=600,
+        help="snippet character width (default: 600)",
+    )
+    search_p.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        help="restrict to a session id (prefix accepted)",
+    )
+    search_p.add_argument(
+        "--tool-exact",
+        action="store_true",
+        help="match --tool exactly instead of prefix",
+    )
+    search_p.add_argument(
+        "--fields",
+        type=str,
+        default=None,
+        help="comma-separated list of fields to project (TSV output)",
     )
 
 
@@ -874,57 +911,146 @@ def _print_info(report: InfoReport) -> None:
 
 
 def _search_command(args: argparse.Namespace, db_path: Path) -> int:
+    fmt = "json" if args.as_json else args.format
+    project_resolved: str | None = args.project
+
+    if args.project:
+        with Database(db_path) as _db_proj:
+            assert _db_proj.conn is not None
+            try:
+                project_resolved = resolve_project_path(_db_proj.conn, args.project)
+            except ProjectResolveError as exc:
+                if fmt == "json":
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+
     with Database(db_path) as db:
         hits = list(
             search(
                 db,
                 args.query,
                 since=args.since,
-                project=args.project,
+                project=project_resolved,
                 tool=args.tool,
+                session=args.session,
+                tool_exact=args.tool_exact,
+                excerpt_chars=args.excerpt_chars,
                 limit=args.limit,
             ),
         )
-    if args.as_json:
-        print(json.dumps(_build_search_envelope(args, hits)))
+
+    cleaned: list[tuple[str, list[list[int]]]] = [
+        extract_indices_and_clean(h.excerpt) for h in hits
+    ]
+
+    if fmt == "json":
+        suggestions = _suggestions_for(args, hits)
+        filters = _filters_dict(args, project_resolved)
+        envelope: dict[str, object] = {
+            "schema_version": SEARCH_ENVELOPE_VERSION,
+            "search": {
+                "query": args.query,
+                "filters": filters,
+                "total": len(hits),
+                "hits": [
+                    _hit_to_dict_v2(h, clean, indices)
+                    for h, (clean, indices) in zip(hits, cleaned, strict=True)
+                ],
+            },
+        }
+        if not hits and suggestions:
+            search_block = cast("dict[str, object]", envelope["search"])
+            search_block["suggestions"] = [
+                {"kind": s.kind, "description": s.description} for s in suggestions
+            ]
+        print(json.dumps(envelope))
     else:
-        _print_search_hits(hits)
+        suggestions = _suggestions_for(args, hits)
+        cleaned_hits = [
+            dataclasses.replace(h, excerpt=clean)
+            for h, (clean, _) in zip(hits, cleaned, strict=True)
+        ]
+        config = SearchRenderConfig(
+            fields=args.fields.split(",") if args.fields else [],
+        )
+        prose = render_search_hits(
+            query=args.query,
+            hits=cleaned_hits,
+            total=len(hits),
+            config=config,
+            suggestions=[(s.kind, s.description) for s in suggestions],
+        )
+        print(prose)
+
     return 0
 
 
-def _build_search_envelope(args: argparse.Namespace, hits: list[SearchHit]) -> dict[str, object]:
-    filters: dict[str, object] = {
-        "since": _span_to_str(args.since),
-        "project": args.project,
-        "tool": args.tool,
-        "limit": args.limit,
-    }
-    return {
-        "schema_version": SEARCH_ENVELOPE_VERSION,
-        "search": {
-            "query": args.query,
-            "filters": filters,
-            "hits": [_hit_to_dict(h) for h in hits],
-        },
-    }
-
-
-def _hit_to_dict(hit: SearchHit) -> dict[str, object]:
-    return {
+def _hit_to_dict_v2(hit: SearchHit, clean: str, indices: list[list[int]]) -> dict[str, object]:
+    d: dict[str, object] = {
         "kind": hit.kind,
         "id": hit.id,
         "session_id": hit.session_id,
         "timestamp": hit.timestamp,
-        "excerpt": _strip_snippet_markers(hit.excerpt),
-        "project": hit.project,
+        "excerpt": clean,
+        "indices": indices,
+    }
+    if hit.project is not None:
+        d["project"] = hit.project
+    if hit.role is not None:
+        d["role"] = hit.role
+    if hit.tool_origin is not None:
+        d["tool_origin" if hit.kind == "tool_result" else "tool"] = hit.tool_origin
+    return d
+
+
+def _suggestions_for(args: argparse.Namespace, hits: list[SearchHit]) -> list[Suggestion]:
+    if hits:
+        return []
+    return generate_suggestions(
+        query=args.query,
+        since_span=_span_to_str(args.since),
+        project=args.project,
+        tool=args.tool,
+        session=args.session,
+        total_doc_freq={},
+    )
+
+
+def _filters_dict(args: argparse.Namespace, project_resolved: str | None) -> dict[str, object]:
+    return {
+        "since": _span_to_str(args.since),
+        "project": project_resolved,
+        "tool": args.tool,
+        "session": args.session,
+        "tool_exact": args.tool_exact,
+        "limit": args.limit,
     }
 
 
 def _span_to_str(span: timedelta | None) -> str | None:
     if span is None:
         return None
-    total = int(span.total_seconds())
-    return f"{total}s"
+    total_s = int(span.total_seconds())
+    for divisor, suffix in (
+        (86400 * 365, "y"),
+        (86400 * 7, "w"),
+        (86400, "d"),
+        (3600, "h"),
+        (60, "m"),
+    ):
+        n, rem = divmod(total_s, divisor)
+        if n > 0 and rem == 0:
+            return f"{n}{suffix}"
+    return f"{total_s}s"
 
 
 def _strip_snippet_markers(excerpt: str) -> str:
@@ -935,18 +1061,6 @@ def _render_excerpt_for_tty(excerpt: str) -> str:
     if sys.stdout.isatty():
         return excerpt.replace(SNIPPET_PRE, _ANSI_BOLD_ON).replace(SNIPPET_POST, _ANSI_BOLD_OFF)
     return _strip_snippet_markers(excerpt)
-
-
-def _print_search_hits(hits: list[SearchHit]) -> None:
-    if not hits:
-        print("(no hits)")
-        return
-    for hit in hits:
-        ts = hit.timestamp or "(no timestamp)"
-        excerpt = _render_excerpt_for_tty(hit.excerpt)
-        # Collapse newlines so each hit fits on one line.
-        excerpt = excerpt.replace("\n", " ").replace("\r", " ")
-        print(f"[{hit.kind}] {ts} | {excerpt} | {hit.session_id}")
 
 
 def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
@@ -209,3 +210,27 @@ def test_stats_empty_db_json(
     assert payload["schema_version"] == 2  # v2 envelope
     assert payload["stats"]["family"] == "tools"
     assert payload["stats"]["total"] == 0
+
+
+def test_stats_resolves_project_fuzzy(seeded_db_path: str) -> None:
+
+    out = subprocess.check_output(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "stats",
+            "sessions",
+            "--project",
+            "tracine-ops",
+            "--since",
+            "30d",
+            "--json",
+        ],
+        text=True,
+    )
+    data = json.loads(out)
+    assert data["schema_version"] == 2
+    assert "stats" in data

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -167,3 +168,46 @@ def test_diff_help_lists_all_flags(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     for flag in ("--since", "--project", "--json"):
         assert flag in out
+
+
+def test_diff_resolves_project_fuzzy(seeded_db_path: str) -> None:
+
+    out = subprocess.check_output(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "diff",
+            "--project",
+            "tracine-ops",
+            "--json",
+        ],
+        text=True,
+    )
+    data = json.loads(out)
+    assert data["schema_version"] == 2
+    assert "diff" in data
+
+
+def test_diff_ambiguous_project_returns_error(seeded_db_path: str) -> None:
+
+    proc = subprocess.run(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "diff",
+            "--project",
+            "develop",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "ambiguous" in (proc.stdout + proc.stderr).lower()

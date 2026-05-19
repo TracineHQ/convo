@@ -553,7 +553,7 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     stats_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     stats_p.add_argument(
         "--json",
@@ -1250,8 +1250,29 @@ _STATS_FAMILY_FUNCS: dict[
 def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
     family: str = args.family
     func = _STATS_FAMILY_FUNCS[family]
+    project_resolved: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            try:
+                project_resolved = resolve_project_path(ro, args.project)
+            except ProjectResolveError as exc:
+                if args.as_json:
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+        finally:
+            ro.close()
     with Database(db_path) as db:
-        report = func(db, since=args.since, project=args.project)
+        report = func(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_stats_envelope(family, report)))
     else:
@@ -1484,7 +1505,7 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     summary_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     summary_p.add_argument(
         "--json",
@@ -1495,8 +1516,29 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
 
 
 def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
+    project_resolved: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            try:
+                project_resolved = resolve_project_path(ro, args.project)
+            except ProjectResolveError as exc:
+                if args.as_json:
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+        finally:
+            ro.close()
     with Database(db_path) as db:
-        report = gather_summary(db, since=args.since, project=args.project)
+        report = gather_summary(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_summary_envelope(report)))
     else:
@@ -1640,7 +1682,7 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     diff_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     diff_p.add_argument(
         "--json",
@@ -1652,8 +1694,29 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
 
 def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
     span: timedelta = args.since if args.since is not None else _DIFF_DEFAULT_SPAN
+    project_resolved: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            try:
+                project_resolved = resolve_project_path(ro, args.project)
+            except ProjectResolveError as exc:
+                if args.as_json:
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+        finally:
+            ro.close()
     with Database(db_path) as db:
-        report = compute_diff(db, span=span, project=args.project)
+        report = compute_diff(db, span=span, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_diff_envelope(report)))
     else:

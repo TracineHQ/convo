@@ -47,11 +47,12 @@ from convo.read.inspect import (
     MessageView,
     SessionView,
     ToolCallView,
+    build_timeline,
     inspect_session,
     resolve_latest_session,
     resolve_session_id,
 )
-from convo.read.prose import SearchRenderConfig, render_search_hits
+from convo.read.prose import SearchRenderConfig, render_search_hits, render_timeline
 from convo.read.search import (
     SNIPPET_POST,
     SNIPPET_PRE,
@@ -461,6 +462,25 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         dest="as_json",
         action="store_true",
         help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+    inspect_p.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Render the session as a chronological timeline.",
+    )
+    inspect_p.add_argument(
+        "--from-message",
+        type=int,
+        default=None,
+        dest="from_message",
+        help="Start at the Nth message (1-indexed).",
+    )
+    inspect_p.add_argument(
+        "--to-message",
+        type=int,
+        default=None,
+        dest="to_message",
+        help="End at the Nth message (1-indexed, inclusive).",
     )
 
 
@@ -1072,6 +1092,25 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
             resolved = resolve_latest_session(db)
         else:
             resolved = resolve_session_id(db, args.session_id)
+        if getattr(args, "timeline", False):
+            events, meta = build_timeline(
+                db,
+                resolved,
+                from_message=args.from_message,
+                to_message=args.to_message,
+            )
+            out = render_timeline(
+                session_id=resolved,
+                project=str(meta["project"]) if meta["project"] is not None else None,
+                duration_seconds=int(meta["duration_seconds"]),  # type: ignore[call-overload]
+                message_count=int(meta["message_count"]),  # type: ignore[call-overload]
+                tool_call_count=int(meta["tool_call_count"]),  # type: ignore[call-overload]
+                events=events,
+                from_message=args.from_message,
+                to_message=args.to_message,
+            )
+            sys.stdout.write(out + "\n")
+            return 0
         view = inspect_session(db, resolved)
     if args.as_json:
         print(json.dumps(_build_inspect_envelope(view, full=bool(args.full))))

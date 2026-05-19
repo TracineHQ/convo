@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from convo.read.search import SearchHit
 
 _INDENT = " " * 9  # aligns continuation lines under the ``match`` body
+_SECONDS_PER_MINUTE = 60
+_SECONDS_PER_HOUR = 3600
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,3 +172,68 @@ _PROJECTION_FIELD_FNS: dict[str, Callable[[SearchHit], str]] = {
     "output": lambda h: h.excerpt or "",  # alias for tool_result kind
     "tool": lambda h: h.tool_origin or "",
 }
+
+
+# ---------------------------------------------------------------------------
+# Timeline renderer (convo inspect --timeline)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class TimelineEvent:
+    """One event in an inspect --timeline view."""
+
+    offset_seconds: int
+    role: str
+    tool: str | None
+    preview: str
+
+
+def render_timeline(  # noqa: PLR0913
+    *,
+    session_id: str,
+    project: str | None,
+    duration_seconds: int,
+    message_count: int,
+    tool_call_count: int,
+    events: list[TimelineEvent],
+    from_message: int | None = None,
+    to_message: int | None = None,
+) -> str:
+    parts: list[str] = []
+    parts.append(f"convo inspect {session_id[:8]} --timeline (session: {session_id})")
+    parts.append("")
+    parts.append(
+        f"duration:   {_fmt_duration(duration_seconds)}, "
+        f"{message_count} msg, {tool_call_count} tool calls"
+    )
+    if project:
+        parts.append(f"project:    {project}")
+    parts.append("")
+
+    for ev in events:
+        offset = _fmt_offset(ev.offset_seconds)
+        role = ev.role.ljust(9)
+        tool = (ev.tool or "").ljust(7)
+        parts.append(f"{offset}  {role} {tool} {ev.preview}")
+
+    if from_message is not None or to_message is not None:
+        parts.append("")
+        parts.append(f"Showing messages from {from_message or 1} of {message_count}.")
+    return "\n".join(parts)
+
+
+def _fmt_offset(seconds: int) -> str:
+    hh, rem = divmod(seconds, 3600)
+    mm, ss = divmod(rem, 60)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}"
+
+
+def _fmt_duration(seconds: int) -> str:
+    if seconds < _SECONDS_PER_MINUTE:
+        return f"{seconds}s"
+    if seconds < _SECONDS_PER_HOUR:
+        return f"{seconds // _SECONDS_PER_MINUTE} min"
+    return (
+        f"{seconds // _SECONDS_PER_HOUR}h {(seconds % _SECONDS_PER_HOUR) // _SECONDS_PER_MINUTE}m"
+    )

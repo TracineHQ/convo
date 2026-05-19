@@ -94,7 +94,7 @@ def test_diff_json_envelope_has_both_windows_and_deltas(
     rc = main(["diff", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     body = payload["diff"]
     for key in ("span_seconds", "project", "current", "previous", "deltas"):
         assert key in body

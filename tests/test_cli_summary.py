@@ -76,7 +76,7 @@ def test_summary_json_envelope(
     rc = main(["summary", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     body = payload["summary"]
     for key in ("since", "project", "tools", "commands", "sessions", "files", "model"):
         assert key in body

@@ -123,7 +123,7 @@ def test_inspect_json_envelope(
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert "inspect" in payload
     block = payload["inspect"]
     assert block["session"]["id"] == _SID
@@ -264,7 +264,7 @@ def test_inspect_json_error_envelope_on_stdout(
     assert rc == 1
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert isinstance(payload["error"]["message"], str)
     assert payload["error"]["message"]
 

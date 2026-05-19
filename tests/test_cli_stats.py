@@ -70,7 +70,7 @@ def test_stats_tools_json(
     rc = main(["stats", "tools", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     body = payload["stats"]
     assert body["family"] == "tools"
     assert body["total"] == 1
@@ -206,6 +206,6 @@ def test_stats_empty_db_json(
     rc = main(["stats", "tools", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert payload["stats"]["family"] == "tools"
     assert payload["stats"]["total"] == 0

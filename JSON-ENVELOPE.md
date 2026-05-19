@@ -95,8 +95,8 @@ shape.
         "id": 101,
         "session_id": "sess-id-prefix",
         "timestamp": "2026-05-10T09:14:33.000Z",
-        "excerpt": "The [match]kafka consumer[match] lag was 8 s.",
-        "indices": [[4, 18]],
+        "excerpt": "The [kafka consumer] lag was 8 s.",
+        "indices": [[5, 19]],
         "project": "/workspace/myapp",
         "role": "assistant"
       },
@@ -105,8 +105,8 @@ shape.
         "id": 202,
         "session_id": "sess-id-prefix",
         "timestamp": "2026-05-10T09:15:01.000Z",
-        "excerpt": "offset [match]lag[match]: 0",
-        "indices": [[7, 10]],
+        "excerpt": "offset [lag]: 0",
+        "indices": [[8, 11]],
         "project": "/workspace/myapp",
         "tool_origin": "Bash"
       }
@@ -118,8 +118,9 @@ shape.
 `hits[].kind` is one of `"message"`, `"tool_call"`, or `"tool_result"`.
 
 `hits[].indices` is a list of `[start, end]` UTF-16 char offsets into
-`hits[].excerpt` (after `[match]` brackets are stripped). `[match]` brackets
-in the prose excerpt mark the matched span.
+`hits[].excerpt`. The `excerpt` retains `[X]` brackets around hit positions;
+`indices` gives `[start, end]` offsets pointing at the content between each
+pair of brackets.
 
 `hits[].role` is present for `kind="message"` (`"user"` or `"assistant"`).
 `hits[].tool` is present for `kind="tool_call"`. `hits[].tool_origin` is

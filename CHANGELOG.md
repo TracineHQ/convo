@@ -109,14 +109,14 @@ versioning.
 
 ### Added
 
-- `convo stats hooks` -- analytics over guard's PreToolUse decision log.
+- `convo stats hooks` — analytics over guard's PreToolUse decision log.
   Reports per-hook decision counts and top denied commands. Path discovery
   follows the contract in `guard/docs/JSONL_FORMAT.md` §3.2: explicit path
   → `$GUARD_DECISIONS_PATH` → `~/.claude/guard-decisions.jsonl`.
 - `guard_decisions` table plus its FTS5 mirror via migration
   `0002_guard_decisions.sql`. One row per JSONL line; indexed on
   `session_id`, `hook_id`, `decision`, `timestamp`, and `tool_name`.
-- `intake/guard.py` ingestion module -- sha256-idempotent reader for
+- `intake/guard.py` ingestion module — sha256-idempotent reader for
   guard's decision JSONL, mirroring the transcript ingest path's
   per-file error containment.
 - `convo summary` now composes six analytics families (`tools`,
@@ -134,7 +134,7 @@ versioning.
 - Release workflow `environment.url` now references the `tracine-convo`
   PyPI distribution (was still pointing at the legacy `convo` URL after
   the rename in v0.1.0).
-- README roadmap no longer lists `convo stats hooks` as deferred -- the
+- README roadmap no longer lists `convo stats hooks` as deferred — the
   feature has shipped.
 
 ## [0.1.0] - 2026-04-30

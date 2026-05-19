@@ -12,10 +12,10 @@
 > local filesystem.
 
 Index Claude Code session JSONLs into a local SQLite database, then search,
-inspect, snapshot, and analyze the result. v1 covers the intake pipeline,
+inspect, snapshot, and analyze the result. Covers the intake pipeline,
 the storage layer, the read surface (`info`, `search`, `inspect`,
-`snapshots`, `restore --latest`), and analytics (`stats`, `summary`,
-`diff`).
+`snapshots`, `restore --latest`), analytics (`stats`, `summary`, `diff`),
+and discovery commands (`projects`, `tools`, `sessions`).
 
 ## Install
 
@@ -100,6 +100,9 @@ manual upkeep. Idempotent and fast (sha256-skipped); no-ops gracefully if
   sessions.
 - `/convo:info` — DB overview (row counts, last index time, top projects,
   snapshots).
+- `/convo:projects` — list indexed projects with session counts.
+- `/convo:tools` — list tool names with call counts.
+- `/convo:sessions` — list recent sessions with timestamps and message counts.
 
 **A `searching-conversation-history` skill** Claude itself can invoke when you
 ask history-recall questions like "did I solve this before?", "what was that
@@ -176,6 +179,15 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   six families in one report.
 - `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
   window comparison with deltas. Default span 7d.
+- `convo projects [--json]` -- list indexed projects with session counts and
+  last-seen timestamps.
+- `convo tools [--json]` -- list tool names with total call counts and
+  last-seen timestamps.
+- `convo sessions [--since SPAN] [--project P] [--limit N] [--json]` -- list
+  recent sessions with project, message count, and timestamps.
+
+The JSON envelope shape for every command is documented in
+[JSON-ENVELOPE.md](JSON-ENVELOPE.md).
 
 ## Storage
 

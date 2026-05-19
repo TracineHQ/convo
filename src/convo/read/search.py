@@ -181,7 +181,7 @@ def search(  # noqa: PLR0913
     session: str | None = None,
     tool_exact: bool = False,
     excerpt_chars: int = 600,
-    limit: int = 50,
+    limit: int = 10,
 ) -> Iterator[SearchHit]:
     """Search across messages / tool_calls / tool_results FTS tables.
 

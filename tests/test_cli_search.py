@@ -107,7 +107,7 @@ def test_search_json_envelope(
     assert filters["since"] is None
     assert filters["project"] is None
     assert filters["tool"] is None
-    assert filters["limit"] == 50
+    assert filters["limit"] == 10  # v2: default changed from 50 to 10
     assert isinstance(block["hits"], list)
     assert block["hits"], "expected at least one hit for 'kafka'"
     for hit in block["hits"]:

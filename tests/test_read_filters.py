@@ -88,6 +88,30 @@ def test_parse_span_invalid(value: str) -> None:
         parse_span(value)
 
 
+def test_parse_span_iso_date() -> None:
+    span = parse_span("2026-04-01")
+    now = datetime.now(UTC)
+    cutoff = datetime(2026, 4, 1, tzinfo=UTC)
+    expected = now - cutoff
+    # Allow ±1s tolerance for test execution time
+    assert abs((span - expected).total_seconds()) < 1.0
+
+
+def test_parse_span_iso_datetime() -> None:
+    span = parse_span("2026-04-01T12:00:00Z")
+    now = datetime.now(UTC)
+    cutoff = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+    expected = now - cutoff
+    assert abs((span - expected).total_seconds()) < 1.0
+
+
+def test_parse_span_iso_in_future_returns_negative() -> None:
+    # ISO dates in the future yield a negative span; downstream logic
+    # treats that as "from now backward zero seconds".
+    span = parse_span("2999-01-01")
+    assert span.total_seconds() < 0
+
+
 def test_since_iso_none_returns_none() -> None:
     assert since_iso(None) is None
 

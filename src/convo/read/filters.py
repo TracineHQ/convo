@@ -25,33 +25,42 @@ _UNIT_TO_DAYS: dict[str, float] = {
 _MAX_DAYS: int = 36500
 
 _ERR_INVALID_SPAN = (
-    "invalid --since span: {value!r} (expected one of: <N>d, <N>h, <N>m, <N>s, "
-    "<N>w, <N>y with N >= 1, e.g. 7d, 24h, 90m, 30s, 2w, 1y)"
+    "invalid --since span: {value!r} (expected shorthand like 7d/24h/90m/30s/2w/1y "
+    "or ISO date/datetime like 2026-04-01 or 2026-04-01T12:00:00Z)"
 )
 _ERR_OUT_OF_RANGE = "--since out of range; max is 36500 days"
 
 
 def parse_span(s: str) -> timedelta:
-    """Parse a shorthand duration like ``7d``, ``24h``, ``90m``, ``30s``, ``2w``, ``1y``.
+    """Parse a span string into a timedelta.
 
-    Accepts a positive integer followed by a single unit character: ``d`` (days),
-    ``h`` (hours), ``m`` (minutes), ``s`` (seconds), ``w`` (weeks), ``y`` (years,
-    approximated as 365 days). Rejects every other shape (zero/negative values,
-    decimals, ISO durations, missing unit, trailing whitespace) with ``ValueError``.
+    Accepted forms:
+      - Shorthand: ``7d``, ``24h``, ``90m``, ``30s``, ``2w``, ``1y``
+      - ISO date: ``2026-04-01``
+      - ISO datetime: ``2026-04-01T12:00:00Z`` or ``2026-04-01T12:00:00+00:00``
 
-    Magnitudes that translate to more than 36500 days (100 years) are rejected
-    with ``ValueError`` to avoid downstream `datetime` overflow when the span is
-    subtracted from "now".
+    Returns the timedelta from the parsed instant until "now" (UTC). For ISO
+    dates in the future, the returned span is negative; callers may interpret
+    that as a zero-width window.
     """
     match = _SPAN_RE.match(s)
-    if match is None:
-        raise ValueError(_ERR_INVALID_SPAN.format(value=s))
-    n = int(match.group("n"))
-    unit = match.group("unit")
-    days = n * _UNIT_TO_DAYS[unit]
-    if days > _MAX_DAYS:
-        raise ValueError(_ERR_OUT_OF_RANGE)
-    return timedelta(days=days)
+    if match is not None:
+        n = int(match.group("n"))
+        unit = match.group("unit")
+        days = n * _UNIT_TO_DAYS[unit]
+        if days > _MAX_DAYS:
+            raise ValueError(_ERR_OUT_OF_RANGE)
+        return timedelta(days=days)
+
+    # Try ISO. Python 3.12+ fromisoformat accepts the trailing Z.
+    try:
+        parsed = datetime.fromisoformat(s.strip())
+    except ValueError as exc:
+        raise ValueError(_ERR_INVALID_SPAN.format(value=s)) from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC) - parsed
 
 
 def since_iso(since: timedelta | None) -> str | None:

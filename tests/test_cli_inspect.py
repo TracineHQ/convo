@@ -92,11 +92,12 @@ def test_inspect_prose_header_and_timeline(
     assert "x" * 500 not in out
 
 
-def test_inspect_full_dumps_verbatim(
+def test_inspect_full_no_message_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # v2: --full now means "no message cap" (excerpt truncation still applies)
     live = tmp_path / "convo.db"
     monkeypatch.setenv("CONVO_DB", str(live))
     _populate(live)
@@ -104,8 +105,9 @@ def test_inspect_full_dumps_verbatim(
     rc = main(["inspect", _SID, "--full"])
     assert rc == 0
     out = capsys.readouterr().out
-    # With --full the entire 500-char content appears.
-    assert "x" * 500 in out
+    # Session has 3 messages; --full returns all (no cap), no truncation footer.
+    assert "(showing" not in out
+    assert "use --full for all" not in out
 
 
 def test_inspect_json_envelope(
@@ -129,8 +131,10 @@ def test_inspect_json_envelope(
     assert block["session"]["model"] == "claude-opus-4-7"
     assert block["session"]["git_branch"] == "main"
     assert len(block["messages"]) == 3
+    # Session has 3 messages (< 50 cap); not truncated at session level.
+    assert block["truncated"] is False
 
-    # Default (no --full): content is truncated to 200 chars and `truncated` is True.
+    # Per-message: long content is still excerpt-truncated to 200 chars.
     assistant_msg = next(m for m in block["messages"] if m["id"] == "m2")
     assert len(assistant_msg["content"]) == 200 + len("...")
     assert assistant_msg["truncated"] is True
@@ -144,11 +148,12 @@ def test_inspect_json_envelope(
     assert user_msg["content"] == "what does ls do?"
 
 
-def test_inspect_full_json_no_truncation(
+def test_inspect_full_json_no_message_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # v2: --full now means "no message cap"; envelope truncated field is False
     live = tmp_path / "convo.db"
     monkeypatch.setenv("CONVO_DB", str(live))
     _populate(live)
@@ -156,9 +161,10 @@ def test_inspect_full_json_no_truncation(
     rc = main(["inspect", _SID, "--full", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assistant_msg = next(m for m in payload["inspect"]["messages"] if m["id"] == "m2")
-    assert assistant_msg["content"] == _LONG_CONTENT
-    assert assistant_msg["truncated"] is False
+    block = payload["inspect"]
+    assert block["truncated"] is False
+    # Session has 3 messages; all returned
+    assert len(block["messages"]) == 3
 
 
 def test_inspect_unique_prefix_resolves(

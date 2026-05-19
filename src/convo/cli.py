@@ -1111,15 +1111,15 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
             )
             sys.stdout.write(out + "\n")
             return 0
-        view = inspect_session(db, resolved)
+        view = inspect_session(db, resolved, full=bool(args.full))
     if args.as_json:
-        print(json.dumps(_build_inspect_envelope(view, full=bool(args.full))))
+        print(json.dumps(_build_inspect_envelope(view)))
     else:
-        _print_inspect(view, full=bool(args.full))
+        _print_inspect(view)
     return 0
 
 
-def _build_inspect_envelope(view: SessionView, *, full: bool) -> dict[str, object]:
+def _build_inspect_envelope(view: SessionView) -> dict[str, object]:
     return {
         "schema_version": INSPECT_ENVELOPE_VERSION,
         "inspect": {
@@ -1131,19 +1131,21 @@ def _build_inspect_envelope(view: SessionView, *, full: bool) -> dict[str, objec
                 "model": view.model,
                 "git_branch": view.git_branch,
             },
-            "messages": [_message_to_dict(m, full=full) for m in view.messages],
+            "messages": [_message_to_dict(m) for m in view.messages],
+            "truncated": view.truncated,
+            "total_messages": view.total_messages,
         },
     }
 
 
-def _message_to_dict(msg: MessageView, *, full: bool) -> dict[str, object]:
-    content = msg.content if full else _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
+def _message_to_dict(msg: MessageView) -> dict[str, object]:
+    content = _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
     return {
         "id": msg.id,
         "role": msg.role,
         "timestamp": msg.timestamp,
         "content": content,
-        "truncated": (not full) and len(msg.content) > _INSPECT_PREVIEW_CHARS,
+        "truncated": len(msg.content) > _INSPECT_PREVIEW_CHARS,
         "tool_calls": [_tool_call_to_dict(tc) for tc in msg.tool_calls],
     }
 
@@ -1177,7 +1179,7 @@ def _role_icon(role: str) -> str:
     return f"{role}:"
 
 
-def _print_inspect(view: SessionView, *, full: bool) -> None:
+def _print_inspect(view: SessionView) -> None:
     print(f"session   {view.id}")
     print(f"started   {view.started_at or '(unknown)'}")
     print(f"ended     {view.ended_at or '(unknown)'}")
@@ -1188,19 +1190,20 @@ def _print_inspect(view: SessionView, *, full: bool) -> None:
     if not view.messages:
         print("(no messages)")
         return
-    print(f"messages  ({len(view.messages)} total)")
+    print(f"messages  ({view.total_messages} total)")
     for idx, msg in enumerate(view.messages, start=1):
-        _print_message(idx, msg, full=full)
+        _print_message(idx, msg)
+    if view.truncated:
+        print(
+            f"(showing {len(view.messages)} of {view.total_messages} messages; use --full for all)"
+        )
 
 
-def _print_message(idx: int, msg: MessageView, *, full: bool) -> None:
+def _print_message(idx: int, msg: MessageView) -> None:
     icon = _role_icon(msg.role)
     ts = msg.timestamp or "(no ts)"
-    content = msg.content if full else _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
-    # Collapse multi-line content to one line in the default (non-full) view so the
-    # numbered timeline stays scannable. With --full, preserve newlines verbatim.
-    if not full:
-        content = content.replace("\n", " ").replace("\r", " ")
+    content = _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
+    content = content.replace("\n", " ").replace("\r", " ")
     print(f"{idx}. {icon} {ts}  {content}")
     for tc in msg.tool_calls:
         preview = _truncate(tc.input_json.replace("\n", " "), _INSPECT_TOOL_INPUT_PREVIEW)

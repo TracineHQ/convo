@@ -58,14 +58,14 @@ if TYPE_CHECKING:
 
 DEFAULT_PROJECTS_DIR: Path = Path.home() / ".claude" / "projects"
 
-_INFO_ENVELOPE_VERSION: int = 1
-_SEARCH_ENVELOPE_VERSION: int = 1
-_INSPECT_ENVELOPE_VERSION: int = 1
-_STATS_ENVELOPE_VERSION: int = 1
-_INDEX_ENVELOPE_VERSION: int = 1
-_BACKUP_ENVELOPE_VERSION: int = 1
-_RESTORE_ENVELOPE_VERSION: int = 1
-_ERROR_ENVELOPE_VERSION: int = 1
+INFO_ENVELOPE_VERSION: int = 1
+SEARCH_ENVELOPE_VERSION: int = 1
+INSPECT_ENVELOPE_VERSION: int = 1
+STATS_ENVELOPE_VERSION: int = 1
+INDEX_ENVELOPE_VERSION: int = 1
+BACKUP_ENVELOPE_VERSION: int = 1
+RESTORE_ENVELOPE_VERSION: int = 1
+ERROR_ENVELOPE_VERSION: int = 1
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
@@ -495,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     except (RuntimeError, ValueError, FileExistsError, OSError, sqlite3.DatabaseError) as exc:
         if getattr(args, "as_json", False):
             envelope = {
-                "schema_version": _ERROR_ENVELOPE_VERSION,
+                "schema_version": ERROR_ENVELOPE_VERSION,
                 "error": {"message": str(exc)},
             }
             print(json.dumps(envelope))
@@ -547,7 +547,7 @@ def _backup_command(args: argparse.Namespace, db_path: Path) -> int:
 def _build_backup_envelope(snapshot_path: Path) -> dict[str, object]:
     size_bytes = snapshot_path.stat().st_size
     return {
-        "schema_version": _BACKUP_ENVELOPE_VERSION,
+        "schema_version": BACKUP_ENVELOPE_VERSION,
         "backup": {
             "snapshot_path": str(snapshot_path),
             "size_bytes": size_bytes,
@@ -568,7 +568,7 @@ def _restore_command(args: argparse.Namespace, db_path: Path) -> int:
 
 def _build_restore_envelope(src: Path) -> dict[str, object]:
     return {
-        "schema_version": _RESTORE_ENVELOPE_VERSION,
+        "schema_version": RESTORE_ENVELOPE_VERSION,
         "restore": {"source": str(src)},
     }
 
@@ -586,7 +586,7 @@ def _resolve_restore_src(args: argparse.Namespace, db_path: Path) -> Path:
     return cast("Path", args.src)
 
 
-_SNAPSHOTS_ENVELOPE_VERSION: int = 1
+SNAPSHOTS_ENVELOPE_VERSION: int = 1
 
 
 def _snapshots_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -604,7 +604,7 @@ def _build_snapshots_envelope(
     snapshots: list[SnapshotInfo],
 ) -> dict[str, object]:
     return {
-        "schema_version": _SNAPSHOTS_ENVELOPE_VERSION,
+        "schema_version": SNAPSHOTS_ENVELOPE_VERSION,
         "snapshots": {
             "snapshot_dir": str(snapshot_dir),
             "entries": [_snapshot_to_dict(s) for s in snapshots],
@@ -694,7 +694,7 @@ def _envelope_status(report: IndexReport) -> str:
 
 def _build_envelope(report: IndexReport) -> dict[str, object]:
     return {
-        "schema_version": _INDEX_ENVELOPE_VERSION,
+        "schema_version": INDEX_ENVELOPE_VERSION,
         "index": {
             "status": _envelope_status(report),
             "files_seen": report.files_seen,
@@ -757,7 +757,7 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
         msg = f"path not found: {args.path}" if explicit_miss else "no guard JSONL log found"
         if args.as_json:
             envelope = {
-                "schema_version": _INDEX_ENVELOPE_VERSION,
+                "schema_version": INDEX_ENVELOPE_VERSION,
                 "guard": {"status": "no_log", "path": None, "inserted_rows": {}},
             }
             print(json.dumps(envelope))
@@ -768,7 +768,7 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
         result = index_guard_file(db, log_path, force=args.full)
     if args.as_json:
         envelope = {
-            "schema_version": _INDEX_ENVELOPE_VERSION,
+            "schema_version": INDEX_ENVELOPE_VERSION,
             "guard": {
                 "path": str(log_path),
                 "skipped_reason": result.skipped_reason,
@@ -810,7 +810,7 @@ def _project_label(project: ProjectCount) -> str:
 
 def _build_info_envelope(report: InfoReport) -> dict[str, object]:
     return {
-        "schema_version": _INFO_ENVELOPE_VERSION,
+        "schema_version": INFO_ENVELOPE_VERSION,
         "info": {
             "db_schema_version": report.schema_version,
             "row_counts": dict(report.row_counts),
@@ -900,7 +900,7 @@ def _build_search_envelope(args: argparse.Namespace, hits: list[SearchHit]) -> d
         "limit": args.limit,
     }
     return {
-        "schema_version": _SEARCH_ENVELOPE_VERSION,
+        "schema_version": SEARCH_ENVELOPE_VERSION,
         "search": {
             "query": args.query,
             "filters": filters,
@@ -965,7 +965,7 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
 
 def _build_inspect_envelope(view: SessionView, *, full: bool) -> dict[str, object]:
     return {
-        "schema_version": _INSPECT_ENVELOPE_VERSION,
+        "schema_version": INSPECT_ENVELOPE_VERSION,
         "inspect": {
             "session": {
                 "id": view.id,
@@ -1084,7 +1084,7 @@ def _build_stats_envelope(
     report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport | HooksReport,
 ) -> dict[str, object]:
     body: dict[str, object] = {"family": family, **dataclasses.asdict(report)}
-    return {"schema_version": _STATS_ENVELOPE_VERSION, "stats": body}
+    return {"schema_version": STATS_ENVELOPE_VERSION, "stats": body}
 
 
 def _print_stats(
@@ -1281,7 +1281,7 @@ def _print_stats_hooks(report: HooksReport) -> None:
         print(f"  {d.decision.ljust(dec_w)}  {str(d.count).rjust(count_w)}")
 
 
-_SUMMARY_ENVELOPE_VERSION: int = 1
+SUMMARY_ENVELOPE_VERSION: int = 1
 _SUMMARY_TOP_LIMIT: int = 5
 
 
@@ -1334,7 +1334,7 @@ def _build_summary_envelope(report: SummaryReport) -> dict[str, object]:
         "files": dataclasses.asdict(report.files),
         "model": dataclasses.asdict(report.model),
     }
-    return {"schema_version": _SUMMARY_ENVELOPE_VERSION, "summary": body}
+    return {"schema_version": SUMMARY_ENVELOPE_VERSION, "summary": body}
 
 
 def _print_summary_report(report: SummaryReport) -> None:
@@ -1432,7 +1432,7 @@ def _print_summary_model(report: ModelReport) -> None:
         print(f"  --- {extra} more")
 
 
-_DIFF_ENVELOPE_VERSION: int = 1
+DIFF_ENVELOPE_VERSION: int = 1
 _DIFF_DEFAULT_SPAN: timedelta = timedelta(days=7)
 _DIFF_TOP_LIMIT: int = 10
 _ANSI_GREEN: str = "\x1b[32m"
@@ -1489,7 +1489,7 @@ def _build_diff_envelope(report: DiffReport) -> dict[str, object]:
         "previous": _window_to_dict(report.previous),
         "deltas": _deltas_to_dict(report.deltas),
     }
-    return {"schema_version": _DIFF_ENVELOPE_VERSION, "diff": body}
+    return {"schema_version": DIFF_ENVELOPE_VERSION, "diff": body}
 
 
 def _window_to_dict(window: WindowSnapshot) -> dict[str, object]:

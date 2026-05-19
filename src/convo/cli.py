@@ -1,4 +1,8 @@
-"""Argparse CLI for convo: backup, restore, index, info, search, inspect, snapshots, stats."""
+"""Argparse CLI for convo.
+
+Subcommands: backup, restore, index, info, search, inspect, snapshots,
+stats, projects, tools, sessions.
+"""
 
 from __future__ import annotations
 
@@ -41,7 +45,8 @@ from convo.cli_errors import precheck_argv
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
-from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path
+from convo.read._db_access import open_ro as _open_ro
+from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
 from convo.read.info import InfoReport, ProjectCount, gather_info
 from convo.read.inspect import (
     MessageView,
@@ -52,6 +57,7 @@ from convo.read.inspect import (
     resolve_latest_session,
     resolve_session_id,
 )
+from convo.read.projects import ProjectRow, list_projects
 from convo.read.prose import SearchRenderConfig, render_search_hits, render_timeline
 from convo.read.search import (
     SNIPPET_POST,
@@ -60,11 +66,16 @@ from convo.read.search import (
     extract_indices_and_clean,
     search,
 )
+from convo.read.sessions import SessionRow, list_sessions
 from convo.read.snapshots import SnapshotInfo, list_snapshots
 from convo.read.suggestions import Suggestion, generate_suggestions
+from convo.read.tools import ToolRow, list_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+# referenced below in _projects_command, _tools_command, _sessions_command
+_DISCOVERY_REFS = (ProjectRow, list_projects, SessionRow, list_sessions, ToolRow, list_tools)
 
 DEFAULT_PROJECTS_DIR: Path = Path.home() / ".claude" / "projects"
 
@@ -76,6 +87,9 @@ INDEX_ENVELOPE_VERSION: int = 1
 BACKUP_ENVELOPE_VERSION: int = 1
 RESTORE_ENVELOPE_VERSION: int = 1
 ERROR_ENVELOPE_VERSION: int = 1
+PROJECTS_ENVELOPE_VERSION: int = 1
+TOOLS_ENVELOPE_VERSION: int = 1
+SESSIONS_ENVELOPE_VERSION: int = 1
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
@@ -199,6 +213,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_stats_parser(sub)
     _add_summary_parser(sub)
     _add_diff_parser(sub)
+    _add_projects_parser(sub)
+    _add_tools_parser(sub)
+    _add_sessions_parser(sub)
     return parser
 
 
@@ -579,6 +596,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         "stats": _stats_command,
         "summary": _summary_command,
         "diff": _diff_command,
+        "projects": _projects_command,
+        "tools": _tools_command,
+        "sessions": _sessions_command,
     }
     handler = handlers.get(args.cmd)
     if handler is None:
@@ -1841,3 +1861,138 @@ def _opt_seconds(value: float | None) -> str:
 def _span_seconds_label(span_seconds: float) -> str:
     total = int(span_seconds)
     return f"{total}s"
+
+
+def _add_projects_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("projects", help="list indexed projects")
+    p.add_argument("--format", choices=["prose", "json"], default="prose")
+    p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
+
+
+def _add_tools_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("tools", help="list distinct tools used")
+    p.add_argument("--format", choices=["prose", "json"], default="prose")
+    p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
+
+
+def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser("sessions", help="list sessions, optionally filtered")
+    p.add_argument("--project", type=str, default=None)
+    p.add_argument("--since", type=str, default=None)
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--format", choices=["prose", "json"], default="prose")
+    p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
+
+
+def _projects_command(args: argparse.Namespace, db_path: Path) -> int:
+    items: list[ProjectRow] = list_projects(str(db_path))
+    use_json = args.as_json or args.format == "json"
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": PROJECTS_ENVELOPE_VERSION,
+                    "projects": {
+                        "items": [
+                            {"path": r.path, "sessions": r.sessions, "last_seen": r.last_seen}
+                            for r in items
+                        ]
+                    },
+                }
+            )
+        )
+    else:
+        print(f"convo projects -- {len(items)} project{'s' if len(items) != 1 else ''}")
+        if not items:
+            return 0
+        path_w = max(len("project"), *(len(r.path) for r in items))
+        print(f"{'project'.ljust(path_w)}  {'sessions':>8}  last_seen")
+        print(f"{'-' * path_w}  {'-' * 8}  {'-' * 24}")
+        for r in items:
+            last = r.last_seen or ""
+            print(f"{r.path.ljust(path_w)}  {r.sessions:>8}  {last}")
+    return 0
+
+
+def _tools_command(args: argparse.Namespace, db_path: Path) -> int:
+    items: list[ToolRow] = list_tools(str(db_path))
+    use_json = args.as_json or args.format == "json"
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": TOOLS_ENVELOPE_VERSION,
+                    "tools": {
+                        "items": [
+                            {"name": r.name, "calls": r.calls, "last_seen": r.last_seen}
+                            for r in items
+                        ]
+                    },
+                }
+            )
+        )
+    else:
+        print(f"convo tools -- {len(items)} tool{'s' if len(items) != 1 else ''}")
+        if not items:
+            return 0
+        name_w = max(len("tool"), *(len(r.name) for r in items))
+        print(f"{'tool'.ljust(name_w)}  {'calls':>8}  last_seen")
+        print(f"{'-' * name_w}  {'-' * 8}  {'-' * 24}")
+        for r in items:
+            last = r.last_seen or ""
+            print(f"{r.name.ljust(name_w)}  {r.calls:>8}  {last}")
+    return 0
+
+
+def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
+    resolved_project: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            resolved_project = resolve_project_path(ro, args.project)
+        finally:
+            ro.close()
+
+    _since: str | None = None
+    if args.since is not None:
+        _since = since_iso(parse_span(args.since))
+
+    items: list[SessionRow] = list_sessions(
+        str(db_path),
+        project=resolved_project,
+        since_iso=_since,
+        limit=args.limit,
+    )
+    use_json = args.as_json or args.format == "json"
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": SESSIONS_ENVELOPE_VERSION,
+                    "sessions": {
+                        "items": [
+                            {
+                                "id": r.id,
+                                "project_path": r.project_path,
+                                "started_at": r.started_at,
+                                "ended_at": r.ended_at,
+                                "message_count": r.message_count,
+                            }
+                            for r in items
+                        ]
+                    },
+                }
+            )
+        )
+    else:
+        print(f"convo sessions -- {len(items)} session{'s' if len(items) != 1 else ''}")
+        if not items:
+            return 0
+        proj_w = max(len("project"), *(len(r.project_path or "") for r in items))
+        print(f"{'id'.ljust(36)}  {'project'.ljust(proj_w)}  {'msgs':>5}  started_at")
+        print(f"{'-' * 36}  {'-' * proj_w}  {'-' * 5}  {'-' * 24}")
+        for r in items:
+            proj = r.project_path or ""
+            started = r.started_at or ""
+            print(f"{r.id.ljust(36)}  {proj.ljust(proj_w)}  {r.message_count:>5}  {started}")
+    return 0

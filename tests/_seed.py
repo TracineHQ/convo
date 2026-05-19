@@ -27,11 +27,18 @@ def seed_source_file(db: Database, *, path: str = "/data/x.jsonl") -> int:
     return cur.lastrowid
 
 
-def seed_session(db: Database, source_file_id: int, *, sid: str = "s1") -> str:
+def seed_session(
+    db: Database,
+    source_file_id: int,
+    *,
+    sid: str = "s1",
+    project_path: str | None = None,
+    started_at: str | None = None,
+) -> str:
     assert db.conn is not None
     db.conn.execute(
-        "INSERT INTO sessions(id, source_file_id) VALUES (?, ?)",
-        (sid, source_file_id),
+        "INSERT INTO sessions(id, source_file_id, project_path, started_at) VALUES (?, ?, ?, ?)",
+        (sid, source_file_id, project_path, started_at),
     )
     db.conn.commit()
     return sid
@@ -45,12 +52,14 @@ def seed_message(
     parent_id: str | None = None,
     content: str = "hi",
     seq: int = 0,
+    role: str = "user",
+    timestamp: str | None = None,
 ) -> str:
     assert db.conn is not None
     db.conn.execute(
-        "INSERT INTO messages(id, session_id, parent_id, role, seq, content, raw_json) "
-        "VALUES (?, ?, ?, 'user', ?, ?, '{}')",
-        (mid, session_id, parent_id, seq, content),
+        "INSERT INTO messages(id, session_id, parent_id, role, seq, timestamp, content, raw_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, '{}')",
+        (mid, session_id, parent_id, role, seq, timestamp, content),
     )
     db.conn.commit()
     return mid

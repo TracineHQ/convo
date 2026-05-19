@@ -89,7 +89,7 @@ manual upkeep. Idempotent and fast (sha256-skipped); no-ops gracefully if
 **Nine slash commands** available inline in Claude Code:
 
 - `/convo:search <query>` -- FTS5 search over messages, tool calls, and tool
-  results. Default `--limit 20`.
+  results. Default `--limit 10`.
 - `/convo:summary [--since SPAN]` -- activity dashboard (tools, commands,
   sessions, files, model). Defaults to 7 days.
 - `/convo:diff [--since SPAN]` -- current vs previous window comparison with

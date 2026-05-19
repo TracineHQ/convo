@@ -450,8 +450,8 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "session-id may be a full id or any unique prefix.\n"
-            "Default: message content is truncated to 200 characters; pass\n"
-            "--full to dump verbatim.\n"
+            "Default: output is capped at 50 messages; pass --full to disable\n"
+            "the cap and return all messages in the session.\n"
             "\n"
             "Examples:\n"
             "  convo inspect abc123\n"
@@ -473,7 +473,7 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     inspect_p.add_argument(
         "--full",
         action="store_true",
-        help="Dump message content verbatim instead of truncating to 200 chars.",
+        help="Disable the 50-message cap; return all messages in the session.",
     )
     inspect_p.add_argument(
         "--json",
@@ -1865,25 +1865,62 @@ def _span_seconds_label(span_seconds: float) -> str:
 
 
 def _add_projects_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser("projects", help="list indexed projects")
-    p.add_argument("--format", choices=["prose", "json"], default="prose")
+    p = sub.add_parser(
+        "projects",
+        help="list indexed projects",
+        epilog="Lists all indexed projects with session count and last-seen timestamp.",
+    )
+    p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
     p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
 
 
 def _add_tools_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser("tools", help="list distinct tools used")
-    p.add_argument("--format", choices=["prose", "json"], default="prose")
+    p = sub.add_parser(
+        "tools",
+        help="list distinct tools used",
+        epilog="Lists distinct tools used across sessions with call count and last-seen timestamp.",
+    )
+    p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
     p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
 
 
 def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser("sessions", help="list sessions, optionally filtered")
-    p.add_argument("--project", type=str, default=None)
-    p.add_argument("--since", type=str, default=None)
+    p = sub.add_parser(
+        "sessions",
+        help="list sessions, optionally filtered",
+        epilog="Lists sessions with id, project path, start/end times, and message count.",
+    )
+    p.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
+    )
+    p.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="Only include sessions newer than this span (e.g. 7d, 24h, 2w, 1y, or ISO date).",
+    )
     p.add_argument(
         "--limit", type=int, default=20, help="Maximum sessions to return (default: 20)."
     )
-    p.add_argument("--format", choices=["prose", "json"], default="prose")
+    p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
     p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
 
 

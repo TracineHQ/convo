@@ -86,7 +86,7 @@ when each Claude Code session ends, so search results stay current without
 manual upkeep. Idempotent and fast (sha256-skipped); no-ops gracefully if
 `convo` isn't on `PATH`.
 
-**Six slash commands** available inline in Claude Code:
+**Nine slash commands** available inline in Claude Code:
 
 - `/convo:search <query>` -- FTS5 search over messages, tool calls, and tool
   results. Default `--limit 20`.
@@ -126,7 +126,7 @@ convo snapshots                      # list backup snapshots
 `convo info` looks like this on a fresh DB:
 
 ```
-schema_version   1
+schema_version   2
 db_size          156.0 KiB
 last_indexed_at  2026-05-01T04:57:28+00:00
 
@@ -159,8 +159,8 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   time, top 5 projects by session count, snapshot directory size.
 - `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N] [--json]`
   -- FTS5 search over messages, tool calls, and tool results. `SPAN` accepts
-  `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefixes (`+required`,
-  `-excluded`).
+  `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefix exclusion (`-excluded`);
+  `+required` AND-syntax is not supported in v2.
 - `convo inspect <session-id> | --latest [--json] [--full]` -- session
   timeline with inline tool calls. Accepts a UUID prefix; ambiguous prefixes
   list candidates. `--latest` resolves the most recently started session.

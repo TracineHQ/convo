@@ -37,6 +37,7 @@ from convo.analytics import (
     stats_sessions,
     stats_tools,
 )
+from convo.cli_errors import precheck_argv
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
@@ -525,6 +526,8 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 
 def main(argv: list[str] | None = None) -> int:
+
+    precheck_argv(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:

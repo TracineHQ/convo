@@ -173,6 +173,9 @@ class _Filters:
     since_iso: str | None
     project: str | None
     tool: str | None
+    session: str | None
+    tool_exact: bool
+    snippet_tokens: int
 
 
 def search(  # noqa: PLR0913
@@ -182,6 +185,9 @@ def search(  # noqa: PLR0913
     since: timedelta | None = None,
     project: str | None = None,
     tool: str | None = None,
+    session: str | None = None,
+    tool_exact: bool = False,
+    excerpt_chars: int = 600,
     limit: int = 50,
 ) -> Iterator[SearchHit]:
     """Search across messages / tool_calls / tool_results FTS tables.
@@ -196,6 +202,9 @@ def search(  # noqa: PLR0913
         since_iso=_filters_since_iso(since),
         project=project,
         tool=tool,
+        session=session,
+        tool_exact=tool_exact,
+        snippet_tokens=max(1, min(64, excerpt_chars // 6)),
     )
     ro = open_ro(db.path)
     try:
@@ -241,10 +250,10 @@ def _run_search(
     ]
 
 
-def _snippet(table: str, col: int) -> str:
+def _snippet(table: str, col: int, tokens: int) -> str:
     return (
         f"snippet({table}, {col}, "
-        f"'{SNIPPET_PRE}', '{SNIPPET_POST}', '{SNIPPET_ELLIPSIS}', {_SNIPPET_TOKENS})"
+        f"'{SNIPPET_PRE}', '{SNIPPET_POST}', '{SNIPPET_ELLIPSIS}', {tokens})"
     )
 
 
@@ -257,9 +266,13 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     if filters.project is not None:
         where.append("s.project_path = ?")
         params.append(filters.project)
+    if filters.session is not None:
+        where.append("s.id LIKE ?")
+        params.append(filters.session + "%")
+    snip = _snippet("messages_fts", 0, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
-        f"m.timestamp AS timestamp, {_snippet('messages_fts', 0)} AS excerpt, "
+        f"m.timestamp AS timestamp, {snip} AS excerpt, "
         f"s.project_path AS project"
     )
     sql = (
@@ -281,12 +294,20 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     if filters.project is not None:
         where.append("s.project_path = ?")
         params.append(filters.project)
+    if filters.session is not None:
+        where.append("s.id LIKE ?")
+        params.append(filters.session + "%")
     if filters.tool is not None:
-        where.append("tc.name = ?")
-        params.append(filters.tool)
+        if filters.tool_exact:
+            where.append("tc.name = ?")
+            params.append(filters.tool)
+        else:
+            where.append("tc.name LIKE ?")
+            params.append(filters.tool + "%")
+    snip = _snippet("tool_calls_fts", 1, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
-        f"tc.started_at AS timestamp, {_snippet('tool_calls_fts', 1)} AS excerpt, "
+        f"tc.started_at AS timestamp, {snip} AS excerpt, "
         f"s.project_path AS project"
     )
     sql = (
@@ -308,13 +329,21 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
     if filters.project is not None:
         where.append("s.project_path = ?")
         params.append(filters.project)
+    if filters.session is not None:
+        where.append("s.id LIKE ?")
+        params.append(filters.session + "%")
     if filters.tool is not None:
-        where.append("tc.name = ?")
-        params.append(filters.tool)
+        if filters.tool_exact:
+            where.append("tc.name = ?")
+            params.append(filters.tool)
+        else:
+            where.append("tc.name LIKE ?")
+            params.append(filters.tool + "%")
+    snip = _snippet("tool_results_fts", 0, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
-        f"{_snippet('tool_results_fts', 0)} AS excerpt, s.project_path AS project"
+        f"{snip} AS excerpt, s.project_path AS project"
     )
     sql = (
         f"{select_clause} "

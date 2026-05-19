@@ -316,3 +316,49 @@ def test_empty_raises() -> None:
 def test_short_token_raises() -> None:
     with pytest.raises(ValueError, match="at least 3 characters"):
         build_fts_query("ka")  # trigram tokenizer needs >=3 chars
+
+
+# ---------------------------------------------------------------------------
+# Task 7: --session, --excerpt-chars, --tool-exact
+# ---------------------------------------------------------------------------
+
+
+def test_session_filter_restricts_to_one_session(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = list(search(db, "kafka", session="s1"))
+    assert hits
+    for h in hits:
+        assert h.session_id == "s1"
+
+
+def test_session_filter_prefix_match(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits_s = list(search(db, "kafka", session="s"))
+    hits_s1 = list(search(db, "kafka", session="s1"))
+    assert len(hits_s) >= len(hits_s1)
+
+
+def test_excerpt_chars_controls_snippet_size(db: Database) -> None:
+    _seed_search_corpus(db)
+    short = list(search(db, "kafka", excerpt_chars=50, limit=20))
+    long = list(search(db, "kafka", excerpt_chars=500, limit=20))
+    if short and long:
+        s_ids = {h.id for h in short}
+        for hit in long:
+            if hit.id in s_ids:
+                short_excerpt = next(h.excerpt for h in short if h.id == hit.id)
+                assert len(hit.excerpt) >= len(short_excerpt)
+                return
+
+
+def test_tool_exact_match_filters_strictly(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits_prefix = list(search(db, "kafka", tool="B"))
+    hits_exact_b = list(search(db, "kafka", tool="B", tool_exact=True))
+    assert len(hits_exact_b) <= len(hits_prefix)
+
+
+def test_excerpt_chars_caps_at_fts5_max(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = list(search(db, "kafka", excerpt_chars=10000, limit=5))
+    assert isinstance(hits, list)

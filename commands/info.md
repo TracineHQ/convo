@@ -6,6 +6,10 @@ disable-model-invocation: true
 
 # /convo:info
 
+Wraps `convo info`, which emits a v2 envelope when `--format=json` is passed.
+Parses at `data.info.*`. See `JSON-ENVELOPE.md` at the repo root for the
+contract.
+
 Print convo's database overview: schema version, row counts, last index
 timestamp, top projects by session count, and snapshot directory size.
 

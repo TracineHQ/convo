@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from convo.db import Database
-from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, search
+from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, build_fts_query, search
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -258,3 +258,61 @@ def test_search_perf_smoke(db: Database) -> None:
 
     assert len(hits) >= 250  # roughly half the corpus matches
     assert elapsed < 0.5, f"search took {elapsed:.3f}s — perf budget is 500ms"
+
+
+# ---------------------------------------------------------------------------
+# build_fts_query unit tests (v2 AND-default semantics)
+# ---------------------------------------------------------------------------
+
+
+def test_default_is_and_across_tokens() -> None:
+    fts = build_fts_query("kafka migration")
+    # AND-default: both phrases present, no OR
+    assert '"kafka"' in fts
+    assert '"migration"' in fts
+    assert "OR" not in fts
+    assert "NOT" not in fts
+
+
+def test_quoted_phrase_is_literal() -> None:
+    fts = build_fts_query('"kafka migration"')
+    assert fts == '"kafka migration"'
+
+
+def test_or_keyword_uppercase() -> None:
+    fts = build_fts_query("kafka OR rabbitmq")
+    assert '"kafka"' in fts
+    assert "OR" in fts
+    assert '"rabbitmq"' in fts
+
+
+def test_or_keyword_pipe() -> None:
+    fts = build_fts_query("kafka | rabbitmq")
+    assert '"kafka"' in fts
+    assert "OR" in fts
+    assert '"rabbitmq"' in fts
+
+
+def test_minus_excludes() -> None:
+    fts = build_fts_query("kafka -retry")
+    assert '"kafka"' in fts
+    assert "NOT" in fts
+    assert '"retry"' in fts
+
+
+def test_plus_prefix_is_no_op() -> None:
+    # +token used to mean "required" under old behavior; AND-default makes
+    # it a no-op. Should still produce a valid query.
+    fts = build_fts_query("+kafka migration")
+    assert '"kafka"' in fts
+    assert '"migration"' in fts
+
+
+def test_empty_raises() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        build_fts_query("")
+
+
+def test_short_token_raises() -> None:
+    with pytest.raises(ValueError, match="at least 3 characters"):
+        build_fts_query("ka")  # trigram tokenizer needs >=3 chars

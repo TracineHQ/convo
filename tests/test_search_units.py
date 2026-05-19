@@ -47,8 +47,8 @@ class TestBuildFtsQuery:
             build_fts_query("hi")
 
     def test_multiword_phrase_mode_wraps_whole(self) -> None:
-        # No +/- operators → whole input is one phrase. Internal whitespace stays.
-        assert build_fts_query("hello world") == '"hello world"'
+        # v2: was phrase-default, now AND-default — each token becomes a separate phrase.
+        assert build_fts_query("hello world") == '"hello" "world"'
 
     def test_required_token(self) -> None:
         assert build_fts_query("+token") == '"token"'
@@ -64,8 +64,9 @@ class TestBuildFtsQuery:
             build_fts_query("+ab -other")
 
     def test_quote_in_phrase_mode_escaped(self) -> None:
-        # Doubled `""` per FTS5 syntax.
-        assert build_fts_query('say "hi" loud') == '"say ""hi"" loud"'
+        # v2: was phrase-default, now AND-default — quoted span becomes its own PHRASE token.
+        # 'say "hello" loud' → "say" "hello" "loud" (each AND'd together).
+        assert build_fts_query('say "hello" loud') == '"say" "hello" "loud"'
 
     def test_quote_in_operator_mode_escaped(self) -> None:
         # Quotes inside an operator token are still escaped.

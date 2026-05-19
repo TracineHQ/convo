@@ -362,3 +362,28 @@ def test_excerpt_chars_caps_at_fts5_max(db: Database) -> None:
     _seed_search_corpus(db)
     hits = list(search(db, "kafka", excerpt_chars=10000, limit=5))
     assert isinstance(hits, list)
+
+
+def test_message_hit_has_role(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = [h for h in search(db, "kafka") if h.kind == "message"]
+    assert hits, "expected at least one message hit"
+    for h in hits:
+        assert h.role in {"user", "assistant", "system"}, f"unexpected role: {h.role!r}"
+        assert h.tool_origin is None
+
+
+def test_tool_call_hit_carries_tool_name_in_origin(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = [h for h in search(db, "kafka") if h.kind == "tool_call"]
+    if hits:
+        assert hits[0].role is None
+        assert hits[0].tool_origin is not None
+
+
+def test_tool_result_hit_has_tool_origin(db: Database) -> None:
+    _seed_search_corpus(db)
+    hits = [h for h in search(db, "kafka") if h.kind == "tool_result"]
+    if hits:
+        assert hits[0].role is None
+        assert hits[0].tool_origin is not None

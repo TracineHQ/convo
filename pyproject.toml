@@ -65,8 +65,9 @@ packages = ["src/convo"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config"
+addopts = "-ra --strict-markers --strict-config -m 'not perf'"
 xfail_strict = true
+markers = ["perf: performance regression tests"]
 
 [tool.coverage.run]
 branch = true

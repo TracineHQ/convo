@@ -31,7 +31,6 @@ _INVENTED_FLAG_HINTS: dict[str, str] = {
     "--has-newlines": (
         "this filter is not available; use the JSON `excerpt` field and check for `\\n`."
     ),
-    "--timeline": "this is an inspect feature: `convo inspect <session> --timeline`.",
     "--tree": (
         "this is not yet a feature. `convo inspect --timeline` is the closest existing view."
     ),

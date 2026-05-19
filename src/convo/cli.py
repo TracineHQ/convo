@@ -79,17 +79,17 @@ _DISCOVERY_REFS = (ProjectRow, list_projects, SessionRow, list_sessions, ToolRow
 
 DEFAULT_PROJECTS_DIR: Path = Path.home() / ".claude" / "projects"
 
-INFO_ENVELOPE_VERSION: int = 1
-SEARCH_ENVELOPE_VERSION: int = 1
-INSPECT_ENVELOPE_VERSION: int = 1
-STATS_ENVELOPE_VERSION: int = 1
-INDEX_ENVELOPE_VERSION: int = 1
-BACKUP_ENVELOPE_VERSION: int = 1
-RESTORE_ENVELOPE_VERSION: int = 1
-ERROR_ENVELOPE_VERSION: int = 1
-PROJECTS_ENVELOPE_VERSION: int = 1
-TOOLS_ENVELOPE_VERSION: int = 1
-SESSIONS_ENVELOPE_VERSION: int = 1
+INFO_ENVELOPE_VERSION: int = 2
+SEARCH_ENVELOPE_VERSION: int = 2
+INSPECT_ENVELOPE_VERSION: int = 2
+STATS_ENVELOPE_VERSION: int = 2
+INDEX_ENVELOPE_VERSION: int = 2
+BACKUP_ENVELOPE_VERSION: int = 2
+RESTORE_ENVELOPE_VERSION: int = 2
+ERROR_ENVELOPE_VERSION: int = 2
+PROJECTS_ENVELOPE_VERSION: int = 2
+TOOLS_ENVELOPE_VERSION: int = 2
+SESSIONS_ENVELOPE_VERSION: int = 2
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
@@ -666,7 +666,7 @@ def _resolve_restore_src(args: argparse.Namespace, db_path: Path) -> Path:
     return cast("Path", args.src)
 
 
-SNAPSHOTS_ENVELOPE_VERSION: int = 1
+SNAPSHOTS_ENVELOPE_VERSION: int = 2
 
 
 def _snapshots_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -1460,7 +1460,7 @@ def _print_stats_hooks(report: HooksReport) -> None:
         print(f"  {d.decision.ljust(dec_w)}  {str(d.count).rjust(count_w)}")
 
 
-SUMMARY_ENVELOPE_VERSION: int = 1
+SUMMARY_ENVELOPE_VERSION: int = 2
 _SUMMARY_TOP_LIMIT: int = 5
 
 
@@ -1611,7 +1611,7 @@ def _print_summary_model(report: ModelReport) -> None:
         print(f"  --- {extra} more")
 
 
-DIFF_ENVELOPE_VERSION: int = 1
+DIFF_ENVELOPE_VERSION: int = 2
 _DIFF_DEFAULT_SPAN: timedelta = timedelta(days=7)
 _DIFF_TOP_LIMIT: int = 10
 _ANSI_GREEN: str = "\x1b[32m"

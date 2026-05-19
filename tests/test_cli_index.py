@@ -78,7 +78,7 @@ def test_index_json_envelope(
     assert rc == 0
     out = capsys.readouterr().out
     payload = json.loads(out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     body = payload["index"]
     assert body["status"] == "success"
     assert body["files_seen"] == 2

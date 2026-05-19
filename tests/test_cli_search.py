@@ -99,7 +99,7 @@ def test_search_json_envelope(
     payload = json.loads(capsys.readouterr().out)
 
     # v2: envelope shape updated — filters gained session/tool_exact, hits gained indices
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert "search" in payload
     block = payload["search"]
     assert block["query"] == "kafka"
@@ -217,7 +217,7 @@ def test_search_empty_query_json_stdout_clean(
     assert rc == 1
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert "error" in payload
     assert isinstance(payload["error"]["message"], str)
     assert payload["error"]["message"]

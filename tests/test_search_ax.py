@@ -117,3 +117,27 @@ def test_fields_projection_when_excerpt(seeded_db_path: str) -> None:
         # First column is a timestamp; second is excerpt with [match] markers
         assert "[" in parts[1]
         assert "]" in parts[1]
+
+
+def test_default_limit_is_10(seeded_db_path: str) -> None:
+    """Without --limit, returns at most 10 hits."""
+    out = subprocess.check_output(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "search",
+            "kafka",
+            "--format=json",
+        ],
+        text=True,
+    )
+    data = json.loads(out)
+    hits = data.get("search", {}).get("hits") if "search" in data else data.get("hits", [])
+    assert len(hits) <= 10
+    filters_block = (
+        data.get("search", {}).get("filters") if "search" in data else data.get("filters", {})
+    )
+    assert filters_block.get("limit") == 10

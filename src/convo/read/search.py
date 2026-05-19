@@ -43,21 +43,7 @@ _MIN_TERM_LEN = 3
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
-    """One result row from `search()`.
-
-    Fields:
-      kind: one of ``"message"``, ``"tool_call"``, ``"tool_result"``.
-      id: primary key of the underlying row (``messages.id``, ``tool_calls.id``,
-          or ``tool_results.tool_call_id``).
-      session_id: the parent session id; never NULL for any indexed row.
-      timestamp: ISO timestamp of the row (or its parent message, for
-          tool_results which lack their own timestamp). May be ``None`` if the
-          source JSONL didn't include one.
-      excerpt: FTS5 ``snippet()`` output. Contains :data:`SNIPPET_PRE` /
-          :data:`SNIPPET_POST` markers around matched substrings — the CLI
-          turns those into ANSI bold or strips them.
-      project: ``sessions.project_path`` (may be ``None``).
-    """
+    """One result row from `search()`."""
 
     kind: str
     id: str
@@ -65,6 +51,13 @@ class SearchHit:
     timestamp: str | None
     excerpt: str
     project: str | None
+    role: str | None = None
+    """For ``kind == "message"`` hits: the role (user/assistant/system).
+    None for tool_call and tool_result hits."""
+
+    tool_origin: str | None = None
+    """For tool_call hits: the tool name. For tool_result hits: the name of
+    the tool whose result this is. None for message hits."""
 
 
 def build_fts_query(raw: str) -> str:
@@ -245,6 +238,8 @@ def _run_search(
             timestamp=None if row["timestamp"] is None else str(row["timestamp"]),
             excerpt=str(row["excerpt"]),
             project=None if row["project"] is None else str(row["project"]),
+            role=None if row["role"] is None else str(row["role"]),
+            tool_origin=None if row["tool_origin"] is None else str(row["tool_origin"]),
         )
         for row in conn.execute(full_sql, params)
     ]
@@ -273,7 +268,7 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
         f"m.timestamp AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project"
+        f"s.project_path AS project, m.role AS role, NULL AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -308,7 +303,7 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
         f"tc.started_at AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project"
+        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -343,7 +338,7 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
-        f"{snip} AS excerpt, s.project_path AS project"
+        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin"
     )
     sql = (
         f"{select_clause} "

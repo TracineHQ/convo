@@ -4,10 +4,6 @@ The format is RFC-822-ish: each record is ``--- hit N of M ---`` followed by
 one ``label: value`` line per field, then a multi-line body. Designed for
 agent consumption -- graceful truncation, no JSON parsing, field labels in
 user vocabulary.
-
-Note: ``_fmt_kind`` uses ``getattr`` to access ``SearchHit.role`` and
-``SearchHit.tool_origin`` which are added in Task 8. Until then those
-attributes don't exist and getattr returns None, which is the correct fallback.
 """
 
 from __future__ import annotations
@@ -133,8 +129,8 @@ def _fmt_project(path: str) -> str:
 
 
 def _fmt_kind(hit: SearchHit) -> str:
-    role = getattr(hit, "role", None)  # Task 8 adds this attribute
-    tool_origin = getattr(hit, "tool_origin", None)  # Task 8 adds this attribute
+    role = hit.role
+    tool_origin = hit.tool_origin
     if hit.kind == "message" and role:
         return f"message ({role})"
     if hit.kind == "tool_call" and tool_origin:
@@ -172,5 +168,5 @@ _PROJECTION_FIELD_FNS: dict[str, Callable[[SearchHit], str]] = {
     "command": lambda h: h.excerpt or "",  # alias for tool_call kind
     "content": lambda h: h.excerpt or "",  # alias for message kind
     "output": lambda h: h.excerpt or "",  # alias for tool_result kind
-    "tool": lambda h: getattr(h, "tool_origin", "") or "",  # Task 8 adds tool_origin
+    "tool": lambda h: h.tool_origin or "",
 }

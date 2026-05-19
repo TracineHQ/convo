@@ -8,7 +8,7 @@ disable-model-invocation: true
 # /convo:inspect
 
 Wraps `convo inspect`, which emits a v2 envelope when `--format=json` is
-passed. Parses at `data.inspect.messages[*]`. See `JSON-ENVELOPE.md` at the
+passed. Parses at `inspect.messages[*]`. See `JSON-ENVELOPE.md` at the
 repo root for the contract.
 
 Print the full message timeline for a session. Pass an 8+ character session-id
@@ -19,4 +19,4 @@ convo inspect $ARGUMENTS
 ```
 
 Display the output above to the user verbatim. If the prefix is ambiguous,
-convo will list candidates — surface those candidates directly.
+convo will list candidates -- surface those candidates directly.

@@ -8,7 +8,7 @@ disable-model-invocation: true
 # /convo:diff
 
 Wraps `convo diff`, which emits a v2 envelope when `--format=json` is passed.
-Parses at `data.diff.deltas.*`. See `JSON-ENVELOPE.md` at the repo root for
+Parses at `diff.deltas.*`. See `JSON-ENVELOPE.md` at the repo root for
 the contract.
 
 Print convo's window-over-window diff. Defaults to 7d (current 7d vs previous 7d).

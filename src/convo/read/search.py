@@ -350,3 +350,42 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"WHERE {' AND '.join(where)}"
     )
     return sql, params
+
+
+def extract_indices_and_clean(raw: str) -> tuple[str, list[list[int]]]:
+    """Strip SNIPPET_PRE/SNIPPET_POST sentinels and emit char-offset indices.
+
+    Returns the cleaned string (with ``[match]`` brackets in place of the
+    sentinels) and a list of ``[start, end]`` pairs pointing at the match
+    content inside the cleaned string.
+    """
+    parts: list[str] = []
+    indices: list[list[int]] = []
+    out_pos = 0
+    i = 0
+    n = len(raw)
+    while i < n:
+        if raw.startswith(SNIPPET_PRE, i):
+            i += len(SNIPPET_PRE)
+            parts.append("[")
+            out_pos += 1
+            start = out_pos
+            end_marker = raw.find(SNIPPET_POST, i)
+            if end_marker == -1:
+                # Unterminated; treat the rest as match content
+                content = raw[i:]
+                i = n
+            else:
+                content = raw[i:end_marker]
+                i = end_marker + len(SNIPPET_POST)
+            parts.append(content)
+            out_pos += len(content)
+            end = out_pos
+            parts.append("]")
+            out_pos += 1
+            indices.append([start, end])
+        else:
+            parts.append(raw[i])
+            i += 1
+            out_pos += 1
+    return "".join(parts), indices

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from convo.read._db_access import open_ro
 from convo.read.prose import TimelineEvent
@@ -333,7 +333,7 @@ def build_timeline(
     *,
     from_message: int | None = None,
     to_message: int | None = None,
-) -> tuple[list[TimelineEvent], dict[str, object]]:
+) -> tuple[list[TimelineEvent], dict[str, Any]]:
     """Return ``(events, meta)`` for ``convo inspect --timeline``.
 
     ``meta`` keys: ``project``, ``duration_seconds``, ``message_count``,
@@ -392,7 +392,7 @@ def build_timeline(
     if first_ts is not None and last_ts is not None and last_ts > first_ts:
         duration_seconds = int((last_ts - first_ts).total_seconds())
 
-    meta: dict[str, object] = {
+    meta: dict[str, Any] = {
         "project": project,
         "duration_seconds": duration_seconds,
         "message_count": message_count,

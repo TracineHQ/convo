@@ -1123,9 +1123,9 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
             out = render_timeline(
                 session_id=resolved,
                 project=str(meta["project"]) if meta["project"] is not None else None,
-                duration_seconds=int(meta["duration_seconds"]),  # type: ignore[call-overload]
-                message_count=int(meta["message_count"]),  # type: ignore[call-overload]
-                tool_call_count=int(meta["tool_call_count"]),  # type: ignore[call-overload]
+                duration_seconds=int(meta["duration_seconds"]),
+                message_count=int(meta["message_count"]),
+                tool_call_count=int(meta["tool_call_count"]),
                 events=events,
                 from_message=args.from_message,
                 to_message=args.to_message,

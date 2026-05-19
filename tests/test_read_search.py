@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING
 import pytest
 
 from convo.db import Database
-from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, build_fts_query, search
+from convo.read.search import (
+    SNIPPET_POST,
+    SNIPPET_PRE,
+    SearchHit,
+    build_fts_query,
+    extract_indices_and_clean,
+    search,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -387,3 +394,49 @@ def test_tool_result_hit_has_tool_origin(db: Database) -> None:
     if hits:
         assert hits[0].role is None
         assert hits[0].tool_origin is not None
+
+
+# ---------------------------------------------------------------------------
+# extract_indices_and_clean tests
+# ---------------------------------------------------------------------------
+
+
+def test_extract_indices_one_match() -> None:
+    raw = f"...we need to fix the {SNIPPET_PRE}kafka{SNIPPET_POST} consumer..."
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean == "...we need to fix the [kafka] consumer..."
+    assert len(indices) == 1
+    start, end = indices[0]
+    assert clean[start:end] == "kafka"
+
+
+def test_extract_indices_multiple_matches() -> None:
+    raw = f"{SNIPPET_PRE}foo{SNIPPET_POST} then {SNIPPET_PRE}bar{SNIPPET_POST}"
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean == "[foo] then [bar]"
+    assert len(indices) == 2
+    f_start, f_end = indices[0]
+    b_start, b_end = indices[1]
+    assert clean[f_start:f_end] == "foo"
+    assert clean[b_start:b_end] == "bar"
+
+
+def test_extract_indices_no_matches() -> None:
+    raw = "just plain text"
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean == "just plain text"
+    assert indices == []
+
+
+def test_extract_indices_unterminated_sentinel() -> None:
+    # Defensive: an unclosed PRE should not raise; treat the rest as match content
+    raw = f"{SNIPPET_PRE}kafka and stuff"
+    clean, indices = extract_indices_and_clean(raw)
+    assert clean.startswith("[")
+    assert len(indices) == 1
+
+
+def test_extract_indices_empty_input() -> None:
+    clean, indices = extract_indices_and_clean("")
+    assert clean == ""
+    assert indices == []

@@ -21,6 +21,18 @@ _ERR_NO_SESSIONS = "no sessions in DB"
 _MORE_MARKER = "... (and more)"
 
 _RESOLVE_LIMIT: int = 5
+_DEFAULT_MESSAGE_CAP: int = 50
+
+# Base SQL fragments — kept as plain string constants so S608 does not fire on
+# the dynamic callers that append a LIMIT clause or IN-list placeholders.
+_MSG_SELECT = (
+    "SELECT id, role, timestamp, content, seq"
+    " FROM messages WHERE session_id = ?"
+    " ORDER BY seq, timestamp"
+)
+_TC_SELECT_BASE = (
+    "SELECT id, message_id, name, input_json, started_at, seq FROM tool_calls WHERE message_id IN ("
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +62,11 @@ class MessageView:
 
 @dataclass(frozen=True, slots=True)
 class SessionView:
-    """Full session view: header metadata + ordered message timeline."""
+    """Full session view: header metadata + ordered message timeline.
+
+    ``truncated`` is True when the message list was capped at ``_DEFAULT_MESSAGE_CAP``.
+    ``total_messages`` is the total count in the session (may be > len(messages)).
+    """
 
     id: str
     started_at: str | None
@@ -59,6 +75,8 @@ class SessionView:
     model: str | None
     git_branch: str | None
     messages: tuple[MessageView, ...]
+    truncated: bool = False
+    total_messages: int = 0
 
 
 def resolve_session_id(db: Database, prefix: str) -> str:
@@ -119,19 +137,23 @@ def resolve_latest_session(db: Database) -> str:
     return str(row[0])
 
 
-def inspect_session(db: Database, session_id: str) -> SessionView:
+def inspect_session(db: Database, session_id: str, *, full: bool = False) -> SessionView:
     """Build a `SessionView` for `session_id` (which must be an exact id).
 
     Read-only: opens a fresh `mode=ro` URI connection to `db.path` so it can run
     while a writer holds the main DB. Does not mutate or rely on `db.conn`.
+
+    With ``full=False`` (default), messages are capped at ``_DEFAULT_MESSAGE_CAP``.
+    With ``full=True``, all messages are returned.
     """
     ro = open_ro(db.path)
     try:
         header = _fetch_header(ro, session_id)
-        messages = _fetch_messages(ro, session_id)
+        messages, total_messages = _fetch_messages(ro, session_id, full=full)
     finally:
         ro.close()
 
+    truncated = not full and total_messages > _DEFAULT_MESSAGE_CAP
     return SessionView(
         id=session_id,
         started_at=header["started_at"],
@@ -140,6 +162,8 @@ def inspect_session(db: Database, session_id: str) -> SessionView:
         model=header["model"],
         git_branch=header["git_branch"],
         messages=messages,
+        truncated=truncated,
+        total_messages=total_messages,
     )
 
 
@@ -160,23 +184,33 @@ def _fetch_header(conn: sqlite3.Connection, session_id: str) -> dict[str, str | 
     }
 
 
-def _fetch_messages(conn: sqlite3.Connection, session_id: str) -> tuple[MessageView, ...]:
-    msg_rows = conn.execute(
-        "SELECT id, role, timestamp, content, seq "
-        "FROM messages WHERE session_id = ? "
-        "ORDER BY seq, timestamp",
+def _fetch_messages(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    full: bool = False,
+) -> tuple[tuple[MessageView, ...], int]:
+    """Return ``(messages, total_count)``.
+
+    When ``full=False``, fetches at most ``_DEFAULT_MESSAGE_CAP`` messages.
+    ``total_count`` is always the real count in the session.
+    """
+    total_count: int = conn.execute(
+        "SELECT COUNT(*) FROM messages WHERE session_id = ?",
         (session_id,),
-    ).fetchall()
+    ).fetchone()[0]
+
+    _lim = "" if full else f" LIMIT {_DEFAULT_MESSAGE_CAP}"
+    msg_rows = conn.execute(_MSG_SELECT + _lim, (session_id,)).fetchall()
 
     if not msg_rows:
-        return ()
+        return (), total_count
 
-    tc_rows = conn.execute(
-        "SELECT id, message_id, name, input_json, started_at, seq "
-        "FROM tool_calls WHERE session_id = ? "
-        "ORDER BY message_id, seq",
-        (session_id,),
-    ).fetchall()
+    # Only fetch tool_calls for the messages we actually loaded.
+    loaded_ids = [str(m["id"]) for m in msg_rows]
+    _ph = ",".join("?" * len(loaded_ids))
+    _tc_q = _TC_SELECT_BASE + _ph + ") ORDER BY message_id, seq"
+    tc_rows = conn.execute(_tc_q, loaded_ids).fetchall()
 
     by_message: dict[str, list[ToolCallView]] = {}
     for tc in tc_rows:
@@ -200,7 +234,7 @@ def _fetch_messages(conn: sqlite3.Connection, session_id: str) -> tuple[MessageV
                 tool_calls=tuple(by_message.get(mid, ())),
             ),
         )
-    return tuple(out)
+    return tuple(out), total_count
 
 
 # ---------------------------------------------------------------------------

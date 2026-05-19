@@ -68,47 +68,101 @@ class SearchHit:
 
 
 def build_fts_query(raw: str) -> str:
-    """Convert a user query string into a safe FTS5 MATCH expression.
+    """Convert a user query into a safe FTS5 MATCH expression.
 
-    Rules:
-      - Empty / whitespace-only input → ``ValueError``.
-      - If any whitespace-separated token starts with ``+`` or ``-``, treat the
-        query as a token list. ``+token`` becomes a required phrase (implicit
-        AND) and ``-token`` becomes ``NOT "token"``.
-      - Otherwise the whole input is wrapped as a single phrase search (the
-        common case). This makes punctuation, FTS5 operators, and quotes inside
-        the user's query inert.
+    Default semantics (v2):
+      - Whitespace-separated tokens are AND'd together.
+      - Quoted strings are literal phrases.
+      - The literal token ``OR`` (any case) between two terms is a
+        disjunction. The character ``|`` is treated the same.
+      - ``-token`` excludes (FTS5 NOT).
+      - ``+token`` is accepted as a no-op (legacy syntax).
 
-    The returned expression is meant to be placed verbatim after ``MATCH ?``
-    binding. Any embedded ``"`` is escaped by doubling per FTS5 syntax.
+    The returned expression is meant to be placed verbatim after ``MATCH ?``.
+    All embedded double-quotes inside phrases are escaped by doubling.
     """
     text = raw.strip()
     if not text:
-        raise ValueError(_ERR_EMPTY_QUERY)
+        msg = _ERR_EMPTY_QUERY
+        raise ValueError(msg)
 
-    tokens = text.split()
-    has_operators = any(t.startswith(("+", "-")) and len(t) > 1 for t in tokens)
-    if not has_operators:
-        # Whole-phrase mode: the trigram tokenizer needs ≥3 chars to find any
-        # match, so a 1- or 2-char query silently returns 0 hits. Reject up-front.
-        if len(text) < _MIN_TERM_LEN:
-            raise ValueError(_ERR_SHORT_QUERY_TERM)
-        return _phrase(text)
+    tokens = _tokenize_query(text)
+    if not tokens:
+        msg = _ERR_EMPTY_QUERY
+        raise ValueError(msg)
 
     parts: list[str] = []
-    for token in tokens:
-        term = token[1:] if token.startswith(("+", "-")) and len(token) > 1 else token
-        if len(term) < _MIN_TERM_LEN:
-            raise ValueError(_ERR_SHORT_QUERY_TERM)
-        if token.startswith("-") and len(token) > 1:
-            parts.append(f"NOT {_phrase(term)}")
-        else:
-            parts.append(_phrase(term))
+    for kind, value in tokens:
+        if kind == "OR":
+            parts.append("OR")
+            continue
+        if kind == "NOT":
+            if len(value) < _MIN_TERM_LEN:
+                msg = _ERR_SHORT_QUERY_TERM
+                raise ValueError(msg)
+            parts.append(f"NOT {_phrase(value)}")
+            continue
+        # PHRASE
+        if len(value) < _MIN_TERM_LEN:
+            msg = _ERR_SHORT_QUERY_TERM
+            raise ValueError(msg)
+        parts.append(_phrase(value))
+
     return " ".join(parts)
 
 
+def _tokenize_query(text: str) -> list[tuple[str, str]]:
+    """Lex the query into ``(kind, value)`` pairs.
+
+    Kinds: ``PHRASE`` (raw text or quoted), ``OR``, ``NOT``.
+    Hand-rolled lexer (no shlex) so quote escaping is fully under our control.
+    """
+    out: list[tuple[str, str]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == '"':
+            # Quoted phrase; read until next unescaped quote.
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 1
+            value = text[i + 1 : j]
+            out.append(("PHRASE", value))
+            i = j + 1
+            continue
+        if c == "|":
+            out.append(("OR", "|"))
+            i += 1
+            continue
+        # Read until whitespace.
+        j = i
+        while j < n and not text[j].isspace():
+            j += 1
+        raw = text[i:j]
+        i = j
+
+        if raw.upper() == "OR":
+            out.append(("OR", raw))
+            continue
+        if raw.startswith("-") and len(raw) > 1:
+            out.append(("NOT", raw[1:]))
+            continue
+        if raw.startswith("+") and len(raw) > 1:
+            out.append(("PHRASE", raw[1:]))
+            continue
+        out.append(("PHRASE", raw))
+
+    return out
+
+
 def _phrase(s: str) -> str:
-    return '"' + s.replace('"', '""') + '"'
+    """Wrap a value as an FTS5 quoted phrase, escaping inner quotes."""
+    escaped = s.replace('"', '""')
+    return f'"{escaped}"'
 
 
 @dataclass(frozen=True, slots=True)

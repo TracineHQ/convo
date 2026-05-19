@@ -69,3 +69,51 @@ def test_indices_in_json(seeded_db_path: str) -> None:
     for hit in hits:
         assert "indices" in hit
         assert isinstance(hit["indices"], list)
+
+
+def test_fields_projection_session_kind(seeded_db_path: str) -> None:
+    out = subprocess.check_output(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "search",
+            "kafka",
+            "--fields",
+            "session,kind",
+        ],
+        text=True,
+    )
+    lines = [line_item for line_item in out.splitlines() if line_item.strip()]
+    assert lines, "expected at least one projected hit line"
+    for line in lines:
+        parts = line.split("\t")
+        assert len(parts) == 2
+        assert parts[1] in {"message", "tool_call", "tool_result"}
+
+
+def test_fields_projection_when_excerpt(seeded_db_path: str) -> None:
+    out = subprocess.check_output(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "search",
+            "kafka",
+            "--fields",
+            "when,excerpt",
+        ],
+        text=True,
+    )
+    lines = [line_item for line_item in out.splitlines() if line_item.strip()]
+    assert lines
+    for line in lines:
+        parts = line.split("\t")
+        assert len(parts) == 2
+        # First column is a timestamp; second is excerpt with [match] markers
+        assert "[" in parts[1]
+        assert "]" in parts[1]

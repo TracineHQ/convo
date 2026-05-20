@@ -1,7 +1,7 @@
 ---
 description: Compare the current activity window against the previous window of the same length.
-argument-hint: [--since SPAN]
-allowed-tools: Bash(convo diff *)
+argument-hint: "[--since SPAN]"
+allowed-tools: "Bash(convo diff *)"
 disable-model-invocation: true
 ---
 

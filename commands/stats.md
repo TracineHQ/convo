@@ -1,6 +1,6 @@
 ---
 description: Tool-call frequency and error rates from indexed history.
-allowed-tools: Bash(convo stats *)
+allowed-tools: "Bash(convo stats *)"
 disable-model-invocation: true
 ---
 

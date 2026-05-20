@@ -1,7 +1,7 @@
 ---
 description: Search Claude Code session history (FTS5 over messages, tool calls, tool results).
-argument-hint: <query>
-allowed-tools: Bash(convo search *)
+argument-hint: "<query>"
+allowed-tools: "Bash(convo search *)"
 disable-model-invocation: true
 ---
 

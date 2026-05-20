@@ -1,6 +1,6 @@
 ---
 description: Quick overview of the convo DB (row counts, last index time, top projects, snapshots).
-allowed-tools: Bash(convo info)
+allowed-tools: "Bash(convo info)"
 disable-model-invocation: true
 ---
 

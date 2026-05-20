@@ -1,7 +1,7 @@
 ---
 description: Show a session's full message timeline. Accepts a session-id prefix (8+ chars) or --latest.
-argument-hint: <session-id-prefix | --latest>
-allowed-tools: Bash(convo inspect *)
+argument-hint: "<session-id-prefix | --latest>"
+allowed-tools: "Bash(convo inspect *)"
 disable-model-invocation: true
 ---
 

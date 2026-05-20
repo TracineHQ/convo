@@ -7,7 +7,7 @@ rules:
       # we are smoke-testing bin/convo.cmd, the wrapper that exists for
       # native Windows cmd.exe / PowerShell users. Switching to pwsh/bash
       # would defeat the purpose of the test.
-      - ci.yml:202
+      - ci.yml:209
   superfluous-actions:
     ignore:
       # softprops/action-gh-release gives us release-notes-from-CHANGELOG

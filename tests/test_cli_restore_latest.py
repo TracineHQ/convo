@@ -60,7 +60,7 @@ def test_restore_latest_json(
     rc = main(["restore", "--latest", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     source = payload["restore"]["source"]
     assert source.startswith(str(snapshot_dir))
     assert source.endswith(".db")

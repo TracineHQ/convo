@@ -1,6 +1,6 @@
 {
   "name": "convo",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Index Claude Code session JSONLs into local SQLite. Auto-indexes after every session. Adds slash commands (search, summary, diff, inspect, stats, info) and a history-search skill Claude can invoke when you ask about past conversations.",
   "author": { "name": "Anthony Ledesma", "url": "https://github.com/TracineHQ" },
   "homepage": "https://github.com/TracineHQ/convo",

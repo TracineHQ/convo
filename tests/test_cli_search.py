@@ -98,27 +98,22 @@ def test_search_json_envelope(
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["schema_version"] == 1
+    # v2: envelope shape updated — filters gained session/tool_exact, hits gained indices
+    assert payload["schema_version"] == 2  # v2 envelope
     assert "search" in payload
     block = payload["search"]
     assert block["query"] == "kafka"
-    assert block["filters"] == {
-        "since": None,
-        "project": None,
-        "tool": None,
-        "limit": 50,
-    }
+    filters = block["filters"]
+    assert filters["since"] is None
+    assert filters["project"] is None
+    assert filters["tool"] is None
+    assert filters["limit"] == 10  # v2: default changed from 50 to 10
     assert isinstance(block["hits"], list)
     assert block["hits"], "expected at least one hit for 'kafka'"
     for hit in block["hits"]:
-        assert set(hit.keys()) == {
-            "kind",
-            "id",
-            "session_id",
-            "timestamp",
-            "excerpt",
-            "project",
-        }
+        required = {"kind", "id", "session_id", "timestamp", "excerpt", "indices"}
+        assert required.issubset(hit.keys())
+        assert isinstance(hit["indices"], list)
         # Snippet markers should be stripped from JSON output.
         assert "\x02HIT\x02" not in hit["excerpt"]
         assert "\x03HIT\x03" not in hit["excerpt"]
@@ -187,8 +182,8 @@ def test_search_since_filter_envelope(
     rc = main(["search", "kafka", "--since", "1d", "--json"])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
-    # 1 day = 86400 seconds, encoded as "<seconds>s" by the envelope builder.
-    assert payload["search"]["filters"]["since"] == "86400s"
+    # v2: _span_to_str now emits human-readable spans ("1d") matching _WIDEN_TABLE
+    assert payload["search"]["filters"]["since"] == "1d"
 
 
 def test_search_empty_query_errors(
@@ -222,7 +217,7 @@ def test_search_empty_query_json_stdout_clean(
     assert rc == 1
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert "error" in payload
     assert isinstance(payload["error"]["message"], str)
     assert payload["error"]["message"]
@@ -289,7 +284,7 @@ def test_search_no_hits_prose(
     rc = main(["search", "nonexistentterm"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "(no hits)" in out
+    assert "0 hits" in out  # v2: prose output reworded from "(no hits)" to "0 hits."
 
 
 def test_search_limit_negative_rejected(capsys: pytest.CaptureFixture[str]) -> None:
@@ -313,3 +308,27 @@ def test_search_limit_zero_rejected(capsys: pytest.CaptureFixture[str]) -> None:
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
     assert "--limit must be a positive integer" in err
+
+
+# ---------------------------------------------------------------------------
+# _span_to_str unit tests — regression guard for the 7d/"1w" mismatch
+# ---------------------------------------------------------------------------
+
+from convo.cli import _span_to_str  # noqa: E402
+
+
+def test_span_to_str_seven_days_returns_7d() -> None:
+    """Regression: 7d used to round-trip through _span_to_str as '1w'."""
+    assert _span_to_str(timedelta(days=7)) == "7d"
+
+
+def test_span_to_str_one_day() -> None:
+    assert _span_to_str(timedelta(days=1)) == "1d"
+
+
+def test_span_to_str_thirty_days() -> None:
+    assert _span_to_str(timedelta(days=30)) == "30d"
+
+
+def test_span_to_str_one_year() -> None:
+    assert _span_to_str(timedelta(days=365)) == "1y"

@@ -1,4 +1,8 @@
-"""Argparse CLI for convo: backup, restore, index, info, search, inspect, snapshots, stats."""
+"""Argparse CLI for convo.
+
+Subcommands: backup, restore, index, info, search, inspect, snapshots,
+stats, projects, tools, sessions.
+"""
 
 from __future__ import annotations
 
@@ -37,41 +41,61 @@ from convo.analytics import (
     stats_sessions,
     stats_tools,
 )
+from convo.cli_errors import precheck_argv
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
-from convo.read.filters import parse_span
+from convo.read._db_access import open_ro as _open_ro
+from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
 from convo.read.info import InfoReport, ProjectCount, gather_info
 from convo.read.inspect import (
     MessageView,
     SessionView,
     ToolCallView,
+    build_timeline,
     inspect_session,
     resolve_latest_session,
     resolve_session_id,
 )
-from convo.read.search import SNIPPET_POST, SNIPPET_PRE, SearchHit, search
+from convo.read.projects import ProjectRow, list_projects
+from convo.read.prose import SearchRenderConfig, render_search_hits, render_timeline
+from convo.read.search import (
+    SNIPPET_POST,
+    SNIPPET_PRE,
+    SearchHit,
+    extract_indices_and_clean,
+    search,
+)
+from convo.read.sessions import SessionRow, list_sessions
 from convo.read.snapshots import SnapshotInfo, list_snapshots
+from convo.read.suggestions import Suggestion, generate_suggestions
+from convo.read.tools import ToolRow, list_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+# referenced below in _projects_command, _tools_command, _sessions_command
+_DISCOVERY_REFS = (ProjectRow, list_projects, SessionRow, list_sessions, ToolRow, list_tools)
+
 DEFAULT_PROJECTS_DIR: Path = Path.home() / ".claude" / "projects"
 
-_INFO_ENVELOPE_VERSION: int = 1
-_SEARCH_ENVELOPE_VERSION: int = 1
-_INSPECT_ENVELOPE_VERSION: int = 1
-_STATS_ENVELOPE_VERSION: int = 1
-_INDEX_ENVELOPE_VERSION: int = 1
-_BACKUP_ENVELOPE_VERSION: int = 1
-_RESTORE_ENVELOPE_VERSION: int = 1
-_ERROR_ENVELOPE_VERSION: int = 1
+INFO_ENVELOPE_VERSION: int = 2
+SEARCH_ENVELOPE_VERSION: int = 2
+INSPECT_ENVELOPE_VERSION: int = 2
+STATS_ENVELOPE_VERSION: int = 2
+INDEX_ENVELOPE_VERSION: int = 2
+BACKUP_ENVELOPE_VERSION: int = 2
+RESTORE_ENVELOPE_VERSION: int = 2
+ERROR_ENVELOPE_VERSION: int = 2
+PROJECTS_ENVELOPE_VERSION: int = 2
+TOOLS_ENVELOPE_VERSION: int = 2
+SESSIONS_ENVELOPE_VERSION: int = 2
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
 _UNKNOWN_PROJECT_LABEL: str = "(unknown)"
 _BYTES_PER_KIB: int = 1024
-_SEARCH_DEFAULT_LIMIT: int = 50
+_SEARCH_DEFAULT_LIMIT: int = 10
 _ANSI_BOLD_ON: str = "\x1b[1m"
 _ANSI_BOLD_OFF: str = "\x1b[0m"
 
@@ -189,6 +213,9 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_stats_parser(sub)
     _add_summary_parser(sub)
     _add_diff_parser(sub)
+    _add_projects_parser(sub)
+    _add_tools_parser(sub)
+    _add_sessions_parser(sub)
     return parser
 
 
@@ -344,14 +371,15 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         help="Search messages, tool calls, and tool results via FTS5.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Query is treated as a phrase by default. Prefix tokens with `+`\n"
-            "to require or `-` to exclude (FTS5 NOT). Time spans for --since\n"
-            "use the shorthand <N><unit>: 7d, 24h, 90m, 30s, 2w, 1y.\n"
+            "Tokens are ANDed by default across whitespace-separated terms;\n"
+            'quote literals as "phrase" for phrase search; OR keyword between\n'
+            "terms; -token excludes. Time spans for --since use the shorthand\n"
+            "<N><unit>: 7d, 24h, 90m, 30s, 2w, 1y.\n"
             "\n"
             "Examples:\n"
             "  convo search 'TypeError'\n"
             "  convo search 'flaky test' --since 7d\n"
-            "  convo search '+migration -rollback' --tool Bash --limit 50\n"
+            "  convo search 'migration -rollback' --tool Bash\n"
             "  convo search 'auth' --project /Users/dev/myapp --json\n"
         ),
     )
@@ -365,12 +393,12 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     search_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     search_p.add_argument(
         "--tool",
         default=None,
-        help="Restrict tool_call/tool_result hits to this tool name (exact match).",
+        help="Prefix match by default; use --tool-exact for strict equality.",
     )
     search_p.add_argument(
         "--limit",
@@ -382,7 +410,36 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         "--json",
         dest="as_json",
         action="store_true",
-        help="Emit a single JSON envelope on stdout instead of prose.",
+        help="Alias for --format=json (deprecated, use --format=json).",
+    )
+    search_p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
+    search_p.add_argument(
+        "--excerpt-chars",
+        type=int,
+        default=600,
+        help="snippet character width (default: 600)",
+    )
+    search_p.add_argument(
+        "--session",
+        type=str,
+        default=None,
+        help="restrict to a session id (prefix accepted)",
+    )
+    search_p.add_argument(
+        "--tool-exact",
+        action="store_true",
+        help="match --tool exactly instead of prefix",
+    )
+    search_p.add_argument(
+        "--fields",
+        type=str,
+        default=None,
+        help="comma-separated list of fields to project (TSV output)",
     )
 
 
@@ -393,8 +450,8 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "session-id may be a full id or any unique prefix.\n"
-            "Default: message content is truncated to 200 characters; pass\n"
-            "--full to dump verbatim.\n"
+            "Default: output is capped at 50 messages; pass --full to disable\n"
+            "the cap and return all messages in the session.\n"
             "\n"
             "Examples:\n"
             "  convo inspect abc123\n"
@@ -416,13 +473,32 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     inspect_p.add_argument(
         "--full",
         action="store_true",
-        help="Dump message content verbatim instead of truncating to 200 chars.",
+        help="Disable the 50-message cap; return all messages in the session.",
     )
     inspect_p.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
         help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+    inspect_p.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Render the session as a chronological timeline.",
+    )
+    inspect_p.add_argument(
+        "--from-message",
+        type=int,
+        default=None,
+        dest="from_message",
+        help="Start at the Nth message (1-indexed).",
+    )
+    inspect_p.add_argument(
+        "--to-message",
+        type=int,
+        default=None,
+        dest="to_message",
+        help="End at the Nth message (1-indexed, inclusive).",
     )
 
 
@@ -477,7 +553,7 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     stats_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     stats_p.add_argument(
         "--json",
@@ -488,6 +564,8 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 
 def main(argv: list[str] | None = None) -> int:
+
+    precheck_argv(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
@@ -495,7 +573,7 @@ def main(argv: list[str] | None = None) -> int:
     except (RuntimeError, ValueError, FileExistsError, OSError, sqlite3.DatabaseError) as exc:
         if getattr(args, "as_json", False):
             envelope = {
-                "schema_version": _ERROR_ENVELOPE_VERSION,
+                "schema_version": ERROR_ENVELOPE_VERSION,
                 "error": {"message": str(exc)},
             }
             print(json.dumps(envelope))
@@ -519,6 +597,9 @@ def _dispatch(args: argparse.Namespace) -> int:
         "stats": _stats_command,
         "summary": _summary_command,
         "diff": _diff_command,
+        "projects": _projects_command,
+        "tools": _tools_command,
+        "sessions": _sessions_command,
     }
     handler = handlers.get(args.cmd)
     if handler is None:
@@ -547,7 +628,7 @@ def _backup_command(args: argparse.Namespace, db_path: Path) -> int:
 def _build_backup_envelope(snapshot_path: Path) -> dict[str, object]:
     size_bytes = snapshot_path.stat().st_size
     return {
-        "schema_version": _BACKUP_ENVELOPE_VERSION,
+        "schema_version": BACKUP_ENVELOPE_VERSION,
         "backup": {
             "snapshot_path": str(snapshot_path),
             "size_bytes": size_bytes,
@@ -568,7 +649,7 @@ def _restore_command(args: argparse.Namespace, db_path: Path) -> int:
 
 def _build_restore_envelope(src: Path) -> dict[str, object]:
     return {
-        "schema_version": _RESTORE_ENVELOPE_VERSION,
+        "schema_version": RESTORE_ENVELOPE_VERSION,
         "restore": {"source": str(src)},
     }
 
@@ -586,7 +667,7 @@ def _resolve_restore_src(args: argparse.Namespace, db_path: Path) -> Path:
     return cast("Path", args.src)
 
 
-_SNAPSHOTS_ENVELOPE_VERSION: int = 1
+SNAPSHOTS_ENVELOPE_VERSION: int = 2
 
 
 def _snapshots_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -604,7 +685,7 @@ def _build_snapshots_envelope(
     snapshots: list[SnapshotInfo],
 ) -> dict[str, object]:
     return {
-        "schema_version": _SNAPSHOTS_ENVELOPE_VERSION,
+        "schema_version": SNAPSHOTS_ENVELOPE_VERSION,
         "snapshots": {
             "snapshot_dir": str(snapshot_dir),
             "entries": [_snapshot_to_dict(s) for s in snapshots],
@@ -694,7 +775,7 @@ def _envelope_status(report: IndexReport) -> str:
 
 def _build_envelope(report: IndexReport) -> dict[str, object]:
     return {
-        "schema_version": _INDEX_ENVELOPE_VERSION,
+        "schema_version": INDEX_ENVELOPE_VERSION,
         "index": {
             "status": _envelope_status(report),
             "files_seen": report.files_seen,
@@ -757,7 +838,7 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
         msg = f"path not found: {args.path}" if explicit_miss else "no guard JSONL log found"
         if args.as_json:
             envelope = {
-                "schema_version": _INDEX_ENVELOPE_VERSION,
+                "schema_version": INDEX_ENVELOPE_VERSION,
                 "guard": {"status": "no_log", "path": None, "inserted_rows": {}},
             }
             print(json.dumps(envelope))
@@ -768,7 +849,7 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
         result = index_guard_file(db, log_path, force=args.full)
     if args.as_json:
         envelope = {
-            "schema_version": _INDEX_ENVELOPE_VERSION,
+            "schema_version": INDEX_ENVELOPE_VERSION,
             "guard": {
                 "path": str(log_path),
                 "skipped_reason": result.skipped_reason,
@@ -810,7 +891,7 @@ def _project_label(project: ProjectCount) -> str:
 
 def _build_info_envelope(report: InfoReport) -> dict[str, object]:
     return {
-        "schema_version": _INFO_ENVELOPE_VERSION,
+        "schema_version": INFO_ENVELOPE_VERSION,
         "info": {
             "db_schema_version": report.schema_version,
             "row_counts": dict(report.row_counts),
@@ -874,57 +955,145 @@ def _print_info(report: InfoReport) -> None:
 
 
 def _search_command(args: argparse.Namespace, db_path: Path) -> int:
+    fmt = "json" if args.as_json else args.format
+    project_resolved: str | None = args.project
+
+    if args.project:
+        with Database(db_path) as _db_proj:
+            assert _db_proj.conn is not None
+            try:
+                project_resolved = resolve_project_path(_db_proj.conn, args.project)
+            except ProjectResolveError as exc:
+                if fmt == "json":
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+
     with Database(db_path) as db:
         hits = list(
             search(
                 db,
                 args.query,
                 since=args.since,
-                project=args.project,
+                project=project_resolved,
                 tool=args.tool,
+                session=args.session,
+                tool_exact=args.tool_exact,
+                excerpt_chars=args.excerpt_chars,
                 limit=args.limit,
             ),
         )
-    if args.as_json:
-        print(json.dumps(_build_search_envelope(args, hits)))
+
+    cleaned: list[tuple[str, list[list[int]]]] = [
+        extract_indices_and_clean(h.excerpt) for h in hits
+    ]
+
+    if fmt == "json":
+        suggestions = _suggestions_for(args, hits)
+        filters = _filters_dict(args, project_resolved)
+        envelope: dict[str, object] = {
+            "schema_version": SEARCH_ENVELOPE_VERSION,
+            "search": {
+                "query": args.query,
+                "filters": filters,
+                "total": len(hits),
+                "hits": [
+                    _hit_to_dict_v2(h, clean, indices)
+                    for h, (clean, indices) in zip(hits, cleaned, strict=True)
+                ],
+            },
+        }
+        if not hits and suggestions:
+            search_block = cast("dict[str, object]", envelope["search"])
+            search_block["suggestions"] = [
+                {"kind": s.kind, "description": s.description} for s in suggestions
+            ]
+        print(json.dumps(envelope))
     else:
-        _print_search_hits(hits)
+        suggestions = _suggestions_for(args, hits)
+        cleaned_hits = [
+            dataclasses.replace(h, excerpt=clean)
+            for h, (clean, _) in zip(hits, cleaned, strict=True)
+        ]
+        config = SearchRenderConfig(
+            fields=args.fields.split(",") if args.fields else [],
+        )
+        prose = render_search_hits(
+            query=args.query,
+            hits=cleaned_hits,
+            total=len(hits),
+            config=config,
+            suggestions=[(s.kind, s.description) for s in suggestions],
+        )
+        print(prose)
+
     return 0
 
 
-def _build_search_envelope(args: argparse.Namespace, hits: list[SearchHit]) -> dict[str, object]:
-    filters: dict[str, object] = {
-        "since": _span_to_str(args.since),
-        "project": args.project,
-        "tool": args.tool,
-        "limit": args.limit,
-    }
-    return {
-        "schema_version": _SEARCH_ENVELOPE_VERSION,
-        "search": {
-            "query": args.query,
-            "filters": filters,
-            "hits": [_hit_to_dict(h) for h in hits],
-        },
-    }
-
-
-def _hit_to_dict(hit: SearchHit) -> dict[str, object]:
-    return {
+def _hit_to_dict_v2(hit: SearchHit, clean: str, indices: list[list[int]]) -> dict[str, object]:
+    d: dict[str, object] = {
         "kind": hit.kind,
         "id": hit.id,
         "session_id": hit.session_id,
         "timestamp": hit.timestamp,
-        "excerpt": _strip_snippet_markers(hit.excerpt),
-        "project": hit.project,
+        "excerpt": clean,
+        "indices": indices,
+    }
+    if hit.project is not None:
+        d["project"] = hit.project
+    if hit.role is not None:
+        d["role"] = hit.role
+    if hit.tool_origin is not None:
+        d["tool_origin" if hit.kind == "tool_result" else "tool"] = hit.tool_origin
+    return d
+
+
+def _suggestions_for(args: argparse.Namespace, hits: list[SearchHit]) -> list[Suggestion]:
+    if hits:
+        return []
+    return generate_suggestions(
+        query=args.query,
+        since_span=_span_to_str(args.since),
+        project=args.project,
+        tool=args.tool,
+        session=args.session,
+        total_doc_freq={},
+    )
+
+
+def _filters_dict(args: argparse.Namespace, project_resolved: str | None) -> dict[str, object]:
+    return {
+        "since": _span_to_str(args.since),
+        "project": project_resolved,
+        "tool": args.tool,
+        "session": args.session,
+        "tool_exact": args.tool_exact,
+        "limit": args.limit,
     }
 
 
 def _span_to_str(span: timedelta | None) -> str | None:
     if span is None:
         return None
-    total = int(span.total_seconds())
-    return f"{total}s"
+    total_s = int(span.total_seconds())
+    for divisor, suffix in (
+        (86400 * 365, "y"),
+        (86400, "d"),
+        (3600, "h"),
+        (60, "m"),
+    ):
+        n, rem = divmod(total_s, divisor)
+        if n > 0 and rem == 0:
+            return f"{n}{suffix}"
+    return f"{total_s}s"
 
 
 def _strip_snippet_markers(excerpt: str) -> str:
@@ -937,35 +1106,42 @@ def _render_excerpt_for_tty(excerpt: str) -> str:
     return _strip_snippet_markers(excerpt)
 
 
-def _print_search_hits(hits: list[SearchHit]) -> None:
-    if not hits:
-        print("(no hits)")
-        return
-    for hit in hits:
-        ts = hit.timestamp or "(no timestamp)"
-        excerpt = _render_excerpt_for_tty(hit.excerpt)
-        # Collapse newlines so each hit fits on one line.
-        excerpt = excerpt.replace("\n", " ").replace("\r", " ")
-        print(f"[{hit.kind}] {ts} | {excerpt} | {hit.session_id}")
-
-
 def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
     with Database(db_path) as db:
         if args.latest:
             resolved = resolve_latest_session(db)
         else:
             resolved = resolve_session_id(db, args.session_id)
-        view = inspect_session(db, resolved)
+        if getattr(args, "timeline", False):
+            events, meta = build_timeline(
+                db,
+                resolved,
+                from_message=args.from_message,
+                to_message=args.to_message,
+            )
+            out = render_timeline(
+                session_id=resolved,
+                project=str(meta["project"]) if meta["project"] is not None else None,
+                duration_seconds=int(meta["duration_seconds"]),
+                message_count=int(meta["message_count"]),
+                tool_call_count=int(meta["tool_call_count"]),
+                events=events,
+                from_message=args.from_message,
+                to_message=args.to_message,
+            )
+            sys.stdout.write(out + "\n")
+            return 0
+        view = inspect_session(db, resolved, full=bool(args.full))
     if args.as_json:
-        print(json.dumps(_build_inspect_envelope(view, full=bool(args.full))))
+        print(json.dumps(_build_inspect_envelope(view)))
     else:
-        _print_inspect(view, full=bool(args.full))
+        _print_inspect(view)
     return 0
 
 
-def _build_inspect_envelope(view: SessionView, *, full: bool) -> dict[str, object]:
+def _build_inspect_envelope(view: SessionView) -> dict[str, object]:
     return {
-        "schema_version": _INSPECT_ENVELOPE_VERSION,
+        "schema_version": INSPECT_ENVELOPE_VERSION,
         "inspect": {
             "session": {
                 "id": view.id,
@@ -975,19 +1151,21 @@ def _build_inspect_envelope(view: SessionView, *, full: bool) -> dict[str, objec
                 "model": view.model,
                 "git_branch": view.git_branch,
             },
-            "messages": [_message_to_dict(m, full=full) for m in view.messages],
+            "messages": [_message_to_dict(m) for m in view.messages],
+            "truncated": view.truncated,
+            "total_messages": view.total_messages,
         },
     }
 
 
-def _message_to_dict(msg: MessageView, *, full: bool) -> dict[str, object]:
-    content = msg.content if full else _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
+def _message_to_dict(msg: MessageView) -> dict[str, object]:
+    content = _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
     return {
         "id": msg.id,
         "role": msg.role,
         "timestamp": msg.timestamp,
         "content": content,
-        "truncated": (not full) and len(msg.content) > _INSPECT_PREVIEW_CHARS,
+        "truncated": len(msg.content) > _INSPECT_PREVIEW_CHARS,
         "tool_calls": [_tool_call_to_dict(tc) for tc in msg.tool_calls],
     }
 
@@ -1021,7 +1199,7 @@ def _role_icon(role: str) -> str:
     return f"{role}:"
 
 
-def _print_inspect(view: SessionView, *, full: bool) -> None:
+def _print_inspect(view: SessionView) -> None:
     print(f"session   {view.id}")
     print(f"started   {view.started_at or '(unknown)'}")
     print(f"ended     {view.ended_at or '(unknown)'}")
@@ -1032,19 +1210,20 @@ def _print_inspect(view: SessionView, *, full: bool) -> None:
     if not view.messages:
         print("(no messages)")
         return
-    print(f"messages  ({len(view.messages)} total)")
+    print(f"messages  ({view.total_messages} total)")
     for idx, msg in enumerate(view.messages, start=1):
-        _print_message(idx, msg, full=full)
+        _print_message(idx, msg)
+    if view.truncated:
+        print(
+            f"(showing {len(view.messages)} of {view.total_messages} messages; use --full for all)"
+        )
 
 
-def _print_message(idx: int, msg: MessageView, *, full: bool) -> None:
+def _print_message(idx: int, msg: MessageView) -> None:
     icon = _role_icon(msg.role)
     ts = msg.timestamp or "(no ts)"
-    content = msg.content if full else _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
-    # Collapse multi-line content to one line in the default (non-full) view so the
-    # numbered timeline stays scannable. With --full, preserve newlines verbatim.
-    if not full:
-        content = content.replace("\n", " ").replace("\r", " ")
+    content = _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
+    content = content.replace("\n", " ").replace("\r", " ")
     print(f"{idx}. {icon} {ts}  {content}")
     for tc in msg.tool_calls:
         preview = _truncate(tc.input_json.replace("\n", " "), _INSPECT_TOOL_INPUT_PREVIEW)
@@ -1070,8 +1249,29 @@ _STATS_FAMILY_FUNCS: dict[
 def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
     family: str = args.family
     func = _STATS_FAMILY_FUNCS[family]
+    project_resolved: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            try:
+                project_resolved = resolve_project_path(ro, args.project)
+            except ProjectResolveError as exc:
+                if args.as_json:
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+        finally:
+            ro.close()
     with Database(db_path) as db:
-        report = func(db, since=args.since, project=args.project)
+        report = func(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_stats_envelope(family, report)))
     else:
@@ -1084,7 +1284,7 @@ def _build_stats_envelope(
     report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport | HooksReport,
 ) -> dict[str, object]:
     body: dict[str, object] = {"family": family, **dataclasses.asdict(report)}
-    return {"schema_version": _STATS_ENVELOPE_VERSION, "stats": body}
+    return {"schema_version": STATS_ENVELOPE_VERSION, "stats": body}
 
 
 def _print_stats(
@@ -1281,7 +1481,7 @@ def _print_stats_hooks(report: HooksReport) -> None:
         print(f"  {d.decision.ljust(dec_w)}  {str(d.count).rjust(count_w)}")
 
 
-_SUMMARY_ENVELOPE_VERSION: int = 1
+SUMMARY_ENVELOPE_VERSION: int = 2
 _SUMMARY_TOP_LIMIT: int = 5
 
 
@@ -1304,7 +1504,7 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     summary_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     summary_p.add_argument(
         "--json",
@@ -1315,8 +1515,29 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
 
 
 def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
+    project_resolved: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            try:
+                project_resolved = resolve_project_path(ro, args.project)
+            except ProjectResolveError as exc:
+                if args.as_json:
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+        finally:
+            ro.close()
     with Database(db_path) as db:
-        report = gather_summary(db, since=args.since, project=args.project)
+        report = gather_summary(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_summary_envelope(report)))
     else:
@@ -1334,7 +1555,7 @@ def _build_summary_envelope(report: SummaryReport) -> dict[str, object]:
         "files": dataclasses.asdict(report.files),
         "model": dataclasses.asdict(report.model),
     }
-    return {"schema_version": _SUMMARY_ENVELOPE_VERSION, "summary": body}
+    return {"schema_version": SUMMARY_ENVELOPE_VERSION, "summary": body}
 
 
 def _print_summary_report(report: SummaryReport) -> None:
@@ -1432,7 +1653,7 @@ def _print_summary_model(report: ModelReport) -> None:
         print(f"  --- {extra} more")
 
 
-_DIFF_ENVELOPE_VERSION: int = 1
+DIFF_ENVELOPE_VERSION: int = 2
 _DIFF_DEFAULT_SPAN: timedelta = timedelta(days=7)
 _DIFF_TOP_LIMIT: int = 10
 _ANSI_GREEN: str = "\x1b[32m"
@@ -1460,7 +1681,7 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     diff_p.add_argument(
         "--project",
         default=None,
-        help="Restrict to one project_path (exact match against sessions.project_path).",
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     diff_p.add_argument(
         "--json",
@@ -1472,8 +1693,29 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
 
 def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
     span: timedelta = args.since if args.since is not None else _DIFF_DEFAULT_SPAN
+    project_resolved: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            try:
+                project_resolved = resolve_project_path(ro, args.project)
+            except ProjectResolveError as exc:
+                if args.as_json:
+                    print(
+                        json.dumps(
+                            {
+                                "schema_version": ERROR_ENVELOPE_VERSION,
+                                "error": {"message": str(exc)},
+                            }
+                        )
+                    )
+                else:
+                    print(f"convo: {exc}", file=sys.stderr)
+                return 1
+        finally:
+            ro.close()
     with Database(db_path) as db:
-        report = compute_diff(db, span=span, project=args.project)
+        report = compute_diff(db, span=span, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_diff_envelope(report)))
     else:
@@ -1489,7 +1731,7 @@ def _build_diff_envelope(report: DiffReport) -> dict[str, object]:
         "previous": _window_to_dict(report.previous),
         "deltas": _deltas_to_dict(report.deltas),
     }
-    return {"schema_version": _DIFF_ENVELOPE_VERSION, "diff": body}
+    return {"schema_version": DIFF_ENVELOPE_VERSION, "diff": body}
 
 
 def _window_to_dict(window: WindowSnapshot) -> dict[str, object]:
@@ -1682,3 +1924,177 @@ def _opt_seconds(value: float | None) -> str:
 def _span_seconds_label(span_seconds: float) -> str:
     total = int(span_seconds)
     return f"{total}s"
+
+
+def _add_projects_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "projects",
+        help="list indexed projects",
+        epilog="Lists all indexed projects with session count and last-seen timestamp.",
+    )
+    p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
+
+
+def _add_tools_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "tools",
+        help="list distinct tools used",
+        epilog="Lists distinct tools used across sessions with call count and last-seen timestamp.",
+    )
+    p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
+
+
+def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "sessions",
+        help="list sessions, optionally filtered",
+        epilog="Lists sessions with id, project path, start/end times, and message count.",
+    )
+    p.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
+    )
+    p.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="Only include sessions newer than this span (e.g. 7d, 24h, 2w, 1y, or ISO date).",
+    )
+    p.add_argument(
+        "--limit", type=int, default=20, help="Maximum sessions to return (default: 20)."
+    )
+    p.add_argument(
+        "--format",
+        choices=["prose", "json"],
+        default="prose",
+        help="output format (default: prose)",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="alias for --format=json")
+
+
+def _projects_command(args: argparse.Namespace, db_path: Path) -> int:
+    items: list[ProjectRow] = list_projects(str(db_path))
+    use_json = args.as_json or args.format == "json"
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": PROJECTS_ENVELOPE_VERSION,
+                    "projects": {
+                        "items": [
+                            {"path": r.path, "sessions": r.sessions, "last_seen": r.last_seen}
+                            for r in items
+                        ]
+                    },
+                }
+            )
+        )
+    else:
+        print(f"convo projects -- {len(items)} project{'s' if len(items) != 1 else ''}")
+        if not items:
+            return 0
+        path_w = max(len("project"), *(len(r.path) for r in items))
+        print(f"{'project'.ljust(path_w)}  {'sessions':>8}  last_seen")
+        print(f"{'-' * path_w}  {'-' * 8}  {'-' * 24}")
+        for r in items:
+            last = r.last_seen or ""
+            print(f"{r.path.ljust(path_w)}  {r.sessions:>8}  {last}")
+    return 0
+
+
+def _tools_command(args: argparse.Namespace, db_path: Path) -> int:
+    items: list[ToolRow] = list_tools(str(db_path))
+    use_json = args.as_json or args.format == "json"
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": TOOLS_ENVELOPE_VERSION,
+                    "tools": {
+                        "items": [
+                            {"name": r.name, "calls": r.calls, "last_seen": r.last_seen}
+                            for r in items
+                        ]
+                    },
+                }
+            )
+        )
+    else:
+        print(f"convo tools -- {len(items)} tool{'s' if len(items) != 1 else ''}")
+        if not items:
+            return 0
+        name_w = max(len("tool"), *(len(r.name) for r in items))
+        print(f"{'tool'.ljust(name_w)}  {'calls':>8}  last_seen")
+        print(f"{'-' * name_w}  {'-' * 8}  {'-' * 24}")
+        for r in items:
+            last = r.last_seen or ""
+            print(f"{r.name.ljust(name_w)}  {r.calls:>8}  {last}")
+    return 0
+
+
+def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
+    resolved_project: str | None = None
+    if args.project is not None:
+        ro = _open_ro(str(db_path))
+        try:
+            resolved_project = resolve_project_path(ro, args.project)
+        finally:
+            ro.close()
+
+    _since: str | None = None
+    if args.since is not None:
+        _since = since_iso(parse_span(args.since))
+
+    items: list[SessionRow] = list_sessions(
+        str(db_path),
+        project=resolved_project,
+        since_iso=_since,
+        limit=args.limit,
+    )
+    use_json = args.as_json or args.format == "json"
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": SESSIONS_ENVELOPE_VERSION,
+                    "sessions": {
+                        "items": [
+                            {
+                                "id": r.id,
+                                "project_path": r.project_path,
+                                "started_at": r.started_at,
+                                "ended_at": r.ended_at,
+                                "message_count": r.message_count,
+                            }
+                            for r in items
+                        ]
+                    },
+                }
+            )
+        )
+    else:
+        print(f"convo sessions -- {len(items)} session{'s' if len(items) != 1 else ''}")
+        if not items:
+            return 0
+        proj_w = max(len("project"), *(len(r.project_path or "") for r in items))
+        print(f"{'id'.ljust(36)}  {'project'.ljust(proj_w)}  {'msgs':>5}  started_at")
+        print(f"{'-' * 36}  {'-' * proj_w}  {'-' * 5}  {'-' * 24}")
+        for r in items:
+            proj = r.project_path or ""
+            started = r.started_at or ""
+            print(f"{r.id.ljust(36)}  {proj.ljust(proj_w)}  {r.message_count:>5}  {started}")
+    return 0

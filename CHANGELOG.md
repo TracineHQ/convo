@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-20
+
+### Breaking changes
+
+- Default query semantics: phrase -> AND across tokens. Quoted strings remain
+  literal phrases.
+- Default `--limit`: 50 -> 10.
+- JSON envelope: every command now returns `{schema_version: 2, <command>: {...}}`.
+  v1 `schema_version: 1` envelopes are gone.
+- `convo inspect --full` semantics changed: was "no excerpt truncation," now
+  "no message cap."
+- Excerpt format: `\x02HIT\x02` sentinels replaced with `[match]` brackets in
+  prose; `indices: [[start, end]]` char offsets in JSON.
+
+### Added
+
+- Default output is structured prose (`--format=prose`). JSON via
+  `--format=json` or `--json`.
+- `--excerpt-chars N` configures snippet window (default 600).
+- `--fields ts,session,command,excerpt` projects fields tab-separated, one hit
+  per line.
+- `--session <prefix>` filter restricts search to one session.
+- `--tool` is now prefix-match by default. `--tool-exact` for exact matching.
+- `--since` accepts ISO dates (`2026-04-01`) in addition to shorthand
+  (`7d`/`24h`).
+- `--project` accepts basename/substring shorthand; ambiguous matches return a
+  helpful error.
+- `convo inspect --timeline` shows per-message structured view with relative
+  timestamps.
+- New commands: `convo projects`, `convo tools`, `convo sessions` for
+  discovery.
+- 0-hit responses include deterministic suggestions (hyphen-split, time-widen,
+  filter-drop).
+- Grep-style flags (`-A`, `-B`, `-C`, `-E`, `-i`) and invented flags
+  (`--quiet`, `--by-caller`, etc.) rejected with helpful hints.
+
+### Removed
+
+- `+token` no longer changes behavior (was AND-required; now AND is default).
+- Top-level envelope keys outside the `<command>` wrapper.
+
 ## [1.1.0] - 2026-05-11
 
 ### Added

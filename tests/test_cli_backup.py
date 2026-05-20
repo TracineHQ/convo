@@ -137,7 +137,7 @@ def test_backup_explicit_dest_json(
     assert main(["backup", str(out), "--json"]) == 0
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert payload["backup"]["snapshot_path"] == str(out)
     assert payload["backup"]["size_bytes"] == out.stat().st_size
     assert payload["backup"]["size_bytes"] > 0
@@ -156,7 +156,7 @@ def test_backup_auto_json(
 
     assert main(["backup", "--auto", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     snapshot_path = payload["backup"]["snapshot_path"]
     assert _AUTO_NAME_RE.search(snapshot_path)
     written = next(snaps.iterdir())

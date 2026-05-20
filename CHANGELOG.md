@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.0.0] - 2026-05-19
-
 ### Breaking changes
 
 - Default query semantics: phrase -> AND across tokens. Quoted strings remain

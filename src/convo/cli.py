@@ -1086,7 +1086,6 @@ def _span_to_str(span: timedelta | None) -> str | None:
     total_s = int(span.total_seconds())
     for divisor, suffix in (
         (86400 * 365, "y"),
-        (86400 * 7, "w"),
         (86400, "d"),
         (3600, "h"),
         (60, "m"),

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import subprocess
 
+import pytest
+
 
 def test_search_prose_default(seeded_db_path: str) -> None:
     """Default invocation emits structured prose, not JSON."""
@@ -141,3 +143,36 @@ def test_default_limit_is_10(seeded_db_path: str) -> None:
         data.get("search", {}).get("filters") if "search" in data else data.get("filters", {})
     )
     assert filters_block.get("limit") == 10
+
+
+# ---------------------------------------------------------------------------
+# Regression: _span_to_str/_WIDEN_TABLE mismatch — --since widen suggestions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "since_value",
+    ["1d", "7d", "24h", "1y"],  # all map to keys in _WIDEN_TABLE
+)
+def test_zero_hits_widens_since(seeded_db_path: str, since_value: str) -> None:
+    """For --since values that resolve to a _WIDEN_TABLE key, zero-hit search
+    must emit a widen suggestion.  Regression guard for the _span_to_str /
+    _WIDEN_TABLE mismatch where 7d was serialised as '1w' (no table entry)."""
+    out = subprocess.check_output(  # noqa: S603
+        [  # noqa: S607
+            "uv",
+            "run",
+            "convo",
+            "--db",
+            seeded_db_path,
+            "search",
+            "absolutelynothingmatcheszzz",
+            "--since",
+            since_value,
+        ],
+        text=True,
+    )
+    assert "0 hits" in out
+    assert "widen" in out.lower(), (
+        f"--since {since_value!r} should emit a widen suggestion but didn't.\nGot:\n{out}"
+    )

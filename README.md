@@ -22,6 +22,14 @@ and discovery commands (`projects`, `tools`, `sessions`).
 Three install paths, in priority order. All require Python 3.12+. Verify
 with `convo --version` after installing.
 
+**SQLite substrate.** convo uses SQLite STRICT tables (3.37+) and FTS5
+virtual tables. Stock Python on macOS, Windows, and mainstream Linux distros
+(Ubuntu, Debian, Fedora) ships SQLite that satisfies both. Minimal images
+(Alpine, some slim Docker bases) sometimes omit FTS5 from the SQLite build.
+Check yours with `python -c "import sqlite3; print(sqlite3.sqlite_version);
+conn=sqlite3.connect(':memory:'); conn.execute('CREATE VIRTUAL TABLE t USING fts5(x)')"` --
+if that runs cleanly, you're good.
+
 ### 1. Claude Code plugin (recommended)
 
 Inside Claude Code:

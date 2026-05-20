@@ -1,6 +1,6 @@
 ---
 description: Search the user's prior Claude Code session history when they ask "did I solve this before?", "what was that fix for X?", "have I worked on Y?", or want a summary of past activity. Uses the `convo` CLI (FTS5 over messages, tool calls, tool results).
-allowed-tools: Bash(convo search *) Bash(convo summary *) Bash(convo inspect *) Bash(convo projects *) Bash(convo tools *) Bash(convo sessions *) Bash(convo info)
+allowed-tools: Bash(convo search *) Bash(convo summary *) Bash(convo inspect *) Bash(convo projects *) Bash(convo tools *) Bash(convo sessions *) Bash(convo diff *) Bash(convo stats *) Bash(convo info)
 ---
 
 # Searching conversation history

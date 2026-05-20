@@ -61,7 +61,7 @@ def test_info_json_envelope(
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     info = payload["info"]
     assert info["db_schema_version"] == 2
     assert info["row_counts"]["source_files"] == 1
@@ -132,7 +132,7 @@ def test_info_json_error_emits_envelope_on_stdout(
     """When --json is requested and the command errors, stdout carries a JSON envelope.
 
     The error envelope contract: under --json, modeled errors emit
-    {"schema_version": 1, "error": {"message": "..."}} on stdout so JSON
+    {"schema_version": 2, "error": {"message": "..."}} on stdout so JSON
     consumers can `jq` the result. stderr stays clean to avoid double output.
     """
     # Point --db at a non-DB file so opening fails. (A merely-missing path would
@@ -144,6 +144,6 @@ def test_info_json_error_emits_envelope_on_stdout(
     assert rc == 1
     assert captured.err == ""
     payload = json.loads(captured.out)
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2  # v2 envelope
     assert isinstance(payload["error"]["message"], str)
     assert payload["error"]["message"]

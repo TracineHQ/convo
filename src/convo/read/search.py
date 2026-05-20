@@ -43,21 +43,7 @@ _MIN_TERM_LEN = 3
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
-    """One result row from `search()`.
-
-    Fields:
-      kind: one of ``"message"``, ``"tool_call"``, ``"tool_result"``.
-      id: primary key of the underlying row (``messages.id``, ``tool_calls.id``,
-          or ``tool_results.tool_call_id``).
-      session_id: the parent session id; never NULL for any indexed row.
-      timestamp: ISO timestamp of the row (or its parent message, for
-          tool_results which lack their own timestamp). May be ``None`` if the
-          source JSONL didn't include one.
-      excerpt: FTS5 ``snippet()`` output. Contains :data:`SNIPPET_PRE` /
-          :data:`SNIPPET_POST` markers around matched substrings — the CLI
-          turns those into ANSI bold or strips them.
-      project: ``sessions.project_path`` (may be ``None``).
-    """
+    """One result row from `search()`."""
 
     kind: str
     id: str
@@ -65,50 +51,111 @@ class SearchHit:
     timestamp: str | None
     excerpt: str
     project: str | None
+    role: str | None = None
+    """For ``kind == "message"`` hits: the role (user/assistant/system).
+    None for tool_call and tool_result hits."""
+
+    tool_origin: str | None = None
+    """For tool_call hits: the tool name. For tool_result hits: the name of
+    the tool whose result this is. None for message hits."""
 
 
 def build_fts_query(raw: str) -> str:
-    """Convert a user query string into a safe FTS5 MATCH expression.
+    """Convert a user query into a safe FTS5 MATCH expression.
 
-    Rules:
-      - Empty / whitespace-only input → ``ValueError``.
-      - If any whitespace-separated token starts with ``+`` or ``-``, treat the
-        query as a token list. ``+token`` becomes a required phrase (implicit
-        AND) and ``-token`` becomes ``NOT "token"``.
-      - Otherwise the whole input is wrapped as a single phrase search (the
-        common case). This makes punctuation, FTS5 operators, and quotes inside
-        the user's query inert.
+    Default semantics (v2):
+      - Whitespace-separated tokens are AND'd together.
+      - Quoted strings are literal phrases.
+      - The literal token ``OR`` (any case) between two terms is a
+        disjunction. The character ``|`` is treated the same.
+      - ``-token`` excludes (FTS5 NOT).
+      - ``+token`` is accepted as a no-op (legacy syntax).
 
-    The returned expression is meant to be placed verbatim after ``MATCH ?``
-    binding. Any embedded ``"`` is escaped by doubling per FTS5 syntax.
+    The returned expression is meant to be placed verbatim after ``MATCH ?``.
+    All embedded double-quotes inside phrases are escaped by doubling.
     """
     text = raw.strip()
     if not text:
-        raise ValueError(_ERR_EMPTY_QUERY)
+        msg = _ERR_EMPTY_QUERY
+        raise ValueError(msg)
 
-    tokens = text.split()
-    has_operators = any(t.startswith(("+", "-")) and len(t) > 1 for t in tokens)
-    if not has_operators:
-        # Whole-phrase mode: the trigram tokenizer needs ≥3 chars to find any
-        # match, so a 1- or 2-char query silently returns 0 hits. Reject up-front.
-        if len(text) < _MIN_TERM_LEN:
-            raise ValueError(_ERR_SHORT_QUERY_TERM)
-        return _phrase(text)
+    tokens = _tokenize_query(text)
+    if not tokens:
+        msg = _ERR_EMPTY_QUERY
+        raise ValueError(msg)
 
     parts: list[str] = []
-    for token in tokens:
-        term = token[1:] if token.startswith(("+", "-")) and len(token) > 1 else token
-        if len(term) < _MIN_TERM_LEN:
-            raise ValueError(_ERR_SHORT_QUERY_TERM)
-        if token.startswith("-") and len(token) > 1:
-            parts.append(f"NOT {_phrase(term)}")
-        else:
-            parts.append(_phrase(term))
+    for kind, value in tokens:
+        if kind == "OR":
+            parts.append("OR")
+            continue
+        if kind == "NOT":
+            if len(value) < _MIN_TERM_LEN:
+                msg = _ERR_SHORT_QUERY_TERM
+                raise ValueError(msg)
+            parts.append(f"NOT {_phrase(value)}")
+            continue
+        # PHRASE
+        if len(value) < _MIN_TERM_LEN:
+            msg = _ERR_SHORT_QUERY_TERM
+            raise ValueError(msg)
+        parts.append(_phrase(value))
+
     return " ".join(parts)
 
 
+def _tokenize_query(text: str) -> list[tuple[str, str]]:
+    """Lex the query into ``(kind, value)`` pairs.
+
+    Kinds: ``PHRASE`` (raw text or quoted), ``OR``, ``NOT``.
+    Hand-rolled lexer (no shlex) so quote escaping is fully under our control.
+    """
+    out: list[tuple[str, str]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == '"':
+            # Quoted phrase; read until next unescaped quote.
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 1
+            value = text[i + 1 : j]
+            out.append(("PHRASE", value))
+            i = j + 1
+            continue
+        if c == "|":
+            out.append(("OR", "|"))
+            i += 1
+            continue
+        # Read until whitespace.
+        j = i
+        while j < n and not text[j].isspace():
+            j += 1
+        raw = text[i:j]
+        i = j
+
+        if raw.upper() == "OR":
+            out.append(("OR", raw))
+            continue
+        if raw.startswith("-") and len(raw) > 1:
+            out.append(("NOT", raw[1:]))
+            continue
+        if raw.startswith("+") and len(raw) > 1:
+            out.append(("PHRASE", raw[1:]))
+            continue
+        out.append(("PHRASE", raw))
+
+    return out
+
+
 def _phrase(s: str) -> str:
-    return '"' + s.replace('"', '""') + '"'
+    """Wrap a value as an FTS5 quoted phrase, escaping inner quotes."""
+    escaped = s.replace('"', '""')
+    return f'"{escaped}"'
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +166,9 @@ class _Filters:
     since_iso: str | None
     project: str | None
     tool: str | None
+    session: str | None
+    tool_exact: bool
+    snippet_tokens: int
 
 
 def search(  # noqa: PLR0913
@@ -128,7 +178,10 @@ def search(  # noqa: PLR0913
     since: timedelta | None = None,
     project: str | None = None,
     tool: str | None = None,
-    limit: int = 50,
+    session: str | None = None,
+    tool_exact: bool = False,
+    excerpt_chars: int = 600,
+    limit: int = 10,
 ) -> Iterator[SearchHit]:
     """Search across messages / tool_calls / tool_results FTS tables.
 
@@ -142,6 +195,9 @@ def search(  # noqa: PLR0913
         since_iso=_filters_since_iso(since),
         project=project,
         tool=tool,
+        session=session,
+        tool_exact=tool_exact,
+        snippet_tokens=max(1, min(64, excerpt_chars // 6)),
     )
     ro = open_ro(db.path)
     try:
@@ -182,15 +238,17 @@ def _run_search(
             timestamp=None if row["timestamp"] is None else str(row["timestamp"]),
             excerpt=str(row["excerpt"]),
             project=None if row["project"] is None else str(row["project"]),
+            role=None if row["role"] is None else str(row["role"]),
+            tool_origin=None if row["tool_origin"] is None else str(row["tool_origin"]),
         )
         for row in conn.execute(full_sql, params)
     ]
 
 
-def _snippet(table: str, col: int) -> str:
+def _snippet(table: str, col: int, tokens: int) -> str:
     return (
         f"snippet({table}, {col}, "
-        f"'{SNIPPET_PRE}', '{SNIPPET_POST}', '{SNIPPET_ELLIPSIS}', {_SNIPPET_TOKENS})"
+        f"'{SNIPPET_PRE}', '{SNIPPET_POST}', '{SNIPPET_ELLIPSIS}', {tokens})"
     )
 
 
@@ -203,10 +261,14 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     if filters.project is not None:
         where.append("s.project_path = ?")
         params.append(filters.project)
+    if filters.session is not None:
+        where.append("s.id LIKE ?")
+        params.append(filters.session + "%")
+    snip = _snippet("messages_fts", 0, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
-        f"m.timestamp AS timestamp, {_snippet('messages_fts', 0)} AS excerpt, "
-        f"s.project_path AS project"
+        f"m.timestamp AS timestamp, {snip} AS excerpt, "
+        f"s.project_path AS project, m.role AS role, NULL AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -227,13 +289,21 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     if filters.project is not None:
         where.append("s.project_path = ?")
         params.append(filters.project)
+    if filters.session is not None:
+        where.append("s.id LIKE ?")
+        params.append(filters.session + "%")
     if filters.tool is not None:
-        where.append("tc.name = ?")
-        params.append(filters.tool)
+        if filters.tool_exact:
+            where.append("tc.name = ?")
+            params.append(filters.tool)
+        else:
+            where.append("tc.name LIKE ?")
+            params.append(filters.tool + "%")
+    snip = _snippet("tool_calls_fts", 1, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
-        f"tc.started_at AS timestamp, {_snippet('tool_calls_fts', 1)} AS excerpt, "
-        f"s.project_path AS project"
+        f"tc.started_at AS timestamp, {snip} AS excerpt, "
+        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -254,13 +324,21 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
     if filters.project is not None:
         where.append("s.project_path = ?")
         params.append(filters.project)
+    if filters.session is not None:
+        where.append("s.id LIKE ?")
+        params.append(filters.session + "%")
     if filters.tool is not None:
-        where.append("tc.name = ?")
-        params.append(filters.tool)
+        if filters.tool_exact:
+            where.append("tc.name = ?")
+            params.append(filters.tool)
+        else:
+            where.append("tc.name LIKE ?")
+            params.append(filters.tool + "%")
+    snip = _snippet("tool_results_fts", 0, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
-        f"{_snippet('tool_results_fts', 0)} AS excerpt, s.project_path AS project"
+        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -272,3 +350,42 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"WHERE {' AND '.join(where)}"
     )
     return sql, params
+
+
+def extract_indices_and_clean(raw: str) -> tuple[str, list[list[int]]]:
+    """Strip SNIPPET_PRE/SNIPPET_POST sentinels and emit char-offset indices.
+
+    Returns the cleaned string (with ``[match]`` brackets in place of the
+    sentinels) and a list of ``[start, end]`` pairs pointing at the match
+    content inside the cleaned string.
+    """
+    parts: list[str] = []
+    indices: list[list[int]] = []
+    out_pos = 0
+    i = 0
+    n = len(raw)
+    while i < n:
+        if raw.startswith(SNIPPET_PRE, i):
+            i += len(SNIPPET_PRE)
+            parts.append("[")
+            out_pos += 1
+            start = out_pos
+            end_marker = raw.find(SNIPPET_POST, i)
+            if end_marker == -1:
+                # Unterminated; treat the rest as match content
+                content = raw[i:]
+                i = n
+            else:
+                content = raw[i:end_marker]
+                i = end_marker + len(SNIPPET_POST)
+            parts.append(content)
+            out_pos += len(content)
+            end = out_pos
+            parts.append("]")
+            out_pos += 1
+            indices.append([start, end])
+        else:
+            parts.append(raw[i])
+            i += 1
+            out_pos += 1
+    return "".join(parts), indices

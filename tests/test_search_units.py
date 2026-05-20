@@ -47,8 +47,8 @@ class TestBuildFtsQuery:
             build_fts_query("hi")
 
     def test_multiword_phrase_mode_wraps_whole(self) -> None:
-        # No +/- operators → whole input is one phrase. Internal whitespace stays.
-        assert build_fts_query("hello world") == '"hello world"'
+        # v2: was phrase-default, now AND-default — each token becomes a separate phrase.
+        assert build_fts_query("hello world") == '"hello" "world"'
 
     def test_required_token(self) -> None:
         assert build_fts_query("+token") == '"token"'
@@ -64,8 +64,9 @@ class TestBuildFtsQuery:
             build_fts_query("+ab -other")
 
     def test_quote_in_phrase_mode_escaped(self) -> None:
-        # Doubled `""` per FTS5 syntax.
-        assert build_fts_query('say "hi" loud') == '"say ""hi"" loud"'
+        # v2: was phrase-default, now AND-default — quoted span becomes its own PHRASE token.
+        # 'say "hello" loud' → "say" "hello" "loud" (each AND'd together).
+        assert build_fts_query('say "hello" loud') == '"say" "hello" "loud"'
 
     def test_quote_in_operator_mode_escaped(self) -> None:
         # Quotes inside an operator token are still escaped.
@@ -81,8 +82,19 @@ def _make_filters(
     since_iso: str | None = None,
     project: str | None = None,
     tool: str | None = None,
+    session: str | None = None,
+    tool_exact: bool = False,
+    snippet_tokens: int = 12,
 ) -> _Filters:
-    return _Filters(fts_match=fts_match, since_iso=since_iso, project=project, tool=tool)
+    return _Filters(
+        fts_match=fts_match,
+        since_iso=since_iso,
+        project=project,
+        tool=tool,
+        session=session,
+        tool_exact=tool_exact,
+        snippet_tokens=snippet_tokens,
+    )
 
 
 # --------------------------------------------------------------------------- branch builders
@@ -125,8 +137,13 @@ class TestBranchBuilders:
         )
         assert "tc.started_at IS NOT NULL AND tc.started_at >= ?" in sql
         assert "s.project_path = ?" in sql
+        assert "tc.name LIKE ?" in sql
+        assert params == ['"foo"', "2024-01-01T00:00:00.000Z", "/proj/x", "Bash%"]
+
+    def test_tool_call_branch_tool_exact(self) -> None:
+        sql, params = _tool_call_branch(_make_filters(tool="Bash", tool_exact=True))
         assert "tc.name = ?" in sql
-        assert params == ['"foo"', "2024-01-01T00:00:00.000Z", "/proj/x", "Bash"]
+        assert params == ['"foo"', "Bash"]
 
     def test_tool_result_branch_minimal(self) -> None:
         sql, params = _tool_result_branch(_make_filters())
@@ -149,8 +166,13 @@ class TestBranchBuilders:
         )
         assert "m.timestamp IS NOT NULL AND m.timestamp >= ?" in sql
         assert "s.project_path = ?" in sql
+        assert "tc.name LIKE ?" in sql
+        assert params == ['"foo"', "2024-01-01T00:00:00.000Z", "/proj/x", "Bash%"]
+
+    def test_tool_result_branch_tool_exact(self) -> None:
+        sql, params = _tool_result_branch(_make_filters(tool="Bash", tool_exact=True))
         assert "tc.name = ?" in sql
-        assert params == ['"foo"', "2024-01-01T00:00:00.000Z", "/proj/x", "Bash"]
+        assert params == ['"foo"', "Bash"]
 
 
 # --------------------------------------------------------------------------- _run_search
@@ -193,8 +215,8 @@ class TestRunSearchComposition:
         assert "FROM messages_fts" not in sql
         assert "FROM tool_calls_fts" in sql
         assert "FROM tool_results_fts" in sql
-        # 2 branches with (match + tool) each + LIMIT.
-        assert params == ['"foo"', "Bash", '"foo"', "Bash", 25]
+        # 2 branches with (match + tool LIKE) each + LIMIT.
+        assert params == ['"foo"', "Bash%", '"foo"', "Bash%", 25]
 
     def test_since_iso_applies_to_all_three_branches(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
@@ -223,8 +245,8 @@ class TestRunSearchComposition:
         conn, mock = _stub_conn(mocker)
         _run_search(conn, _make_filters(tool="Edit"), limit=5)
         sql, _ = mock.execute.call_args.args
-        # `tc.name = ?` appears once per tool-related branch (tool_calls + tool_results).
-        assert sql.count("tc.name = ?") == 2
+        # `tc.name LIKE ?` appears once per tool-related branch (tool_calls + tool_results).
+        assert sql.count("tc.name LIKE ?") == 2
 
     def test_limit_param_bound_last(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)

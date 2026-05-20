@@ -308,3 +308,27 @@ def test_search_limit_zero_rejected(capsys: pytest.CaptureFixture[str]) -> None:
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
     assert "--limit must be a positive integer" in err
+
+
+# ---------------------------------------------------------------------------
+# _span_to_str unit tests — regression guard for the 7d/"1w" mismatch
+# ---------------------------------------------------------------------------
+
+from convo.cli import _span_to_str  # noqa: E402
+
+
+def test_span_to_str_seven_days_returns_7d() -> None:
+    """Regression: 7d used to round-trip through _span_to_str as '1w'."""
+    assert _span_to_str(timedelta(days=7)) == "7d"
+
+
+def test_span_to_str_one_day() -> None:
+    assert _span_to_str(timedelta(days=1)) == "1d"
+
+
+def test_span_to_str_thirty_days() -> None:
+    assert _span_to_str(timedelta(days=30)) == "30d"
+
+
+def test_span_to_str_one_year() -> None:
+    assert _span_to_str(timedelta(days=365)) == "1y"

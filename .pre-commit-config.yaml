@@ -59,6 +59,18 @@ repos:
         always_run: true
         require_serial: true
 
+  - repo: local
+    hooks:
+      - id: claude-plugin-validate
+        name: claude plugin validate (manifest + command frontmatter)
+        # Walks .claude-plugin/plugin.json AND every commands/*.md frontmatter
+        # block. Requires `claude` CLI on PATH (installed via @anthropic-ai/claude-code).
+        # Catches YAML frontmatter errors that silently drop command metadata.
+        entry: claude plugin validate .claude-plugin/plugin.json
+        language: system
+        files: '^(\.claude-plugin/.*\.json|commands/.*\.md|agents/.*\.md|skills/.*\.md)$'
+        pass_filenames: false
+
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
     rev: v1.24.1
     hooks:

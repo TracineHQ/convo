@@ -1,7 +1,7 @@
 ---
 description: List recent sessions, optionally filtered by project or time span.
-argument-hint: [--project <prefix>] [--since <span>] [--limit N]
-allowed-tools: Bash(convo sessions *)
+argument-hint: "[--project <prefix>] [--since <span>] [--limit N]"
+allowed-tools: "Bash(convo sessions *)"
 disable-model-invocation: true
 ---
 

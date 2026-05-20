@@ -1,7 +1,7 @@
 ---
 description: List all indexed projects sorted by session count.
-argument-hint: [--limit N]
-allowed-tools: Bash(convo projects *)
+argument-hint: "[--limit N]"
+allowed-tools: "Bash(convo projects *)"
 disable-model-invocation: true
 ---
 

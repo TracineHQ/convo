@@ -1,0 +1,40 @@
+name: Cut release
+
+# Operator-triggered workflow that prepares a release PR for convo.
+# Delegates the file-edit logic to the reusable workflow in TracineHQ/plugins
+# so the regex invariants stay in one place and guard can call the same
+# pipeline. Once the resulting PR merges, the operator locally creates a
+# signed tag (`git tag -s vX.Y.Z`) and pushes it; the tag push fires
+# `release.yml` which handles PyPI publish + GitHub release + plugins sync.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semver X.Y.Z (no leading v, no suffix)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Print diff and exit without opening a PR'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  cut:
+    name: Cut ${{ inputs.version }}
+    # Pinned to a specific plugins SHA per zizmor's unpinned-uses policy.
+    # Bump this SHA when the reusable workflow changes (dependabot can manage).
+    uses: TracineHQ/plugins/.github/workflows/cut-release-reusable.yml@ab16c9040f7f61b8a3aecada0fb8971c0c2d3fe6  # main as of 2026-05-21
+    with:
+      version: ${{ inputs.version }}
+      target_repo: convo
+      dry_run: ${{ inputs.dry_run }}
+    # No `secrets: inherit`: the reusable workflow uses its own scoped
+    # GITHUB_TOKEN with its own declared permissions (contents:write,
+    # pull-requests:write) which is sufficient for checking out this repo
+    # and opening a PR against main.

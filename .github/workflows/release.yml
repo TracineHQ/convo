@@ -158,20 +158,36 @@ jobs:
       # uses a dedicated detect-prerelease job, but inline keeps convo's
       # simpler topology intact.
       #
-      # PLUGINS_DISPATCH_TOKEN must be a PAT or GitHub App token with
-      # `repository_dispatch` scope on TracineHQ/plugins. If the secret is
-      # missing or expired this step still succeeds (continue-on-error) so a
-      # token rotation can never block a release; the daily cron sync in
-      # plugins (`sync-marketplace-versions.yml`) will reconcile within 24h.
+      # Auth is via a GitHub App installed only on TracineHQ/plugins:
+      #   vars.PLUGINS_DISPATCH_APP_ID            -- repo variable, App ID (int)
+      #   secrets.PLUGINS_DISPATCH_APP_PRIVATE_KEY -- repo secret, PEM contents
+      # If either is unset, the mint step is skipped and the notify step exits
+      # 0 with a WARN; the daily cron sync in plugins (sync-marketplace-versions.yml)
+      # reconciles within 24h, so a key rotation can never block a release.
+      - name: Mint plugins-dispatcher app token
+        id: app-token
+        if: ${{ !contains(github.ref_name, '-') && vars.PLUGINS_DISPATCH_APP_ID != '' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          app-id: ${{ vars.PLUGINS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.PLUGINS_DISPATCH_APP_PRIVATE_KEY }}
+          owner: TracineHQ
+          repositories: plugins
+          # Scope the minted token to exactly what POST /repos/.../dispatches
+          # requires. Even if the App is installed with broader rights, the
+          # ephemeral token issued for this job will only carry contents:write.
+          permission-contents: write
       - name: Notify plugins marketplace
         if: ${{ !contains(github.ref_name, '-') }}
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ secrets.PLUGINS_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -eu
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "WARN: PLUGINS_DISPATCH_TOKEN not set; skipping dispatch."
+            echo "WARN: plugins-dispatcher app token unavailable; skipping dispatch."
+            echo "Check that PLUGINS_DISPATCH_APP_ID (var) and PLUGINS_DISPATCH_APP_PRIVATE_KEY (secret) are set."
             echo "The daily cron in TracineHQ/plugins will sync this version within 24h."
             exit 0
           fi

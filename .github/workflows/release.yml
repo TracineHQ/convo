@@ -148,3 +148,36 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: dist/*
           fail_on_unmatched_files: true
+      # Notify the unified marketplace (TracineHQ/plugins) that a new stable
+      # release shipped. `sync-on-release.yml` in plugins receives this
+      # dispatch and opens an auto-merge PR bumping marketplace.json's
+      # `version` field for convo within minutes. Skipped for prereleases --
+      # the marketplace tracks production tags only. Convo's release.yml
+      # detects prereleases inline via the hyphen-in-tag heuristic (same
+      # rule used for the GitHub Release `prerelease` flag above); guard
+      # uses a dedicated detect-prerelease job, but inline keeps convo's
+      # simpler topology intact.
+      #
+      # PLUGINS_DISPATCH_TOKEN must be a PAT or GitHub App token with
+      # `repository_dispatch` scope on TracineHQ/plugins. If the secret is
+      # missing or expired this step still succeeds (continue-on-error) so a
+      # token rotation can never block a release; the daily cron sync in
+      # plugins (`sync-marketplace-versions.yml`) will reconcile within 24h.
+      - name: Notify plugins marketplace
+        if: ${{ !contains(github.ref_name, '-') }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.PLUGINS_DISPATCH_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "WARN: PLUGINS_DISPATCH_TOKEN not set; skipping dispatch."
+            echo "The daily cron in TracineHQ/plugins will sync this version within 24h."
+            exit 0
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          gh api repos/TracineHQ/plugins/dispatches \
+            -f event_type=plugin-released \
+            -f client_payload[plugin]=convo \
+            -f "client_payload[version]=${version}"
+          echo "Dispatched plugin-released event to TracineHQ/plugins (convo ${version})"

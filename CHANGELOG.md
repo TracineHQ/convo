@@ -9,13 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.1] - 2026-05-24
 
-- Pass App credentials to cut-release reusable and bump SHA (#29)
-- Bump plugins cut-release-reusable SHA for changelog filter fixes (#27)
-- Bump plugins cut-release-reusable SHA for auto-changelog (#25)
-- Notify plugins via GitHub App token instead of long-lived PAT (#24)
-- Add cut-release dispatcher + plugins notify (#23)
-- Expand skill tool surface, harden hook, document sqlite requirement (#22)
-- Wire claude plugin validate into CI + pre-commit (#21)
+- Expand skill tool surface, harden hook timeout, document sqlite requirement (#22)
 
 ## [2.0.0] - 2026-05-20
 

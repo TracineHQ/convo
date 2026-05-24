@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tracine-convo"
-version = "2.0.0"
+version = "2.0.1"
 description = "Global conversation index and query tool for Claude Code. SQLite-backed full-text search, tool-call analytics, session inspection."
 readme = "README.md"
 license = "Apache-2.0"

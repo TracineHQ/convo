@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-24
+
+- Bump plugins cut-release-reusable SHA for auto-changelog (#25)
+- Notify plugins via GitHub App token instead of long-lived PAT (#24)
+- Add cut-release dispatcher + plugins notify (#23)
+- Expand skill tool surface, harden hook, document sqlite requirement (#22)
+- Wire claude plugin validate into CI + pre-commit (#21)
+- Fix _span_to_str + add coverage tests before v2.0.0 tag (#20)
+- convo v2.0.0: agent-experience redesign (#19)
+- ci: bump actions/setup-node from 4.4.0 to 6.4.0 (#18)
+- ci: bump github/codeql-action from 4.35.4 to 4.35.5 (#17)
+- ci: bump zizmorcore/zizmor-action from 0.5.3 to 0.5.6 (#16)
+
 ## [2.0.0] - 2026-05-20
 
 ### Breaking changes

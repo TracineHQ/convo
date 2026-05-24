@@ -29,12 +29,11 @@ jobs:
     name: Cut ${{ inputs.version }}
     # Pinned to a specific plugins SHA per zizmor's unpinned-uses policy.
     # Bump this SHA when the reusable workflow changes (dependabot can manage).
-    uses: TracineHQ/plugins/.github/workflows/cut-release-reusable.yml@9406990a620305acf5db2568bc3317946f00cd08  # main as of 2026-05-23
+    uses: TracineHQ/plugins/.github/workflows/cut-release-reusable.yml@a44a1817ac3b6e8262b5f071b907465f081ad7ac  # main as of 2026-05-24
     with:
       version: ${{ inputs.version }}
       target_repo: convo
       dry_run: ${{ inputs.dry_run }}
-    # No `secrets: inherit`: the reusable workflow uses its own scoped
-    # GITHUB_TOKEN with its own declared permissions (contents:write,
-    # pull-requests:write) which is sufficient for checking out this repo
-    # and opening a PR against main.
+      app_id: ${{ vars.PLUGINS_DISPATCH_APP_ID }}
+    secrets:
+      app_private_key: ${{ secrets.PLUGINS_DISPATCH_APP_PRIVATE_KEY }}

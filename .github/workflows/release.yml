@@ -159,18 +159,18 @@ jobs:
       # simpler topology intact.
       #
       # Auth is via a GitHub App installed only on TracineHQ/plugins:
-      #   vars.PLUGINS_DISPATCH_APP_ID            -- repo variable, App ID (int)
+      #   vars.PLUGINS_DISPATCH_CLIENT_ID          -- repo variable, App client ID
       #   secrets.PLUGINS_DISPATCH_APP_PRIVATE_KEY -- repo secret, PEM contents
       # If either is unset, the mint step is skipped and the notify step exits
       # 0 with a WARN; the daily cron sync in plugins (sync-marketplace-versions.yml)
       # reconciles within 24h, so a key rotation can never block a release.
       - name: Mint plugins-dispatcher app token
         id: app-token
-        if: ${{ !contains(github.ref_name, '-') && vars.PLUGINS_DISPATCH_APP_ID != '' }}
+        if: ${{ !contains(github.ref_name, '-') && vars.PLUGINS_DISPATCH_CLIENT_ID != '' }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          app-id: ${{ vars.PLUGINS_DISPATCH_APP_ID }}
+          client-id: ${{ vars.PLUGINS_DISPATCH_CLIENT_ID }}
           private-key: ${{ secrets.PLUGINS_DISPATCH_APP_PRIVATE_KEY }}
           owner: TracineHQ
           repositories: plugins
@@ -187,7 +187,7 @@ jobs:
           set -eu
           if [ -z "${GH_TOKEN:-}" ]; then
             echo "WARN: plugins-dispatcher app token unavailable; skipping dispatch."
-            echo "Check that PLUGINS_DISPATCH_APP_ID (var) and PLUGINS_DISPATCH_APP_PRIVATE_KEY (secret) are set."
+            echo "Check that PLUGINS_DISPATCH_CLIENT_ID (var) and PLUGINS_DISPATCH_APP_PRIVATE_KEY (secret) are set."
             echo "The daily cron in TracineHQ/plugins will sync this version within 24h."
             exit 0
           fi

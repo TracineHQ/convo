@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.0.1] - 2026-05-24
 
 - Expand skill tool surface, harden hook timeout, document sqlite requirement (#22)
+- Wire claude plugin validate into CI + pre-commit (#21)
 
 ## [2.0.0] - 2026-05-20
 

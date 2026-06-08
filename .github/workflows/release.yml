@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           # Cache disabled in the release workflow to avoid cache-poisoning
           # writes from a tag-triggered run; CI populates the cache on every
@@ -220,7 +220,7 @@ jobs:
           assert convo.__version__ == m.version('tracine-convo')
           print('OK', convo.__version__)
           "
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39  # v8.2.0
         with:
           enable-cache: false
       - name: Run full pytest suite against the TestPyPI-installed package

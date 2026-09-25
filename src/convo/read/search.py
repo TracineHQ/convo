@@ -218,7 +218,10 @@ def search(  # noqa: PLR0913
         except sqlite3.OperationalError as exc:
             raise ValueError(_ERR_INVALID_QUERY.format(reason=exc)) from exc
         finally:
-            ro.execute("ROLLBACK")
+            # SQLite may already have rolled back on some errors; a second ROLLBACK
+            # would raise and mask the real exception.
+            if ro.in_transaction:
+                ro.execute("ROLLBACK")
     finally:
         ro.close()
     yield from rows

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
 from convo.read.filters import since_iso as _filters_since_iso
+from convo.read.inspect import MESSAGE_ORDER_BY
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -61,6 +62,11 @@ class SearchHit:
     tool_origin: str | None = None
     """For tool_call hits: the tool name. For tool_result hits: the name of
     the tool whose result this is. None for message hits."""
+
+    position: int | None = None
+    """1-indexed message number in the session, as ``convo inspect`` numbers it
+    (``--from-message/--to-message``). For tool_call hits, the message that made
+    the call. None for tool_result hits: the output is not shown by inspect."""
 
 
 def build_fts_query(raw: str) -> str:
@@ -230,7 +236,18 @@ def _run_search(
     params: list[object] = []
     for _, p in parts:
         params.extend(p)
-    full_sql = f"SELECT * FROM ({union_sql}) ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?"  # noqa: S608
+    # `position` is computed in the same statement, only for the sessions of
+    # the returned hits, under the ordering `convo inspect` numbers messages by.
+    full_sql = (
+        f"WITH hits AS (SELECT * FROM ({union_sql}) "  # noqa: S608
+        "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?), "
+        "ranked AS (SELECT id, ROW_NUMBER() OVER "
+        f"(PARTITION BY session_id ORDER BY {MESSAGE_ORDER_BY}) AS position "
+        "FROM messages WHERE session_id IN (SELECT session_id FROM hits)) "
+        "SELECT hits.*, ranked.position FROM hits "
+        "LEFT JOIN ranked ON ranked.id = hits.msg_id "
+        "ORDER BY (hits.timestamp IS NULL), hits.timestamp DESC"
+    )
     params.append(int(limit))
 
     return [
@@ -243,6 +260,7 @@ def _run_search(
             project=None if row["project"] is None else str(row["project"]),
             role=None if row["role"] is None else str(row["role"]),
             tool_origin=None if row["tool_origin"] is None else str(row["tool_origin"]),
+            position=None if row["position"] is None else int(row["position"]),
         )
         for row in conn.execute(full_sql, params)
     ]
@@ -271,7 +289,8 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
         f"m.timestamp AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project, m.role AS role, NULL AS tool_origin"
+        f"s.project_path AS project, m.role AS role, NULL AS tool_origin, "
+        f"m.id AS msg_id"
     )
     sql = (
         f"{select_clause} "
@@ -306,7 +325,8 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
         f"tc.started_at AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin"
+        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
+        f"tc.message_id AS msg_id"
     )
     sql = (
         f"{select_clause} "
@@ -341,7 +361,8 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
-        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin"
+        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
+        f"NULL AS msg_id"
     )
     sql = (
         f"{select_clause} "

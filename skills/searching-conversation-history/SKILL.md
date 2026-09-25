@@ -81,22 +81,21 @@ convo inspect <session-id-prefix> --timeline
 
 ## Read a message in full
 
-Search excerpts and inspect previews are clipped (search: `--excerpt-chars`,
-default 200; inspect: 200 chars per message). To quote a message verbatim:
-
-1. Locate it: `convo search "<terms>"` gives the session ID.
-2. Find its number: page through the session 50 messages at a time
-   (`convo inspect <session-id-prefix> --from-message 1 --to-message 50`, then
-   51-100, ...); messages are numbered by position. Prefer paging near the hit's
-   timestamp over `--full`, which prints every message of a long session.
-3. Read it whole:
+Search excerpts are short (about 64 characters, the FTS5 snippet maximum) and
+inspect clips messages to 200 characters. To quote a hit verbatim, use its
+`position`, the message number `convo inspect` uses:
 
 ```bash
-convo inspect <session-id-prefix> --from-message N --to-message N --max-chars 0
+convo search "<terms>" --json
+# take hits[].session_id and hits[].position (P), then:
+convo inspect <session_id> --from-message P --to-message P --max-chars 0
 ```
 
-Widen the range (`--from-message N --to-message M`) for surrounding turns.
-`--max-chars 0` also shows full tool-call input.
+Prose search output shows the same number as `position: P`. A `tool_call`
+hit's position is the message that made the call; `tool_result` hits have no
+position (inspect does not show tool output). Widen the range
+(`--from-message P --to-message Q`) for surrounding turns. `--max-chars 0`
+also shows full tool-call input.
 
 ## Narrow the output with --fields
 
@@ -124,8 +123,8 @@ envelope shape is `{"schema_version": 2, "<command>": {...}}`. See
 
 1. Run the most specific command first (search > summary > sessions).
 2. Quote matching excerpts with session ID (first 8 chars) and timestamp.
-3. Offer `convo inspect <prefix>` for the full transcript if the user wants more;
-   for a verbatim quote use `--from-message N --to-message N --max-chars 0`.
+3. For a verbatim quote, use the hit's position:
+   `convo inspect <session_id> --from-message P --to-message P --max-chars 0`.
 4. If `convo` is not on PATH or the DB is empty, tell the user to install
    convo (`pipx install tracine-convo`) and run `convo index`.
 
@@ -139,9 +138,9 @@ User: "Did I ever fix that thing where the auth token kept expiring?"
 convo search "auth token expir" --since 90d --limit 5
 ```
 
-Quote the matching excerpts and offer `convo inspect <prefix>` for the full
-transcript, or `convo inspect <prefix> --from-message N --to-message N
---max-chars 0` for one message verbatim.
+Quote the matching excerpts. For one message verbatim, rerun with `--json` and
+pass the hit's `session_id` and `position` to
+`convo inspect <session_id> --from-message P --to-message P --max-chars 0`.
 
 ### Example 2: weekly summary
 

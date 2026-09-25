@@ -169,7 +169,9 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   [--excerpt-chars N] [--json]`
   -- FTS5 search over messages, tool calls, and tool results. `--excerpt-chars`
   sets the excerpt width, up to the FTS5 snippet maximum of about 64 characters
-  (the default); use `convo inspect` for full text. `SPAN` accepts
+  (the default). Each hit reports its message `position`; pass it to
+  `convo inspect <session> --from-message P --to-message P --max-chars 0` for
+  the full text. `SPAN` accepts
   `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefix exclusion (`-excluded`);
   `+required` AND-syntax is not supported in v2.
 - `convo inspect <session-id> | --latest [--json] [--full] [--timeline]

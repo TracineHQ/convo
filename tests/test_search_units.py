@@ -315,4 +315,4 @@ def test_wide_excerpt_raises_when_row_missing(mocker: MockerFixture) -> None:
     conn, mock = _stub_conn(mocker)
     mock.execute.return_value = mocker.Mock(fetchone=mocker.Mock(return_value=None))
     with pytest.raises(RuntimeError, match="messages_fts row 7 for a search hit is missing"):
-        _wide_excerpt(conn, _make_filters(), "message", 7)
+        _wide_excerpt(conn, _make_filters(), "message", 7, "fallback")

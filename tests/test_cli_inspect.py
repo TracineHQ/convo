@@ -557,6 +557,20 @@ def test_inspect_range_open_ends_and_clamp(
     assert inner["truncated"] is False
 
 
+@pytest.mark.parametrize(("n", "truncated"), [(50, False), (51, True)])
+def test_inspect_cap_boundary(
+    many: Path,
+    capsys: pytest.CaptureFixture[str],
+    n: int,
+    truncated: bool,  # noqa: FBT001
+) -> None:
+    """Exactly 50 messages is not truncated; 51 is."""
+    _populate_many(many, n)
+    inner = _inspect_json([_MANY_SID], capsys)["inspect"]
+    assert len(inner["messages"]) == 50
+    assert inner["truncated"] is truncated
+
+
 @pytest.mark.parametrize("timeline", [False, True])
 @pytest.mark.parametrize(
     ("argv", "message"),

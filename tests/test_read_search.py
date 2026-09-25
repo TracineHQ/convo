@@ -493,6 +493,16 @@ def test_excerpt_chars_small_width_is_close_to_request(db: Database) -> None:
     assert 35 <= len(_plain(hit.excerpt)) <= 45
 
 
+def test_wide_excerpt_ignores_marker_strings_in_stored_text(db: Database) -> None:
+    """Stored text containing the marker strings must not move the window to a fake hit."""
+    content = f"x {SNIPPET_PRE}fake{SNIPPET_POST} y " + "C" * 300 + " zebracorn " + "D" * 300
+    _seed_long_message(db, content)
+    (wide,) = search(db, "zebracorn", excerpt_chars=2000)
+    assert f"{SNIPPET_PRE}zebracorn{SNIPPET_POST}" in wide.excerpt
+    (narrow,) = search(db, "zebracorn", excerpt_chars=64)
+    assert wide.excerpt == narrow.excerpt
+
+
 def test_wide_excerpt_reads_the_right_row_for_every_kind(db: Database) -> None:
     """The highlight() re-read maps each hit kind to its own FTS row."""
     _seed_search_corpus(db)

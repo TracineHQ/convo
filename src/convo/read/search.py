@@ -255,7 +255,9 @@ def _run_search(
             session_id=str(row["session_id"]),
             timestamp=None if row["timestamp"] is None else str(row["timestamp"]),
             excerpt=(
-                _wide_excerpt(conn, filters, str(row["kind"]), int(row["fts_rowid"]))
+                _wide_excerpt(
+                    conn, filters, str(row["kind"]), int(row["fts_rowid"]), str(row["excerpt"])
+                )
                 if wide
                 else str(row["excerpt"])
             ),
@@ -277,20 +279,27 @@ _FTS_SOURCES: dict[str, tuple[str, int]] = {
 }
 
 
-def _wide_excerpt(conn: sqlite3.Connection, filters: _Filters, kind: str, rowid: int) -> str:
+def _wide_excerpt(
+    conn: sqlite3.Connection, filters: _Filters, kind: str, rowid: int, fallback: str
+) -> str:
     """Excerpt of ``excerpt_chars`` characters for one hit, via ``highlight()``.
 
     Runs once per returned hit (bounded by ``--limit``), not per match, inside
     the caller's read transaction, so the row the union query matched is there.
+    Text that itself contains the marker strings would make the window centre
+    on a fake hit, so such rows keep the ``snippet()`` excerpt (``fallback``).
     """
     table, col = _FTS_SOURCES[kind]
     row = conn.execute(
-        f"SELECT highlight({table}, {col}, ?, ?) FROM {table} "  # noqa: S608
-        f"WHERE {table} MATCH ? AND rowid = ?",
+        f"SELECT highlight({table}, {col}, ?, ?), highlight({table}, {col}, '', '') "  # noqa: S608
+        f"FROM {table} WHERE {table} MATCH ? AND rowid = ?",
         (SNIPPET_PRE, SNIPPET_POST, filters.fts_match, rowid),
     ).fetchone()
     if row is None:
         raise RuntimeError(_ERR_MISSING_ROW.format(table=table, rowid=rowid))
+    plain = str(row[1])
+    if SNIPPET_PRE in plain or SNIPPET_POST in plain:
+        return fallback
     return window_highlighted(str(row[0]), filters.excerpt_chars)
 
 

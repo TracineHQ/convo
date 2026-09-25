@@ -318,6 +318,8 @@ def _excerpt_body(excerpt: str) -> str:
     [
         ([], 200),  # default
         (["--excerpt-chars", "2000"], 2000),  # wider than snippet()'s 64-token cap
+        (["--excerpt-chars", "65"], 65),  # first width past the cap: must take the wide path
+        (["--excerpt-chars", "80"], 80),
         (["--excerpt-chars", "40"], 40),  # snippet() path
     ],
 )

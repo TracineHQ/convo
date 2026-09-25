@@ -287,8 +287,13 @@ def _build_events(
     msg_rows: list[object],
     tc_rows: list[object],
     first_ts: datetime | None,
+    max_chars: int,
 ) -> list[TimelineEvent]:
-    """Convert DB rows to a flat ordered list of TimelineEvent."""
+    """Convert DB rows to a flat ordered list of TimelineEvent.
+
+    Message and tool-call input previews are clipped to ``max_chars`` (0 = no
+    limit).
+    """
     by_message: dict[str, list[tuple[object, str, str]]] = {}
     for tc in tc_rows:
         row = tc  # sqlite3.Row
@@ -302,17 +307,20 @@ def _build_events(
         row_m = m  # sqlite3.Row
         mid = str(row_m["id"])  # type: ignore[index]
         content = "" if row_m["content"] is None else str(row_m["content"])  # type: ignore[index]
-        preview = content.replace("\n", " ")[:_PREVIEW_LEN]
+        content = content.replace("\n", " ")
+        clipped = 0 < max_chars < len(content)
         events.append(
             TimelineEvent(
                 offset_seconds=_ts_offset(row_m["timestamp"], first_ts),  # type: ignore[index]
                 role=str(row_m["role"]),  # type: ignore[index]
                 tool=None,
-                preview=preview,
+                preview=content[:max_chars] if clipped else content,
+                truncated=clipped,
             )
         )
         for tc_ts, tc_name, tc_input in by_message.get(mid, []):
-            tc_preview = tc_input.replace("\n", " ")[:_PREVIEW_LEN]
+            tc_text = tc_input.replace("\n", " ")
+            tc_clipped = 0 < max_chars < len(tc_text)
             fallback_ts = row_m["timestamp"]  # type: ignore[index]
             events.append(
                 TimelineEvent(
@@ -321,7 +329,8 @@ def _build_events(
                     ),
                     role="tool_call",
                     tool=tc_name,
-                    preview=tc_preview,
+                    preview=tc_text[:max_chars] if tc_clipped else tc_text,
+                    truncated=tc_clipped,
                 )
             )
     return events
@@ -333,11 +342,13 @@ def build_timeline(
     *,
     from_message: int | None = None,
     to_message: int | None = None,
+    max_chars: int = _PREVIEW_LEN,
 ) -> tuple[list[TimelineEvent], dict[str, Any]]:
     """Return ``(events, meta)`` for ``convo inspect --timeline``.
 
     ``meta`` keys: ``project``, ``duration_seconds``, ``message_count``,
-    ``tool_call_count``.
+    ``tool_call_count``. ``max_chars`` clips message and tool-call previews
+    (0 = no limit).
     """
     ro = open_ro(db.path)
     try:
@@ -377,7 +388,7 @@ def build_timeline(
     if first_ts is None:
         first_ts = _parse_ts(header_row["started_at"])
 
-    events = _build_events(msg_rows, tc_rows, first_ts)
+    events = _build_events(msg_rows, tc_rows, first_ts, max_chars)
 
     if from_message is not None or to_message is not None:
         grouped = _group_by_message(events)

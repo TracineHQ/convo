@@ -187,6 +187,8 @@ class TimelineEvent:
     role: str
     tool: str | None
     preview: str
+    truncated: bool = False
+    """True when ``preview`` was clipped by ``--max-chars``."""
 
 
 def render_timeline(  # noqa: PLR0913

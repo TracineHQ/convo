@@ -166,20 +166,67 @@ When `total=0` a `"suggestions"` key may appear:
         "content": "How do I fix the kafka lag?",
         "truncated": false,
         "tool_calls": [
-          {"id": "tc_001", "name": "Bash", "input_json": "{...}", "started_at": "..."}
+          {"id": "tc_001", "name": "Bash", "input_json": "{...}", "truncated": false, "started_at": "..."}
         ]
       }
     ],
     "truncated": false,
-    "total_messages": 24
+    "total_messages": 24,
+    "from_message": null,
+    "to_message": null
   }
 }
 ```
 
 `truncated` is `true` when the message list was capped (default cap: 50
 messages; `--full` removes the cap). `messages[].truncated` is `true` when
-that message's `content` was clipped at the preview limit (200 chars in JSON
-mode; `--full` has no effect on per-message truncation in `--json` mode).
+that message's `content` was clipped at the `--max-chars` limit (default 200;
+`--max-chars 0` never clips; `--full` has no effect on per-message truncation).
+Clipped content ends in `...`. `tool_calls[].input_json` is complete by
+default; an explicit `--max-chars N` clips it the same way (so it may no
+longer parse as JSON) and sets `tool_calls[].truncated`.
+
+`--from-message N` / `--to-message M` restrict `messages` to that 1-indexed,
+inclusive range of the session; `from_message` / `to_message` echo them (or
+`null`). An end past the last message is clamped; `total_messages` still
+counts the whole session. A reversed range or `--from-message` past the last
+message returns the error envelope.
+
+`inspect --timeline --json` returns a timeline body under the same key:
+
+```json
+{
+  "schema_version": 2,
+  "inspect": {
+    "session": {
+      "id": "session-id-prefix-here",
+      "started_at": "2026-05-10T09:14:00.000Z",
+      "ended_at": "2026-05-10T09:45:00.000Z",
+      "project_path": "/workspace/myapp",
+      "model": "claude-sonnet-4-6",
+      "git_branch": "main"
+    },
+    "timeline": {
+      "duration_seconds": 1860,
+      "message_count": 24,
+      "tool_call_count": 7,
+      "from_message": null,
+      "to_message": null,
+      "events": [
+        {"offset_seconds": 0, "role": "user", "tool": null, "preview": "How do I fix the kafka lag?", "truncated": false},
+        {"offset_seconds": 12, "role": "tool_call", "tool": "Bash", "preview": "{...}", "truncated": false}
+      ]
+    }
+  }
+}
+```
+
+`session` has the same shape as in the normal view. `events[].role` is a
+message role or `"tool_call"`; `tool` is set only for `tool_call` events.
+Every `preview` (message content or tool-call input JSON) is clipped to
+`--max-chars` (default 80, no `...` suffix; `0` never clips) and keeps its
+newlines; `truncated` is `true` when it was clipped. `from_message` /
+`to_message` echo the requested range, or `null`.
 
 ---
 

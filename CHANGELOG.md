@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `convo inspect --max-chars N` sets the per-message content and tool-call
+  input limit (defaults unchanged: 200 content / 80 tool input, 80 for both
+  with `--timeline`); `--max-chars 0` returns full text.
+- `convo inspect --json` echoes `from_message`/`to_message` and adds
+  `tool_calls[].truncated`.
+
+### Changed
+
+- `convo search --excerpt-chars` defaults to 200 (was a nominal 600 that
+  produced ~70-character excerpts); excerpts are now ~200 characters.
+  `--excerpt-chars 64` approximates the old size. Negative values exit 2.
+
+### Fixed
+
+- `convo inspect --from-message/--to-message` now apply without `--timeline`
+  and reject 0, negative, reversed, and past-the-end ranges with an error.
+- `convo inspect --timeline --json` emits a JSON envelope (with the full
+  session header) instead of prose.
+- `convo search --excerpt-chars` was capped at ~70 characters regardless of
+  the value passed.
+
 ## [2.0.1] - 2026-05-24
 
 - Expand skill tool surface, harden hook timeout, document sqlite requirement (#22)

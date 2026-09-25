@@ -165,15 +165,20 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   everything.
 - `convo info [--json]` -- schema version, row counts per table, last index
   time, top 5 projects by session count, snapshot directory size.
-- `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N] [--json]`
-  -- FTS5 search over messages, tool calls, and tool results. `SPAN` accepts
+- `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N]
+  [--excerpt-chars N] [--json]`
+  -- FTS5 search over messages, tool calls, and tool results. `--excerpt-chars`
+  sets the approximate excerpt width (default 200). `SPAN` accepts
   `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefix exclusion (`-excluded`);
   `+required` AND-syntax is not supported in v2.
-- `convo inspect <session-id> | --latest [--json] [--full]` -- session
-  timeline with inline tool calls. Accepts a UUID prefix; ambiguous prefixes
-  list candidates. `--latest` resolves the most recently started session.
-  `--full` dumps message content verbatim (default truncates to 200 chars per
-  message).
+- `convo inspect <session-id> | --latest [--json] [--full] [--timeline]
+  [--from-message N] [--to-message M] [--max-chars N]` -- session timeline
+  with inline tool calls. Accepts a UUID prefix; ambiguous prefixes list
+  candidates. `--latest` resolves the most recently started session. `--full`
+  lifts the 50-message cap. `--from-message`/`--to-message` select a 1-indexed
+  inclusive range. `--max-chars` sets the per-message content and tool-call
+  input limit (defaults 200 and 80, or 80 with `--timeline`); `--max-chars 0`
+  shows full text.
 - `convo snapshots [--json]` -- list snapshot files with `name | size | age`
   columns, newest first.
 - `convo backup <dest>` -- snapshot the database to an explicit path (`VACUUM INTO`)

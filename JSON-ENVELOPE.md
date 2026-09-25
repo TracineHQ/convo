@@ -229,6 +229,7 @@ message returns the error envelope.
       "to_message": null,
       "events": [
         {"offset_seconds": 0, "role": "user", "tool": null, "preview": "How do I fix the kafka lag?", "truncated": false, "position": 1},
+        {"offset_seconds": 9, "role": "assistant", "tool": null, "preview": "Checking consumer lag.", "truncated": false, "position": 2},
         {"offset_seconds": 12, "role": "tool_call", "tool": "Bash", "preview": "{...}", "truncated": false, "position": 2}
       ]
     }

@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events, and on `search` hits (message hits; the calling message for
   tool_call hits; null for tool_result hits). Quote any hit in full with
   `convo inspect <session_id> --from-message P --to-message P --max-chars 0`.
+  Messages that tie on both `seq` and `timestamp` (only possible across two
+  source files for one session) are now ordered by id instead of insertion
+  order, so numbering is deterministic.
 
 ### Fixed
 

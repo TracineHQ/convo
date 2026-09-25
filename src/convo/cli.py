@@ -92,6 +92,7 @@ TOOLS_ENVELOPE_VERSION: int = 2
 SESSIONS_ENVELOPE_VERSION: int = 2
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
+_TIMELINE_PREVIEW_CHARS: int = 80
 _INSPECT_TOOL_INPUT_PREVIEW: int = 80
 _UNKNOWN_PROJECT_LABEL: str = "(unknown)"
 _BYTES_PER_KIB: int = 1024
@@ -126,6 +127,24 @@ def _positive_int(s: str) -> int:
         msg = "--limit must be a positive integer"
         raise argparse.ArgumentTypeError(msg)
     return n
+
+
+def _non_negative_int(msg: str) -> Callable[[str], int]:
+    """Build an argparse type that accepts 0 or a positive integer.
+
+    Rejections raise `argparse.ArgumentTypeError(msg)` so argparse exits 2.
+    """
+
+    def parse(s: str) -> int:
+        try:
+            n = int(s)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(msg) from exc
+        if n < 0:
+            raise argparse.ArgumentTypeError(msg)
+        return n
+
+    return parse
 
 
 def _version_string() -> str:
@@ -452,11 +471,14 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
             "session-id may be a full id or any unique prefix.\n"
             "Default: output is capped at 50 messages; pass --full to disable\n"
             "the cap and return all messages in the session.\n"
+            f"Message content is clipped to {_INSPECT_PREVIEW_CHARS} code points\n"
+            f"({_TIMELINE_PREVIEW_CHARS} with --timeline); --max-chars 0 shows it in full.\n"
             "\n"
             "Examples:\n"
             "  convo inspect abc123\n"
             "  convo inspect --latest\n"
             "  convo inspect abc123 --full --json\n"
+            "  convo inspect abc123 --max-chars 0\n"
         ),
     )
     target = inspect_p.add_mutually_exclusive_group(required=True)
@@ -499,6 +521,18 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         default=None,
         dest="to_message",
         help="End at the Nth message (1-indexed, inclusive).",
+    )
+    inspect_p.add_argument(
+        "--max-chars",
+        type=_non_negative_int("--max-chars must be 0 (no limit) or a positive integer"),
+        default=None,
+        dest="max_chars",
+        help=(
+            "Clip each message's content and tool-call input to N code points "
+            f"(default: {_INSPECT_PREVIEW_CHARS} for content, {_INSPECT_TOOL_INPUT_PREVIEW} "
+            "for tool input, which is unclipped in --json; "
+            f"{_TIMELINE_PREVIEW_CHARS} for both with --timeline). 0 means no limit."
+        ),
     )
 
 
@@ -1113,11 +1147,13 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
         else:
             resolved = resolve_session_id(db, args.session_id)
         if getattr(args, "timeline", False):
+            max_chars = _TIMELINE_PREVIEW_CHARS if args.max_chars is None else args.max_chars
             events, meta = build_timeline(
                 db,
                 resolved,
                 from_message=args.from_message,
                 to_message=args.to_message,
+                max_chars=max_chars,
             )
             out = render_timeline(
                 session_id=resolved,
@@ -1132,14 +1168,23 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
             sys.stdout.write(out + "\n")
             return 0
         view = inspect_session(db, resolved, full=bool(args.full))
+    explicit: int | None = args.max_chars
+    content_chars = _INSPECT_PREVIEW_CHARS if explicit is None else explicit
     if args.as_json:
-        print(json.dumps(_build_inspect_envelope(view)))
+        # JSON keeps tool input whole unless --max-chars is given.
+        tool_chars = 0 if explicit is None else explicit
+        print(json.dumps(_build_inspect_envelope(view, content_chars, tool_chars)))
     else:
-        _print_inspect(view)
+        tool_chars = _INSPECT_TOOL_INPUT_PREVIEW if explicit is None else explicit
+        _print_inspect(view, content_chars, tool_chars)
     return 0
 
 
-def _build_inspect_envelope(view: SessionView) -> dict[str, object]:
+def _build_inspect_envelope(
+    view: SessionView,
+    content_chars: int,
+    tool_chars: int,
+) -> dict[str, object]:
     return {
         "schema_version": INSPECT_ENVELOPE_VERSION,
         "inspect": {
@@ -1151,36 +1196,37 @@ def _build_inspect_envelope(view: SessionView) -> dict[str, object]:
                 "model": view.model,
                 "git_branch": view.git_branch,
             },
-            "messages": [_message_to_dict(m) for m in view.messages],
+            "messages": [_message_to_dict(m, content_chars, tool_chars) for m in view.messages],
             "truncated": view.truncated,
             "total_messages": view.total_messages,
         },
     }
 
 
-def _message_to_dict(msg: MessageView) -> dict[str, object]:
-    content = _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
+def _message_to_dict(msg: MessageView, content_chars: int, tool_chars: int) -> dict[str, object]:
     return {
         "id": msg.id,
         "role": msg.role,
         "timestamp": msg.timestamp,
-        "content": content,
-        "truncated": len(msg.content) > _INSPECT_PREVIEW_CHARS,
-        "tool_calls": [_tool_call_to_dict(tc) for tc in msg.tool_calls],
+        "content": _truncate(msg.content, content_chars),
+        "truncated": 0 < content_chars < len(msg.content),
+        "tool_calls": [_tool_call_to_dict(tc, tool_chars) for tc in msg.tool_calls],
     }
 
 
-def _tool_call_to_dict(tc: ToolCallView) -> dict[str, object]:
+def _tool_call_to_dict(tc: ToolCallView, tool_chars: int) -> dict[str, object]:
     return {
         "id": tc.id,
         "name": tc.name,
-        "input_json": tc.input_json,
+        "input_json": _truncate(tc.input_json, tool_chars),
+        "truncated": 0 < tool_chars < len(tc.input_json),
         "started_at": tc.started_at,
     }
 
 
 def _truncate(s: str, limit: int) -> str:
-    if len(s) <= limit:
+    """Clip ``s`` to ``limit`` code points plus ``...``; ``limit=0`` means no limit."""
+    if limit == 0 or len(s) <= limit:
         return s
     return s[:limit] + "..."
 
@@ -1199,7 +1245,7 @@ def _role_icon(role: str) -> str:
     return f"{role}:"
 
 
-def _print_inspect(view: SessionView) -> None:
+def _print_inspect(view: SessionView, content_chars: int, tool_chars: int) -> None:
     print(f"session   {view.id}")
     print(f"started   {view.started_at or '(unknown)'}")
     print(f"ended     {view.ended_at or '(unknown)'}")
@@ -1212,21 +1258,21 @@ def _print_inspect(view: SessionView) -> None:
         return
     print(f"messages  ({view.total_messages} total)")
     for idx, msg in enumerate(view.messages, start=1):
-        _print_message(idx, msg)
+        _print_message(idx, msg, content_chars, tool_chars)
     if view.truncated:
         print(
             f"(showing {len(view.messages)} of {view.total_messages} messages; use --full for all)"
         )
 
 
-def _print_message(idx: int, msg: MessageView) -> None:
+def _print_message(idx: int, msg: MessageView, content_chars: int, tool_chars: int) -> None:
     icon = _role_icon(msg.role)
     ts = msg.timestamp or "(no ts)"
-    content = _truncate(msg.content, _INSPECT_PREVIEW_CHARS)
+    content = _truncate(msg.content, content_chars)
     content = content.replace("\n", " ").replace("\r", " ")
     print(f"{idx}. {icon} {ts}  {content}")
     for tc in msg.tool_calls:
-        preview = _truncate(tc.input_json.replace("\n", " "), _INSPECT_TOOL_INPUT_PREVIEW)
+        preview = _truncate(tc.input_json.replace("\n", " "), tool_chars)
         print(f"  → {tc.name}: {preview}")
 
 

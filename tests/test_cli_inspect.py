@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -312,3 +312,205 @@ def test_inspect_no_target_errors(capsys: pytest.CaptureFixture[str]) -> None:
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
     assert "one of the arguments" in err or "required" in err
+
+
+# ---------------------------------------------------------------------------
+# --max-chars, --from-message/--to-message, --timeline --json
+# ---------------------------------------------------------------------------
+
+_MANY_SID = "cafef00d-aaaa-bbbb-cccc-ddddeeeeffff"
+
+
+def _populate_many(path: Path, n: int, contents: dict[int, str] | None = None) -> None:
+    """Seed one session with `n` messages; message i (1-indexed) says `msg-i`."""
+    contents = contents or {}
+    with Database(path) as db:
+        assert db.conn is not None
+        db.conn.execute(
+            "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+            "VALUES (1, '/data/many.jsonl', 0, 0, '2026-04-29T00:00:00Z')",
+        )
+        db.conn.execute(
+            "INSERT INTO sessions(id, source_file_id, project_path, started_at) "
+            "VALUES (?, 1, '/work/many', '2026-04-01T10:00:00Z')",
+            (_MANY_SID,),
+        )
+        for i in range(1, n + 1):
+            db.conn.execute(
+                "INSERT INTO messages(id, session_id, role, seq, timestamp, content, "
+                "raw_json) VALUES (?, ?, 'user', ?, ?, ?, '{}')",
+                (
+                    f"n{i}",
+                    _MANY_SID,
+                    i,
+                    f"2026-04-01T10:{i // 60:02d}:{i % 60:02d}Z",
+                    contents.get(i, f"msg-{i}"),
+                ),
+            )
+        db.conn.commit()
+
+
+def _inspect_json(argv: list[str], capsys: pytest.CaptureFixture[str]) -> dict[str, Any]:
+    rc = main(["inspect", *argv, "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    payload: dict[str, Any] = json.loads(out)
+    return payload
+
+
+@pytest.fixture
+def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+    return live
+
+
+@pytest.fixture
+def many(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    return live
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_max_chars_zero_returns_full_content_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: content was always clipped to 200 chars with no way out."""
+    block = _inspect_json([_SID, "--max-chars", "0"], capsys)["inspect"]
+    m2 = next(m for m in block["messages"] if m["id"] == "m2")
+    assert m2["content"] == _LONG_CONTENT
+    assert m2["truncated"] is False
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_max_chars_zero_returns_full_content_prose(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["inspect", _SID, "--max-chars", "0"]) == 0
+    out = capsys.readouterr().out
+    assert _LONG_CONTENT in out
+    assert _LONG_CONTENT + "..." not in out
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_max_chars_custom_limit(capsys: pytest.CaptureFixture[str]) -> None:
+    block = _inspect_json([_SID, "--max-chars", "10"], capsys)["inspect"]
+    by_id = {m["id"]: m for m in block["messages"]}
+    assert by_id["m2"]["content"] == "x" * 10 + "..."
+    assert by_id["m2"]["truncated"] is True
+    assert by_id["m1"]["content"] == "what does ..."
+    assert by_id["m1"]["truncated"] is True
+    assert by_id["m3"]["content"] == "thanks"
+    assert by_id["m3"]["truncated"] is False
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_max_chars_exact_length_not_truncated(capsys: pytest.CaptureFixture[str]) -> None:
+    block = _inspect_json([_SID, "--max-chars", "500"], capsys)["inspect"]
+    m2 = next(m for m in block["messages"] if m["id"] == "m2")
+    assert m2["content"] == _LONG_CONTENT
+    assert m2["truncated"] is False
+
+
+@pytest.mark.usefixtures("seeded")
+@pytest.mark.parametrize("bad", ["-1", "abc"])
+def test_inspect_max_chars_rejects_invalid(capsys: pytest.CaptureFixture[str], bad: str) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["inspect", _SID, "--max-chars", bad])
+    assert excinfo.value.code == 2
+    assert "--max-chars must be 0 (no limit) or a positive integer" in capsys.readouterr().err
+
+
+def test_inspect_max_chars_empty_content(many: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _populate_many(many, 1, {1: ""})
+    for limit in ("0", "5"):
+        block = _inspect_json([_MANY_SID, "--max-chars", limit], capsys)["inspect"]
+        assert block["messages"][0]["content"] == ""
+        assert block["messages"][0]["truncated"] is False
+
+
+def test_inspect_max_chars_multibyte_boundary(
+    many: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Limits count code points: the cut never splits a multibyte character."""
+    text = "abé\U0001f600漢字end"  # a b e-acute grinning-face kanji kanji e n d
+    _populate_many(many, 1, {1: text})
+    for n in range(1, len(text)):
+        block = _inspect_json([_MANY_SID, "--max-chars", str(n)], capsys)["inspect"]
+        assert block["messages"][0]["content"] == text[:n] + "..."
+        assert block["messages"][0]["truncated"] is True
+        assert main(["inspect", _MANY_SID, "--max-chars", str(n)]) == 0
+        out = capsys.readouterr().out
+        assert f"{text[:n]}..." in out
+        out.encode("utf-8")  # no lone surrogates
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_timeline_max_chars(capsys: pytest.CaptureFixture[str]) -> None:
+    # Default timeline preview is unchanged: 80 chars, no ellipsis.
+    assert main(["inspect", _SID, "--timeline"]) == 0
+    out = capsys.readouterr().out
+    assert "x" * 80 in out
+    assert "x" * 81 not in out
+
+    assert main(["inspect", _SID, "--timeline", "--max-chars", "0"]) == 0
+    assert _LONG_CONTENT in capsys.readouterr().out
+
+    assert main(["inspect", _SID, "--timeline", "--max-chars", "5"]) == 0
+    out = capsys.readouterr().out
+    assert "xxxxx" in out
+    assert "xxxxxx" not in out
+    assert "what " in out
+    assert "what d" not in out
+
+
+_LONG_INPUT = '{"command": "' + "y" * 100 + '"}'
+
+
+def _add_long_tool_call(path: Path) -> None:
+    """Attach a tool call with a 115-char input to message m3 of `_populate`."""
+    with Database(path) as db:
+        assert db.conn is not None
+        db.conn.execute(
+            "INSERT INTO tool_calls(id, message_id, session_id, seq, name, input_json, "
+            "started_at) VALUES ('tc3', 'm3', ?, 0, 'Bash', ?, '2026-04-01T10:01:01Z')",
+            (_SID, _LONG_INPUT),
+        )
+        db.conn.commit()
+
+
+def test_inspect_max_chars_applies_to_tool_inputs(
+    seeded: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _add_long_tool_call(seeded)
+
+    # Prose default: 80 chars plus "...".
+    assert main(["inspect", _SID]) == 0
+    out = capsys.readouterr().out
+    assert f"  → Bash: {_LONG_INPUT[:80]}..." in out
+
+    assert main(["inspect", _SID, "--max-chars", "0"]) == 0
+    assert f"  → Bash: {_LONG_INPUT}\n" in capsys.readouterr().out
+
+    assert main(["inspect", _SID, "--max-chars", "5"]) == 0
+    assert '  → Bash: {"com...\n' in capsys.readouterr().out
+
+    def calls(*extra: str) -> dict[str, dict[str, Any]]:
+        msgs = _inspect_json([_SID, *extra], capsys)["inspect"]["messages"]
+        return {tc["id"]: tc for m in msgs for tc in m["tool_calls"]}
+
+    # JSON default: input_json is complete, as before.
+    tcs = calls()
+    assert tcs["tc3"]["input_json"] == _LONG_INPUT
+    assert tcs["tc3"]["truncated"] is False
+
+    tcs = calls("--max-chars", "5")
+    assert tcs["tc3"]["input_json"] == '{"com...'
+    assert tcs["tc3"]["truncated"] is True
+    assert tcs["tc1"]["truncated"] is True
+
+    tcs = calls("--max-chars", "0")
+    assert tcs["tc3"]["input_json"] == _LONG_INPUT
+    assert tcs["tc3"]["truncated"] is False

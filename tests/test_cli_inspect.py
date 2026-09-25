@@ -638,3 +638,97 @@ def test_inspect_json_echoes_range(many: Path, capsys: pytest.CaptureFixture[str
     inner = _inspect_json([_MANY_SID], capsys)["inspect"]
     assert inner["from_message"] is None
     assert inner["to_message"] is None
+
+
+def test_inspect_timeline_tool_call_truncated_flag(
+    seeded: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _add_long_tool_call(seeded)
+
+    def tool_events(*extra: str) -> list[dict[str, Any]]:
+        events = _inspect_json([_SID, "--timeline", *extra], capsys)["inspect"]["timeline"][
+            "events"
+        ]
+        return [ev for ev in events if ev["role"] == "tool_call"]
+
+    # Default: tool-call previews stay at 80 chars.
+    short, _, long = tool_events()
+    assert short["preview"] == '{"command": "ls /tmp"}'
+    assert short["truncated"] is False
+    assert long["preview"] == _LONG_INPUT[:80]
+    assert long["truncated"] is True
+
+    short, _, long = tool_events("--max-chars", "0")
+    assert long["preview"] == _LONG_INPUT
+    assert long["truncated"] is False
+    assert short["truncated"] is False
+
+    short, _, long = tool_events("--max-chars", "5")
+    assert short["preview"] == '{"com'
+    assert short["truncated"] is True
+    assert long["preview"] == '{"com'
+
+    assert main(["inspect", _SID, "--timeline", "--max-chars", "0"]) == 0
+    assert _LONG_INPUT in capsys.readouterr().out
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_timeline_json_emits_envelope(capsys: pytest.CaptureFixture[str]) -> None:
+    """Regression: `--timeline --json` printed prose instead of JSON."""
+    payload = _inspect_json([_SID, "--timeline"], capsys)
+    assert payload["schema_version"] == 2
+    inner = payload["inspect"]
+    assert inner["session"] == {
+        "id": _SID,
+        "started_at": "2026-04-01T10:00:00Z",
+        "ended_at": "2026-04-01T11:00:00Z",
+        "project_path": "/work/foo",
+        "model": "claude-opus-4-7",
+        "git_branch": "main",
+    }
+    # Same header object as the normal view.
+    assert inner["session"] == _inspect_json([_SID], capsys)["inspect"]["session"]
+    timeline = inner["timeline"]
+    assert timeline["message_count"] == 3
+    assert timeline["tool_call_count"] == 2
+    assert timeline["duration_seconds"] == 60
+    assert timeline["from_message"] is None
+    assert timeline["to_message"] is None
+    assert [(ev["role"], ev["tool"]) for ev in timeline["events"]] == [
+        ("user", None),
+        ("assistant", None),
+        ("tool_call", "Bash"),
+        ("tool_call", "Read"),
+        ("user", None),
+    ]
+    assistant = timeline["events"][1]
+    assert assistant["offset_seconds"] == 30
+    assert assistant["preview"] == "x" * 80
+    assert assistant["truncated"] is True
+    assert timeline["events"][0]["truncated"] is False
+
+
+@pytest.mark.usefixtures("seeded")
+def test_inspect_timeline_json_range_and_full_text(capsys: pytest.CaptureFixture[str]) -> None:
+    payload = _inspect_json(
+        [_SID, "--timeline", "--from-message", "2", "--to-message", "2", "--max-chars", "0"],
+        capsys,
+    )
+    timeline = payload["inspect"]["timeline"]
+    assert timeline["from_message"] == 2
+    assert timeline["to_message"] == 2
+    events = timeline["events"]
+    assert [ev["role"] for ev in events] == ["assistant", "tool_call", "tool_call"]
+    assert events[0]["preview"] == _LONG_CONTENT
+    assert events[0]["truncated"] is False
+
+
+def test_inspect_timeline_json_keeps_newlines(
+    many: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _populate_many(many, 1, {1: "line one\nline two"})
+    events = _inspect_json([_MANY_SID, "--timeline"], capsys)["inspect"]["timeline"]["events"]
+    assert events[0]["preview"] == "line one\nline two"
+    # Prose still renders each event on one line.
+    assert main(["inspect", _MANY_SID, "--timeline"]) == 0
+    assert "line one line two" in capsys.readouterr().out

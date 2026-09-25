@@ -344,7 +344,7 @@ def _build_events(
     """Convert DB rows to a flat ordered list of TimelineEvent.
 
     Message and tool-call input previews are clipped to ``max_chars`` (0 = no
-    limit).
+    limit). Newlines are kept; ``render_timeline`` flattens them for prose.
     """
     by_message: dict[str, list[tuple[object, str, str]]] = {}
     for tc in tc_rows:
@@ -359,7 +359,6 @@ def _build_events(
         row_m = m  # sqlite3.Row
         mid = str(row_m["id"])  # type: ignore[index]
         content = "" if row_m["content"] is None else str(row_m["content"])  # type: ignore[index]
-        content = content.replace("\n", " ")
         clipped = 0 < max_chars < len(content)
         events.append(
             TimelineEvent(
@@ -371,8 +370,7 @@ def _build_events(
             )
         )
         for tc_ts, tc_name, tc_input in by_message.get(mid, []):
-            tc_text = tc_input.replace("\n", " ")
-            tc_clipped = 0 < max_chars < len(tc_text)
+            tc_clipped = 0 < max_chars < len(tc_input)
             fallback_ts = row_m["timestamp"]  # type: ignore[index]
             events.append(
                 TimelineEvent(
@@ -381,7 +379,7 @@ def _build_events(
                     ),
                     role="tool_call",
                     tool=tc_name,
-                    preview=tc_text[:max_chars] if tc_clipped else tc_text,
+                    preview=tc_input[:max_chars] if tc_clipped else tc_input,
                     truncated=tc_clipped,
                 )
             )
@@ -398,14 +396,15 @@ def build_timeline(
 ) -> tuple[list[TimelineEvent], dict[str, Any]]:
     """Return ``(events, meta)`` for ``convo inspect --timeline``.
 
-    ``meta`` keys: ``project``, ``duration_seconds``, ``message_count``,
-    ``tool_call_count``. ``max_chars`` clips message and tool-call previews
-    (0 = no limit).
+    ``meta`` keys: ``project``, ``started_at``, ``ended_at``, ``model``,
+    ``git_branch``, ``duration_seconds``, ``message_count``, ``tool_call_count``.
+    ``max_chars`` clips message and tool-call previews (0 = no limit).
     """
     ro = open_ro(db.path)
     try:
         header_row = ro.execute(
-            "SELECT project_path, started_at, ended_at FROM sessions WHERE id = ?",
+            "SELECT project_path, started_at, ended_at, model, git_branch"
+            " FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
         if header_row is None:
@@ -456,6 +455,10 @@ def build_timeline(
 
     meta: dict[str, Any] = {
         "project": project,
+        **{
+            key: None if header_row[key] is None else str(header_row[key])
+            for key in ("started_at", "ended_at", "model", "git_branch")
+        },
         "duration_seconds": duration_seconds,
         "message_count": message_count,
         "tool_call_count": tool_call_count,

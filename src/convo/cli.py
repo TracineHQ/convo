@@ -14,7 +14,7 @@ import sqlite3
 import sys
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, cast, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 from convo import __version__ as convo_version
 from convo.analytics import (
@@ -58,7 +58,12 @@ from convo.read.inspect import (
     resolve_session_id,
 )
 from convo.read.projects import ProjectRow, list_projects
-from convo.read.prose import SearchRenderConfig, render_search_hits, render_timeline
+from convo.read.prose import (
+    SearchRenderConfig,
+    TimelineEvent,
+    render_search_hits,
+    render_timeline,
+)
 from convo.read.search import (
     SNIPPET_POST,
     SNIPPET_PRE,
@@ -1168,6 +1173,9 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
                 to_message=args.to_message,
                 max_chars=max_chars,
             )
+            if args.as_json:
+                print(json.dumps(_build_timeline_envelope(resolved, events, meta, args)))
+                return 0
             out = render_timeline(
                 session_id=resolved,
                 project=str(meta["project"]) if meta["project"] is not None else None,
@@ -1199,6 +1207,64 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
     return 0
 
 
+def _build_timeline_envelope(
+    session_id: str,
+    events: list[TimelineEvent],
+    meta: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    return {
+        "schema_version": INSPECT_ENVELOPE_VERSION,
+        "inspect": {
+            "session": _session_to_dict(
+                session_id,
+                started_at=meta["started_at"],
+                ended_at=meta["ended_at"],
+                project_path=meta["project"],
+                model=meta["model"],
+                git_branch=meta["git_branch"],
+            ),
+            "timeline": {
+                "duration_seconds": meta["duration_seconds"],
+                "message_count": meta["message_count"],
+                "tool_call_count": meta["tool_call_count"],
+                "from_message": args.from_message,
+                "to_message": args.to_message,
+                "events": [
+                    {
+                        "offset_seconds": ev.offset_seconds,
+                        "role": ev.role,
+                        "tool": ev.tool,
+                        "preview": ev.preview,
+                        "truncated": ev.truncated,
+                    }
+                    for ev in events
+                ],
+            },
+        },
+    }
+
+
+def _session_to_dict(  # noqa: PLR0913
+    session_id: str,
+    *,
+    started_at: str | None,
+    ended_at: str | None,
+    project_path: str | None,
+    model: str | None,
+    git_branch: str | None,
+) -> dict[str, object]:
+    """Session header shared by the normal and ``--timeline`` JSON bodies."""
+    return {
+        "id": session_id,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "project_path": project_path,
+        "model": model,
+        "git_branch": git_branch,
+    }
+
+
 def _build_inspect_envelope(
     view: SessionView,
     content_chars: int,
@@ -1208,14 +1274,14 @@ def _build_inspect_envelope(
     return {
         "schema_version": INSPECT_ENVELOPE_VERSION,
         "inspect": {
-            "session": {
-                "id": view.id,
-                "started_at": view.started_at,
-                "ended_at": view.ended_at,
-                "project_path": view.project_path,
-                "model": view.model,
-                "git_branch": view.git_branch,
-            },
+            "session": _session_to_dict(
+                view.id,
+                started_at=view.started_at,
+                ended_at=view.ended_at,
+                project_path=view.project_path,
+                model=view.model,
+                git_branch=view.git_branch,
+            ),
             "messages": [_message_to_dict(m, content_chars, tool_chars) for m in view.messages],
             "truncated": view.truncated,
             "total_messages": view.total_messages,

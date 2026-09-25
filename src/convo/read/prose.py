@@ -217,7 +217,8 @@ def render_timeline(  # noqa: PLR0913
         offset = _fmt_offset(ev.offset_seconds)
         role = ev.role.ljust(9)
         tool = (ev.tool or "").ljust(7)
-        parts.append(f"{offset}  {role} {tool} {ev.preview}")
+        preview = ev.preview.replace("\n", " ")
+        parts.append(f"{offset}  {role} {tool} {preview}")
 
     if from_message is not None or to_message is not None:
         parts.append("")

@@ -27,10 +27,14 @@ _DEFAULT_MESSAGE_CAP: int = 50
 
 # Base SQL fragments — kept as plain string constants so S608 does not fire on
 # the dynamic callers that append a LIMIT clause or IN-list placeholders.
+# Message order within a session. `position` (1-indexed) in inspect and
+# search is the row number under exactly this ordering; `id` breaks
+# (seq, timestamp) ties so the order is deterministic.
+MESSAGE_ORDER_BY = "seq, timestamp, id"
 _MSG_SELECT = (
     "SELECT id, role, timestamp, content, seq"
     " FROM messages WHERE session_id = ?"
-    " ORDER BY seq, timestamp"
+    " ORDER BY seq, timestamp, id"
 )
 _TC_SELECT_BASE = (
     "SELECT id, message_id, name, input_json, started_at, seq FROM tool_calls WHERE message_id IN ("
@@ -355,7 +359,7 @@ def _build_events(
         )
 
     events: list[TimelineEvent] = []
-    for m in msg_rows:
+    for position, m in enumerate(msg_rows, start=1):
         row_m = m  # sqlite3.Row
         mid = str(row_m["id"])  # type: ignore[index]
         content = "" if row_m["content"] is None else str(row_m["content"])  # type: ignore[index]
@@ -367,6 +371,7 @@ def _build_events(
                 tool=None,
                 preview=content[:max_chars] if clipped else content,
                 truncated=clipped,
+                position=position,
             )
         )
         for tc_ts, tc_name, tc_input in by_message.get(mid, []):
@@ -381,6 +386,7 @@ def _build_events(
                     tool=tc_name,
                     preview=tc_input[:max_chars] if tc_clipped else tc_input,
                     truncated=tc_clipped,
+                    position=position,
                 )
             )
     return events
@@ -414,12 +420,7 @@ def build_timeline(
             None if header_row["project_path"] is None else str(header_row["project_path"])
         )
 
-        msg_rows = ro.execute(
-            "SELECT id, role, timestamp, content, seq "
-            "FROM messages WHERE session_id = ? "
-            "ORDER BY seq, timestamp",
-            (session_id,),
-        ).fetchall()
+        msg_rows = ro.execute(_MSG_SELECT, (session_id,)).fetchall()
 
         tc_rows = ro.execute(
             "SELECT message_id, name, input_json, started_at, seq "

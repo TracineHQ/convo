@@ -67,6 +67,8 @@ def render_search_hits(
         if hit.project:
             parts.append(f"project: {_fmt_project(hit.project)}")
         parts.append(f"kind:    {_fmt_kind(hit)}")
+        if hit.position is not None:
+            parts.append(f"position: {hit.position}")
         body_label = _body_label(hit.kind)
         body = _indent_continuations(hit.excerpt)
         parts.append(f"{body_label}: {body}")
@@ -171,6 +173,7 @@ _PROJECTION_FIELD_FNS: dict[str, Callable[[SearchHit], str]] = {
     "content": lambda h: h.excerpt or "",  # alias for message kind
     "output": lambda h: h.excerpt or "",  # alias for tool_result kind
     "tool": lambda h: h.tool_origin or "",
+    "position": lambda h: "" if h.position is None else str(h.position),
 }
 
 
@@ -189,6 +192,8 @@ class TimelineEvent:
     preview: str
     truncated: bool = False
     """True when ``preview`` was clipped by ``--max-chars``."""
+    position: int = 0
+    """1-indexed message number; a tool call carries its parent message's."""
 
 
 def render_timeline(  # noqa: PLR0913

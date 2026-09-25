@@ -463,7 +463,8 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         help=(
             f"excerpt width in characters around the match (default and maximum: "
             f"{SNIPPET_MAX_TOKENS}; FTS5 caps snippets at about {SNIPPET_MAX_TOKENS} "
-            "characters). For full text use `convo inspect <session> --max-chars 0`"
+            "characters). For full text pass the hit's position to "
+            "`convo inspect <session> --from-message P --to-message P --max-chars 0`"
         ),
     )
     search_p.add_argument(
@@ -1103,6 +1104,7 @@ def _hit_to_dict_v2(hit: SearchHit, clean: str, indices: list[list[int]]) -> dic
         "timestamp": hit.timestamp,
         "excerpt": clean,
         "indices": indices,
+        "position": hit.position,
     }
     if hit.project is not None:
         d["project"] = hit.project
@@ -1242,6 +1244,7 @@ def _build_timeline_envelope(
                         "tool": ev.tool,
                         "preview": ev.preview,
                         "truncated": ev.truncated,
+                        "position": ev.position,
                     }
                     for ev in events
                 ],
@@ -1287,7 +1290,10 @@ def _build_inspect_envelope(
                 model=view.model,
                 git_branch=view.git_branch,
             ),
-            "messages": [_message_to_dict(m, content_chars, tool_chars) for m in view.messages],
+            "messages": [
+                _message_to_dict(m, position, content_chars, tool_chars)
+                for position, m in enumerate(view.messages, start=view.first_index)
+            ],
             "truncated": view.truncated,
             "total_messages": view.total_messages,
             "from_message": args.from_message,
@@ -1296,9 +1302,12 @@ def _build_inspect_envelope(
     }
 
 
-def _message_to_dict(msg: MessageView, content_chars: int, tool_chars: int) -> dict[str, object]:
+def _message_to_dict(
+    msg: MessageView, position: int, content_chars: int, tool_chars: int
+) -> dict[str, object]:
     return {
         "id": msg.id,
+        "position": position,
         "role": msg.role,
         "timestamp": msg.timestamp,
         "content": _truncate(msg.content, content_chars),

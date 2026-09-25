@@ -204,7 +204,8 @@ class TestRunSearchComposition:
         assert "FROM tool_results_fts" in sql
         # Params: one MATCH per branch + final LIMIT.
         assert params == ['"foo"', '"foo"', '"foo"', 50]
-        assert sql.rstrip().endswith("LIMIT ?")
+        # The hit LIMIT binds last; `position` is joined on after it.
+        assert "timestamp DESC LIMIT ?)" in sql
 
     def test_with_tool_filter_two_branches(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)

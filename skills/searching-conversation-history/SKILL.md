@@ -85,8 +85,10 @@ Search excerpts and inspect previews are clipped (search: `--excerpt-chars`,
 default 200; inspect: 200 chars per message). To quote a message verbatim:
 
 1. Locate it: `convo search "<terms>"` gives the session ID.
-2. Find its number: `convo inspect <session-id-prefix> --full` numbers every
-   message; pick the one whose preview matches the excerpt.
+2. Find its number: page through the session 50 messages at a time
+   (`convo inspect <session-id-prefix> --from-message 1 --to-message 50`, then
+   51-100, ...); messages are numbered by position. Prefer paging near the hit's
+   timestamp over `--full`, which prints every message of a long session.
 3. Read it whole:
 
 ```bash

@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 _ERR_NO_MATCH = "no session matches {prefix}"
 _ERR_AMBIGUOUS = "session id {prefix} is ambiguous; candidates: {candidates}"
 _ERR_NO_SESSIONS = "no sessions in DB"
+_ERR_RANGE_ORDER = "--from-message ({lo}) is greater than --to-message ({hi})"
+_ERR_RANGE_BEYOND_END = "--from-message {lo} is beyond the last message (session has {total})"
 _MORE_MARKER = "... (and more)"
 
 _RESOLVE_LIMIT: int = 5
@@ -66,6 +68,9 @@ class SessionView:
 
     ``truncated`` is True when the message list was capped at ``_DEFAULT_MESSAGE_CAP``.
     ``total_messages`` is the total count in the session (may be > len(messages)).
+    ``first_index`` is the 1-indexed position of ``messages[0]`` in the session
+    (> 1 when ``--from-message`` skipped earlier messages). ``window_end`` is the
+    1-indexed inclusive end of the selected range, before the message cap.
     """
 
     id: str
@@ -77,6 +82,28 @@ class SessionView:
     messages: tuple[MessageView, ...]
     truncated: bool = False
     total_messages: int = 0
+    first_index: int = 1
+    window_end: int = 0
+
+
+def message_window(
+    total: int,
+    from_message: int | None,
+    to_message: int | None,
+) -> tuple[int, int]:
+    """Resolve a 1-indexed inclusive message range to a ``[lo, hi)`` slice.
+
+    ``to_message`` past the end is clamped to ``total``. Raises ``ValueError``
+    when ``from_message > to_message`` or ``from_message`` is past the last
+    message. Values below 1 are rejected by the CLI parser before this runs.
+    """
+    if from_message is not None and to_message is not None and from_message > to_message:
+        raise ValueError(_ERR_RANGE_ORDER.format(lo=from_message, hi=to_message))
+    lo = 0 if from_message is None else from_message - 1
+    hi = total if to_message is None else min(to_message, total)
+    if from_message is not None and from_message > total:
+        raise ValueError(_ERR_RANGE_BEYOND_END.format(lo=from_message, total=total))
+    return lo, hi
 
 
 def resolve_session_id(db: Database, prefix: str) -> str:
@@ -137,23 +164,36 @@ def resolve_latest_session(db: Database) -> str:
     return str(row[0])
 
 
-def inspect_session(db: Database, session_id: str, *, full: bool = False) -> SessionView:
+def inspect_session(
+    db: Database,
+    session_id: str,
+    *,
+    full: bool = False,
+    from_message: int | None = None,
+    to_message: int | None = None,
+) -> SessionView:
     """Build a `SessionView` for `session_id` (which must be an exact id).
 
     Read-only: opens a fresh `mode=ro` URI connection to `db.path` so it can run
     while a writer holds the main DB. Does not mutate or rely on `db.conn`.
 
-    With ``full=False`` (default), messages are capped at ``_DEFAULT_MESSAGE_CAP``.
-    With ``full=True``, all messages are returned.
+    ``from_message`` / ``to_message`` select a 1-indexed inclusive range (see
+    ``message_window``). With ``full=False`` (default), the selected messages
+    are capped at ``_DEFAULT_MESSAGE_CAP``. With ``full=True``, all are returned.
     """
     ro = open_ro(db.path)
     try:
         header = _fetch_header(ro, session_id)
-        messages, total_messages = _fetch_messages(ro, session_id, full=full)
+        messages, total_messages, truncated, (lo, hi) = _fetch_messages(
+            ro,
+            session_id,
+            full=full,
+            from_message=from_message,
+            to_message=to_message,
+        )
     finally:
         ro.close()
 
-    truncated = not full and total_messages > _DEFAULT_MESSAGE_CAP
     return SessionView(
         id=session_id,
         started_at=header["started_at"],
@@ -164,6 +204,8 @@ def inspect_session(db: Database, session_id: str, *, full: bool = False) -> Ses
         messages=messages,
         truncated=truncated,
         total_messages=total_messages,
+        first_index=lo + 1,
+        window_end=hi,
     )
 
 
@@ -189,22 +231,32 @@ def _fetch_messages(
     session_id: str,
     *,
     full: bool = False,
-) -> tuple[tuple[MessageView, ...], int]:
-    """Return ``(messages, total_count)``.
+    from_message: int | None = None,
+    to_message: int | None = None,
+) -> tuple[tuple[MessageView, ...], int, bool, tuple[int, int]]:
+    """Return ``(messages, total_count, truncated, (lo, hi))``.
 
-    When ``full=False``, fetches at most ``_DEFAULT_MESSAGE_CAP`` messages.
-    ``total_count`` is always the real count in the session.
+    Fetches the ``[lo, hi)`` window from ``message_window``; when ``full=False``
+    the window is capped at ``_DEFAULT_MESSAGE_CAP`` and ``truncated`` reports
+    whether the cap bit. ``total_count`` is always the real count in the session.
     """
     total_count: int = conn.execute(
         "SELECT COUNT(*) FROM messages WHERE session_id = ?",
         (session_id,),
     ).fetchone()[0]
 
-    _lim = "" if full else f" LIMIT {_DEFAULT_MESSAGE_CAP}"
-    msg_rows = conn.execute(_MSG_SELECT + _lim, (session_id,)).fetchall()
+    lo, hi = message_window(total_count, from_message, to_message)
+    count = hi - lo
+    truncated = not full and count > _DEFAULT_MESSAGE_CAP
+    if truncated:
+        count = _DEFAULT_MESSAGE_CAP
+    msg_rows = conn.execute(
+        _MSG_SELECT + " LIMIT ? OFFSET ?",
+        (session_id, count, lo),
+    ).fetchall()
 
     if not msg_rows:
-        return (), total_count
+        return (), total_count, truncated, (lo, hi)
 
     # Only fetch tool_calls for the messages we actually loaded.
     loaded_ids = [str(m["id"]) for m in msg_rows]
@@ -234,7 +286,7 @@ def _fetch_messages(
                 tool_calls=tuple(by_message.get(mid, ())),
             ),
         )
-    return tuple(out), total_count
+    return tuple(out), total_count, truncated, (lo, hi)
 
 
 # ---------------------------------------------------------------------------
@@ -392,8 +444,7 @@ def build_timeline(
 
     if from_message is not None or to_message is not None:
         grouped = _group_by_message(events)
-        lo = (from_message - 1) if from_message is not None else 0
-        hi = to_message if to_message is not None else len(grouped)
+        lo, hi = message_window(len(grouped), from_message, to_message)
         events = [ev for group in grouped[lo:hi] for ev in group]
 
     last_ts: datetime | None = None

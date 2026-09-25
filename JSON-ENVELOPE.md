@@ -98,7 +98,8 @@ shape.
         "excerpt": "The [kafka consumer] lag was 8 s.",
         "indices": [[5, 19]],
         "project": "/workspace/myapp",
-        "role": "assistant"
+        "role": "assistant",
+        "position": 12
       },
       {
         "kind": "tool_result",
@@ -108,7 +109,8 @@ shape.
         "excerpt": "offset [lag]: 0",
         "indices": [[8, 11]],
         "project": "/workspace/myapp",
-        "tool_origin": "Bash"
+        "tool_origin": "Bash",
+        "position": null
       }
     ]
   }
@@ -125,6 +127,14 @@ pair of brackets.
 `hits[].role` is present for `kind="message"` (`"user"` or `"assistant"`).
 `hits[].tool` is present for `kind="tool_call"`. `hits[].tool_origin` is
 present for `kind="tool_result"`.
+
+`hits[].position` is the hit's 1-indexed message number within its session,
+the same number `inspect` reports as `messages[].position` and accepts in
+`--from-message/--to-message`. So
+`convo inspect <session_id> --from-message P --to-message P --max-chars 0`
+returns the hit's full message. For `kind="tool_call"` it is the message that
+made the call; for `kind="tool_result"` it is `null` (inspect does not show
+tool output).
 
 When `total=0` a `"suggestions"` key may appear:
 
@@ -161,6 +171,7 @@ When `total=0` a `"suggestions"` key may appear:
     "messages": [
       {
         "id": 1,
+        "position": 1,
         "role": "user",
         "timestamp": "2026-05-10T09:14:01.000Z",
         "content": "How do I fix the kafka lag?",
@@ -185,6 +196,10 @@ that message's `content` was clipped at the `--max-chars` limit (default 200;
 Clipped content ends in `...`. `tool_calls[].input_json` is complete by
 default; an explicit `--max-chars N` clips it the same way (so it may no
 longer parse as JSON) and sets `tool_calls[].truncated`.
+
+`messages[].position` is the message's 1-indexed number in the session
+(messages are ordered by `seq`, then `timestamp`, then `id`); the prose view
+prints the same numbers.
 
 `--from-message N` / `--to-message M` restrict `messages` to that 1-indexed,
 inclusive range of the session; `from_message` / `to_message` echo them (or
@@ -213,8 +228,8 @@ message returns the error envelope.
       "from_message": null,
       "to_message": null,
       "events": [
-        {"offset_seconds": 0, "role": "user", "tool": null, "preview": "How do I fix the kafka lag?", "truncated": false},
-        {"offset_seconds": 12, "role": "tool_call", "tool": "Bash", "preview": "{...}", "truncated": false}
+        {"offset_seconds": 0, "role": "user", "tool": null, "preview": "How do I fix the kafka lag?", "truncated": false, "position": 1},
+        {"offset_seconds": 12, "role": "tool_call", "tool": "Bash", "preview": "{...}", "truncated": false, "position": 2}
       ]
     }
   }
@@ -225,7 +240,9 @@ message returns the error envelope.
 message role or `"tool_call"`; `tool` is set only for `tool_call` events.
 Every `preview` (message content or tool-call input JSON) is clipped to
 `--max-chars` (default 80, no `...` suffix; `0` never clips) and keeps its
-newlines; `truncated` is `true` when it was clipped. `from_message` /
+newlines; `truncated` is `true` when it was clipped. `position` is the
+message number (as in the normal view); a `tool_call` event carries its
+parent message's position. `from_message` /
 `to_message` echo the requested range, or `null`.
 
 ---

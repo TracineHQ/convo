@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `--timeline`); `--max-chars 0` returns full text.
 - `convo inspect --json` echoes `from_message`/`to_message` and adds
   `tool_calls[].truncated`.
+- Message `position` (1-indexed, the number `inspect` prints and
+  `--from-message/--to-message` take) on `inspect` messages and timeline
+  events, and on `search` hits (message hits; the calling message for
+  tool_call hits; null for tool_result hits). Quote any hit in full with
+  `convo inspect <session_id> --from-message P --to-message P --max-chars 0`.
 
 ### Fixed
 

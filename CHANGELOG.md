@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `convo inspect --from-message/--to-message` now apply without `--timeline`
-  and reject 0, negative, reversed, and past-the-end ranges with an error.
+  and reject 0, negative, and reversed ranges, or a start past the last
+  message, with an error; an end past the last message is clamped (JSON echoes
+  the requested values). Timeline `message_count`/`duration_seconds` still
+  describe the whole session.
 - `convo inspect --timeline --json` emits a JSON envelope (with the full
   session header) instead of prose.
 - `convo search --excerpt-chars` was capped at ~70 characters regardless of

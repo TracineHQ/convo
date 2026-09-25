@@ -514,3 +514,127 @@ def test_inspect_max_chars_applies_to_tool_inputs(
     tcs = calls("--max-chars", "0")
     assert tcs["tc3"]["input_json"] == _LONG_INPUT
     assert tcs["tc3"]["truncated"] is False
+
+
+def test_inspect_range_applies_without_timeline(
+    many: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: --from-message/--to-message were ignored unless --timeline."""
+    _populate_many(many, 5)
+    inner = _inspect_json([_MANY_SID, "--from-message", "2", "--to-message", "3"], capsys)[
+        "inspect"
+    ]
+    assert [m["content"] for m in inner["messages"]] == ["msg-2", "msg-3"]
+    assert inner["total_messages"] == 5
+    assert inner["truncated"] is False
+
+    # Prose numbers messages by their position in the session.
+    assert main(["inspect", _MANY_SID, "--from-message", "2", "--to-message", "3"]) == 0
+    out = capsys.readouterr().out
+    assert "\n2. U:" in out
+    assert "\n3. U:" in out
+    assert "\n1. U:" not in out
+    assert "msg-4" not in out
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["--from-message", "4"], ["msg-4", "msg-5"]),
+        (["--to-message", "2"], ["msg-1", "msg-2"]),
+        (["--from-message", "5", "--to-message", "5"], ["msg-5"]),
+        (["--from-message", "4", "--to-message", "99"], ["msg-4", "msg-5"]),
+        # More than 50 past the end: an unclamped end would trip the 50-message cap.
+        (["--to-message", "70"], ["msg-1", "msg-2", "msg-3", "msg-4", "msg-5"]),
+    ],
+)
+def test_inspect_range_open_ends_and_clamp(
+    many: Path, capsys: pytest.CaptureFixture[str], argv: list[str], expected: list[str]
+) -> None:
+    _populate_many(many, 5)
+    inner = _inspect_json([_MANY_SID, *argv], capsys)["inspect"]
+    assert [m["content"] for m in inner["messages"]] == expected
+    assert inner["truncated"] is False
+
+
+@pytest.mark.parametrize("timeline", [False, True])
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["--from-message", "3", "--to-message", "2"], "greater than --to-message"),
+        (["--from-message", "6"], "beyond the last message (session has 5)"),
+    ],
+)
+def test_inspect_range_errors(
+    many: Path,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    message: str,
+    timeline: bool,  # noqa: FBT001
+) -> None:
+    _populate_many(many, 5)
+    extra = ["--timeline"] if timeline else []
+
+    assert main(["inspect", _MANY_SID, *argv, *extra]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+
+    assert main(["inspect", _MANY_SID, *argv, *extra, "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["schema_version"] == 2
+    assert message in payload["error"]["message"]
+
+
+@pytest.mark.usefixtures("seeded")
+@pytest.mark.parametrize("flag", ["--from-message", "--to-message"])
+@pytest.mark.parametrize("value", ["0", "-1", "abc"])
+def test_inspect_range_rejects_non_positive(
+    capsys: pytest.CaptureFixture[str], flag: str, value: str
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["inspect", _SID, flag, value])
+    assert excinfo.value.code == 2
+    assert "1-indexed" in capsys.readouterr().err
+
+
+def test_inspect_range_with_message_cap(many: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _populate_many(many, 62)
+
+    inner = _inspect_json([_MANY_SID, "--from-message", "2"], capsys)["inspect"]
+    assert len(inner["messages"]) == 50
+    assert inner["messages"][0]["content"] == "msg-2"
+    assert inner["truncated"] is True
+
+    inner = _inspect_json([_MANY_SID, "--from-message", "2", "--full"], capsys)["inspect"]
+    assert len(inner["messages"]) == 61
+    assert inner["truncated"] is False
+
+    inner = _inspect_json([_MANY_SID, "--from-message", "20"], capsys)["inspect"]
+    assert len(inner["messages"]) == 43
+    assert inner["truncated"] is False
+
+
+def test_inspect_range_prose_footer_describes_window(
+    many: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _populate_many(many, 62)
+    assert main(["inspect", _MANY_SID, "--from-message", "2", "--to-message", "60"]) == 0
+    out = capsys.readouterr().out
+    assert "(showing messages 2-51 of the selected 2-60; use --full for all)" in out
+
+    # Without a range the footer keeps its whole-session wording.
+    assert main(["inspect", _MANY_SID]) == 0
+    assert "(showing 50 of 62 messages; use --full for all)" in capsys.readouterr().out
+
+
+def test_inspect_json_echoes_range(many: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _populate_many(many, 5)
+    inner = _inspect_json([_MANY_SID, "--from-message", "2", "--to-message", "9"], capsys)[
+        "inspect"
+    ]
+    assert inner["from_message"] == 2
+    assert inner["to_message"] == 9
+    inner = _inspect_json([_MANY_SID], capsys)["inspect"]
+    assert inner["from_message"] is None
+    assert inner["to_message"] is None

@@ -129,6 +129,19 @@ def _positive_int(s: str) -> int:
     return n
 
 
+def _message_number(s: str) -> int:
+    """Argparse type for `--from-message` / `--to-message`: 1-indexed, >= 1."""
+    try:
+        n = int(s)
+    except ValueError as exc:
+        msg = "message numbers are 1-indexed integers (>= 1)"
+        raise argparse.ArgumentTypeError(msg) from exc
+    if n < 1:
+        msg = "message numbers are 1-indexed integers (>= 1)"
+        raise argparse.ArgumentTypeError(msg)
+    return n
+
+
 def _non_negative_int(msg: str) -> Callable[[str], int]:
     """Build an argparse type that accepts 0 or a positive integer.
 
@@ -478,7 +491,7 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
             "  convo inspect abc123\n"
             "  convo inspect --latest\n"
             "  convo inspect abc123 --full --json\n"
-            "  convo inspect abc123 --max-chars 0\n"
+            "  convo inspect abc123 --from-message 12 --to-message 14 --max-chars 0\n"
         ),
     )
     target = inspect_p.add_mutually_exclusive_group(required=True)
@@ -510,17 +523,17 @@ def _add_inspect_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     )
     inspect_p.add_argument(
         "--from-message",
-        type=int,
+        type=_message_number,
         default=None,
         dest="from_message",
         help="Start at the Nth message (1-indexed).",
     )
     inspect_p.add_argument(
         "--to-message",
-        type=int,
+        type=_message_number,
         default=None,
         dest="to_message",
-        help="End at the Nth message (1-indexed, inclusive).",
+        help="End at the Nth message (1-indexed, inclusive; clamped to the last message).",
     )
     inspect_p.add_argument(
         "--max-chars",
@@ -1167,13 +1180,19 @@ def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
             )
             sys.stdout.write(out + "\n")
             return 0
-        view = inspect_session(db, resolved, full=bool(args.full))
+        view = inspect_session(
+            db,
+            resolved,
+            full=bool(args.full),
+            from_message=args.from_message,
+            to_message=args.to_message,
+        )
     explicit: int | None = args.max_chars
     content_chars = _INSPECT_PREVIEW_CHARS if explicit is None else explicit
     if args.as_json:
         # JSON keeps tool input whole unless --max-chars is given.
         tool_chars = 0 if explicit is None else explicit
-        print(json.dumps(_build_inspect_envelope(view, content_chars, tool_chars)))
+        print(json.dumps(_build_inspect_envelope(view, content_chars, tool_chars, args)))
     else:
         tool_chars = _INSPECT_TOOL_INPUT_PREVIEW if explicit is None else explicit
         _print_inspect(view, content_chars, tool_chars)
@@ -1184,6 +1203,7 @@ def _build_inspect_envelope(
     view: SessionView,
     content_chars: int,
     tool_chars: int,
+    args: argparse.Namespace,
 ) -> dict[str, object]:
     return {
         "schema_version": INSPECT_ENVELOPE_VERSION,
@@ -1199,6 +1219,8 @@ def _build_inspect_envelope(
             "messages": [_message_to_dict(m, content_chars, tool_chars) for m in view.messages],
             "truncated": view.truncated,
             "total_messages": view.total_messages,
+            "from_message": args.from_message,
+            "to_message": args.to_message,
         },
     }
 
@@ -1257,9 +1279,17 @@ def _print_inspect(view: SessionView, content_chars: int, tool_chars: int) -> No
         print("(no messages)")
         return
     print(f"messages  ({view.total_messages} total)")
-    for idx, msg in enumerate(view.messages, start=1):
+    for idx, msg in enumerate(view.messages, start=view.first_index):
         _print_message(idx, msg, content_chars, tool_chars)
-    if view.truncated:
+    if not view.truncated:
+        return
+    last = view.first_index + len(view.messages) - 1
+    if view.first_index > 1 or view.window_end < view.total_messages:
+        print(
+            f"(showing messages {view.first_index}-{last} of the selected "
+            f"{view.first_index}-{view.window_end}; use --full for all)"
+        )
+    else:
         print(
             f"(showing {len(view.messages)} of {view.total_messages} messages; use --full for all)"
         )

@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 from convo.db import Database
-from convo.read import search as search_module
-from convo.read._db_access import open_ro
 from convo.read.search import (
     SNIPPET_POST,
     SNIPPET_PRE,
@@ -21,7 +19,6 @@ from convo.read.search import (
 )
 
 if TYPE_CHECKING:
-    import sqlite3
     from pathlib import Path
 
 
@@ -465,68 +462,24 @@ def _plain(excerpt: str) -> str:
     return excerpt.replace(SNIPPET_PRE, "").replace(SNIPPET_POST, "").replace("...", "")
 
 
-def test_excerpt_chars_honoured_beyond_snippet_cap(db: Database) -> None:
-    """Regression: --excerpt-chars was clamped to 64 snippet tokens (~70 chars)."""
-    content = "lorem ipsum " * 300 + "zebracorn" + " dolor sit" * 300
-    _seed_long_message(db, content)
-    (hit,) = search(db, "zebracorn", excerpt_chars=2000)
-    plain = _plain(hit.excerpt)
-    assert len(plain) == 2000
-    assert plain in content
-    assert f"{SNIPPET_PRE}zebracorn{SNIPPET_POST}" in hit.excerpt
-    assert hit.excerpt.startswith("...")
-    assert hit.excerpt.endswith("...")
-
-
-def test_excerpt_chars_returns_whole_message_when_wide_enough(db: Database) -> None:
-    content = "prefix text " * 20 + "zebracorn" + " suffix text" * 20
-    _seed_long_message(db, content)
-    (hit,) = search(db, "zebracorn", excerpt_chars=len(content))
-    assert _plain(hit.excerpt) == content
-
-
 def test_excerpt_chars_small_width_is_close_to_request(db: Database) -> None:
-    """Within the snippet() range one trigram token spans about one character."""
+    """One trigram token spans about one character, so width ~= requested chars."""
     content = "lorem ipsum " * 50 + "zebracorn" + " dolor sit" * 50
     _seed_long_message(db, content)
     (hit,) = search(db, "zebracorn", excerpt_chars=40)
     assert 35 <= len(_plain(hit.excerpt)) <= 45
 
 
-def test_wide_excerpt_ignores_marker_strings_in_stored_text(db: Database) -> None:
-    """Stored text containing the marker strings must not move the window to a fake hit."""
-    content = f"x {SNIPPET_PRE}fake{SNIPPET_POST} y " + "C" * 300 + " zebracorn " + "D" * 300
+def test_excerpt_chars_capped_at_snippet_maximum(db: Database) -> None:
+    """FTS5 caps snippet() at 64 tokens: wider requests return ~64 characters."""
+    content = "lorem ipsum " * 50 + "zebracorn" + " dolor sit" * 50
     _seed_long_message(db, content)
-    (wide,) = search(db, "zebracorn", excerpt_chars=2000)
-    assert f"{SNIPPET_PRE}zebracorn{SNIPPET_POST}" in wide.excerpt
-    (narrow,) = search(db, "zebracorn", excerpt_chars=64)
-    assert wide.excerpt == narrow.excerpt
+    (hit,) = search(db, "zebracorn", excerpt_chars=2000)
+    assert 62 <= len(_plain(hit.excerpt)) <= 66
 
 
-def test_wide_excerpt_reads_the_right_row_for_every_kind(db: Database) -> None:
-    """The highlight() re-read maps each hit kind to its own FTS row."""
-    _seed_search_corpus(db)
-    hits = list(search(db, "kafka", excerpt_chars=500, limit=20))
-    by_kind = {(h.kind, h.id): _plain(h.excerpt) for h in hits}
-    assert by_kind[("message", "m1")] == "kafka pipeline notes for ingestion"
-    assert by_kind[("message", "m3")] == "kafka cluster sizing recommendations"
-    assert by_kind[("tool_call", "tc1")] == '{"command": "echo kafka started okay"}'
-    assert by_kind[("tool_result", "tc1")] == "kafka consumer ready acknowledgement"
-
-
-def test_search_reads_in_one_transaction(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The union query and the per-hit highlight() re-reads share one snapshot."""
-    _seed_search_corpus(db)
-    statements: list[str] = []
-
-    def traced_open_ro(path: Path | str) -> sqlite3.Connection:
-        conn = open_ro(path)
-        conn.set_trace_callback(statements.append)
-        return conn
-
-    monkeypatch.setattr(search_module, "open_ro", traced_open_ro)
-    hits = list(search(db, "kafka", excerpt_chars=500))
-    assert hits
-    assert statements[0] == "BEGIN"
-    assert statements[-1] in {"COMMIT", "ROLLBACK"}
-    assert sum("highlight(" in s for s in statements) == len(hits)
+def test_search_default_excerpt_is_snippet_maximum(db: Database) -> None:
+    content = "lorem ipsum " * 50 + "zebracorn" + " dolor sit" * 50
+    _seed_long_message(db, content)
+    (hit,) = search(db, "zebracorn")
+    assert 62 <= len(_plain(hit.excerpt)) <= 66

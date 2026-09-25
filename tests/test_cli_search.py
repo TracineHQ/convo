@@ -316,11 +316,11 @@ def _excerpt_body(excerpt: str) -> str:
 @pytest.mark.parametrize(
     ("argv", "width"),
     [
-        ([], 200),  # default
-        (["--excerpt-chars", "2000"], 2000),  # wider than snippet()'s 64-token cap
-        (["--excerpt-chars", "65"], 65),  # first width past the cap: must take the wide path
-        (["--excerpt-chars", "80"], 80),
-        (["--excerpt-chars", "40"], 40),  # snippet() path
+        ([], 64),  # default: the FTS5 snippet() maximum
+        (["--excerpt-chars", "40"], 40),
+        # FTS5 caps snippet() at 64 tokens; wider requests get the cap.
+        (["--excerpt-chars", "65"], 64),
+        (["--excerpt-chars", "2000"], 64),
     ],
 )
 def test_search_excerpt_chars_width(
@@ -338,7 +338,7 @@ def test_search_excerpt_chars_width(
     body = _excerpt_body(hit["excerpt"])
     assert "[zebracorn]" in hit["excerpt"]
     assert body in _NEEDLE_CONTENT
-    # snippet() rounds to whole trigram tokens; the wide path is exact.
+    # One trigram token spans about one character; snippet() adds up to 2.
     assert width - 2 <= len(body) <= width + 2
 
 

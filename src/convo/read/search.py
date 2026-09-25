@@ -29,9 +29,8 @@ SNIPPET_POST: str = "\x03HIT\x03"
 SNIPPET_ELLIPSIS: str = "..."
 _SNIPPET_TOKENS: int = 12
 # FTS5 caps snippet() at 64 tokens (newer SQLite clamps silently). The FTS
-# tables use the trigram tokenizer, so one token spans about one character;
-# wider excerpts are cut from highlight() output in Python instead.
-_SNIPPET_MAX_TOKENS: int = 64
+# tables use the trigram tokenizer, so one token spans about one character.
+SNIPPET_MAX_TOKENS: int = 64
 
 _KIND_MESSAGE: str = "message"
 _KIND_TOOL_CALL: str = "tool_call"
@@ -39,7 +38,6 @@ _KIND_TOOL_RESULT: str = "tool_result"
 
 _ERR_INVALID_QUERY = "invalid search query: {reason}"
 _ERR_EMPTY_QUERY = "search query must not be empty"
-_ERR_MISSING_ROW = "{table} row {rowid} for a search hit is missing"
 _ERR_SHORT_QUERY_TERM = (
     "search tokens must be at least 3 characters (FTS5 trigram tokenizer minimum)"
 )
@@ -174,9 +172,6 @@ class _Filters:
     session: str | None
     tool_exact: bool
     snippet_tokens: int
-    excerpt_chars: int = 0
-    """Requested excerpt width; above ``_SNIPPET_MAX_TOKENS`` it is served from
-    ``highlight()`` rather than ``snippet()``. 0 = use the snippet as-is."""
 
 
 def search(  # noqa: PLR0913
@@ -188,7 +183,7 @@ def search(  # noqa: PLR0913
     tool: str | None = None,
     session: str | None = None,
     tool_exact: bool = False,
-    excerpt_chars: int = 200,
+    excerpt_chars: int = SNIPPET_MAX_TOKENS,
     limit: int = 10,
 ) -> Iterator[SearchHit]:
     """Search across messages / tool_calls / tool_results FTS tables.
@@ -205,23 +200,14 @@ def search(  # noqa: PLR0913
         tool=tool,
         session=session,
         tool_exact=tool_exact,
-        snippet_tokens=max(1, min(_SNIPPET_MAX_TOKENS, excerpt_chars)),
-        excerpt_chars=excerpt_chars,
+        snippet_tokens=max(1, min(SNIPPET_MAX_TOKENS, excerpt_chars)),
     )
     ro = open_ro(db.path)
     try:
-        # One read transaction: the union query and any per-hit highlight()
-        # re-reads in `_wide_excerpt` see the same snapshot.
-        ro.execute("BEGIN")
         try:
             rows = _run_search(ro, filters, limit=limit)
         except sqlite3.OperationalError as exc:
             raise ValueError(_ERR_INVALID_QUERY.format(reason=exc)) from exc
-        finally:
-            # SQLite may already have rolled back on some errors; a second ROLLBACK
-            # would raise and mask the real exception.
-            if ro.in_transaction:
-                ro.execute("ROLLBACK")
     finally:
         ro.close()
     yield from rows
@@ -247,106 +233,19 @@ def _run_search(
     full_sql = f"SELECT * FROM ({union_sql}) ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?"  # noqa: S608
     params.append(int(limit))
 
-    wide = filters.excerpt_chars > _SNIPPET_MAX_TOKENS
     return [
         SearchHit(
             kind=str(row["kind"]),
             id=str(row["id"]),
             session_id=str(row["session_id"]),
             timestamp=None if row["timestamp"] is None else str(row["timestamp"]),
-            excerpt=(
-                _wide_excerpt(
-                    conn, filters, str(row["kind"]), int(row["fts_rowid"]), str(row["excerpt"])
-                )
-                if wide
-                else str(row["excerpt"])
-            ),
+            excerpt=str(row["excerpt"]),
             project=None if row["project"] is None else str(row["project"]),
             role=None if row["role"] is None else str(row["role"]),
             tool_origin=None if row["tool_origin"] is None else str(row["tool_origin"]),
         )
-        # Materialized: _wide_excerpt issues further queries on this connection.
-        for row in list(conn.execute(full_sql, params))
+        for row in conn.execute(full_sql, params)
     ]
-
-
-# kind -> (FTS table, indexed column) for the highlight() re-read. Fixed
-# allow-list; the f-string SQL below never interpolates user input.
-_FTS_SOURCES: dict[str, tuple[str, int]] = {
-    _KIND_MESSAGE: ("messages_fts", 0),
-    _KIND_TOOL_CALL: ("tool_calls_fts", 1),
-    _KIND_TOOL_RESULT: ("tool_results_fts", 0),
-}
-
-
-def _wide_excerpt(
-    conn: sqlite3.Connection, filters: _Filters, kind: str, rowid: int, fallback: str
-) -> str:
-    """Excerpt of ``excerpt_chars`` characters for one hit, via ``highlight()``.
-
-    Runs once per returned hit (bounded by ``--limit``), not per match, inside
-    the caller's read transaction, so the row the union query matched is there.
-    Text that itself contains the marker strings would make the window centre
-    on a fake hit, so such rows keep the ``snippet()`` excerpt (``fallback``).
-    """
-    table, col = _FTS_SOURCES[kind]
-    row = conn.execute(
-        f"SELECT highlight({table}, {col}, ?, ?), highlight({table}, {col}, '', '') "  # noqa: S608
-        f"FROM {table} WHERE {table} MATCH ? AND rowid = ?",
-        (SNIPPET_PRE, SNIPPET_POST, filters.fts_match, rowid),
-    ).fetchone()
-    if row is None:
-        raise RuntimeError(_ERR_MISSING_ROW.format(table=table, rowid=rowid))
-    plain = str(row[1])
-    if SNIPPET_PRE in plain or SNIPPET_POST in plain:
-        return fallback
-    return window_highlighted(str(row[0]), filters.excerpt_chars)
-
-
-def window_highlighted(raw: str, width: int) -> str:
-    """Cut ``width`` characters of ``raw`` centred on its first highlighted hit.
-
-    ``raw`` carries SNIPPET_PRE/SNIPPET_POST markers (as from ``highlight()``).
-    Markers do not count toward ``width`` and are preserved for hits inside
-    the window; SNIPPET_ELLIPSIS marks each trimmed end, as ``snippet()`` does.
-    """
-    # Split into (text, is_hit) segments so the cut never lands inside a marker.
-    segments: list[tuple[str, bool]] = []
-    rest = raw
-    while (start := rest.find(SNIPPET_PRE)) != -1:
-        end = rest.find(SNIPPET_POST, start)
-        if end == -1:
-            break
-        segments.append((rest[:start], False))
-        segments.append((rest[start + len(SNIPPET_PRE) : end], True))
-        rest = rest[end + len(SNIPPET_POST) :]
-    segments.append((rest, False))
-
-    total = sum(len(text) for text, _ in segments)
-    if total <= width:
-        return raw
-    hit_start = 0
-    hit_len = 0
-    for text, is_hit in segments:
-        if is_hit:
-            hit_len = len(text)
-            break
-        hit_start += len(text)
-    else:
-        hit_start = 0
-    lo = max(0, min(hit_start - max(0, width - hit_len) // 2, total - width))
-    hi = lo + width
-
-    out: list[str] = [SNIPPET_ELLIPSIS] if lo > 0 else []
-    pos = 0
-    for text, is_hit in segments:
-        piece = text[max(0, lo - pos) : max(0, hi - pos)]
-        pos += len(text)
-        if piece:
-            out.append(f"{SNIPPET_PRE}{piece}{SNIPPET_POST}" if is_hit else piece)
-    if hi < total:
-        out.append(SNIPPET_ELLIPSIS)
-    return "".join(out)
 
 
 def _snippet(table: str, col: int, tokens: int) -> str:
@@ -372,8 +271,7 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
         f"m.timestamp AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project, m.role AS role, NULL AS tool_origin, "
-        f"messages_fts.rowid AS fts_rowid"
+        f"s.project_path AS project, m.role AS role, NULL AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -408,8 +306,7 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
         f"tc.started_at AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
-        f"tool_calls_fts.rowid AS fts_rowid"
+        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin"
     )
     sql = (
         f"{select_clause} "
@@ -444,8 +341,7 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
-        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
-        f"tool_results_fts.rowid AS fts_rowid"
+        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin"
     )
     sql = (
         f"{select_clause} "

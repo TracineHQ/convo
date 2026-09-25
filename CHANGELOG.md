@@ -15,12 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `convo inspect --json` echoes `from_message`/`to_message` and adds
   `tool_calls[].truncated`.
 
-### Changed
-
-- `convo search --excerpt-chars` defaults to 200 (was a nominal 600 that
-  produced ~70-character excerpts); excerpts are now ~200 characters.
-  `--excerpt-chars 64` approximates the old size. Negative values exit 2.
-
 ### Fixed
 
 - `convo inspect --from-message/--to-message` now apply without `--timeline`
@@ -30,8 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   describe the whole session.
 - `convo inspect --timeline --json` emits a JSON envelope (with the full
   session header) instead of prose.
-- `convo search --excerpt-chars` was capped at ~70 characters regardless of
-  the value passed.
+- `convo search --excerpt-chars` help claimed a 600-character window, but
+  FTS5 caps snippets at 64 tokens and the flag was mapped as if a token were
+  six characters. It is now mapped one token per character (the trigram
+  tokenizer), defaults to the 64 maximum (the same ~66-character excerpts as
+  before), says so in `--help`, and rejects negative values.
 
 ## [2.0.1] - 2026-05-24
 

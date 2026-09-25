@@ -13,17 +13,12 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from convo.read.search import (
-    SNIPPET_ELLIPSIS,
-    SNIPPET_POST,
-    SNIPPET_PRE,
     _Filters,
     _message_branch,
     _run_search,
     _tool_call_branch,
     _tool_result_branch,
-    _wide_excerpt,
     build_fts_query,
-    window_highlighted,
 )
 
 if TYPE_CHECKING:
@@ -259,60 +254,3 @@ class TestRunSearchComposition:
         _, params = mock.execute.call_args.args
         assert params[-1] == 99
         assert isinstance(params[-1], int)
-
-
-# --------------------------------------------------------------------------- window_highlighted
-
-
-def _hl(text: str) -> str:
-    return f"{SNIPPET_PRE}{text}{SNIPPET_POST}"
-
-
-class TestWindowHighlighted:
-    def test_short_text_returned_verbatim(self) -> None:
-        raw = "abc " + _hl("needle") + " def"
-        assert window_highlighted(raw, 100) == raw
-
-    def test_exact_width_not_trimmed(self) -> None:
-        raw = "ab" + _hl("cd") + "ef"
-        assert window_highlighted(raw, 6) == raw
-
-    def test_centres_on_first_hit(self) -> None:
-        raw = "a" * 100 + _hl("HIT") + "b" * 100
-        out = window_highlighted(raw, 23)
-        assert out == SNIPPET_ELLIPSIS + "a" * 10 + _hl("HIT") + "b" * 10 + SNIPPET_ELLIPSIS
-
-    def test_hit_at_start_and_end(self) -> None:
-        head = window_highlighted(_hl("HIT") + "b" * 100, 10)
-        assert head == _hl("HIT") + "b" * 7 + SNIPPET_ELLIPSIS
-        tail = window_highlighted("a" * 100 + _hl("HIT"), 10)
-        assert tail == SNIPPET_ELLIPSIS + "a" * 7 + _hl("HIT")
-
-    def test_hit_longer_than_width_is_cut_inside_markers(self) -> None:
-        out = window_highlighted("a" * 50 + _hl("H" * 40) + "b" * 50, 10)
-        assert out == SNIPPET_ELLIPSIS + _hl("H" * 10) + SNIPPET_ELLIPSIS
-
-    def test_later_hits_inside_window_keep_markers(self) -> None:
-        raw = "a" * 50 + _hl("one") + "--" + _hl("two") + "b" * 50
-        out = window_highlighted(raw, 20)
-        assert _hl("one") in out
-        assert _hl("two") in out
-
-    def test_no_hit_takes_leading_window(self) -> None:
-        assert window_highlighted("x" * 30, 10) == "x" * 10 + SNIPPET_ELLIPSIS
-
-    def test_multibyte_counted_as_code_points(self) -> None:
-        raw = "\u6f22" * 20 + _hl("\U0001f600") + "\u00e9" * 20
-        out = window_highlighted(raw, 5)
-        assert out == SNIPPET_ELLIPSIS + "\u6f22" * 2 + _hl("\U0001f600") + "\u00e9" * 2 + (
-            SNIPPET_ELLIPSIS
-        )
-        out.encode("utf-8")
-
-
-def test_wide_excerpt_raises_when_row_missing(mocker: MockerFixture) -> None:
-    """A hit whose FTS row cannot be re-read is an error, not a silent empty excerpt."""
-    conn, mock = _stub_conn(mocker)
-    mock.execute.return_value = mocker.Mock(fetchone=mocker.Mock(return_value=None))
-    with pytest.raises(RuntimeError, match="messages_fts row 7 for a search hit is missing"):
-        _wide_excerpt(conn, _make_filters(), "message", 7, "fallback")

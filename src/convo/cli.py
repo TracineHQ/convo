@@ -102,6 +102,7 @@ _INSPECT_TOOL_INPUT_PREVIEW: int = 80
 _UNKNOWN_PROJECT_LABEL: str = "(unknown)"
 _BYTES_PER_KIB: int = 1024
 _SEARCH_DEFAULT_LIMIT: int = 10
+_SEARCH_DEFAULT_EXCERPT_CHARS: int = 200
 _ANSI_BOLD_ON: str = "\x1b[1m"
 _ANSI_BOLD_OFF: str = "\x1b[0m"
 
@@ -457,9 +458,13 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     )
     search_p.add_argument(
         "--excerpt-chars",
-        type=int,
-        default=600,
-        help="snippet character width (default: 600)",
+        type=_non_negative_int("--excerpt-chars must be 0 or a positive integer"),
+        default=_SEARCH_DEFAULT_EXCERPT_CHARS,
+        help=(
+            "approximate excerpt width in characters around the match "
+            f"(default: {_SEARCH_DEFAULT_EXCERPT_CHARS}); for a whole message use "
+            "`convo inspect <session> --from-message N --to-message N --max-chars 0`"
+        ),
     )
     search_p.add_argument(
         "--session",

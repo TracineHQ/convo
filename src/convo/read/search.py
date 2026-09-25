@@ -239,13 +239,14 @@ def _run_search(
     # `position` is computed in the same statement, only for the sessions of
     # the returned hits, under the ordering `convo inspect` numbers messages by.
     full_sql = (
-        f"WITH hits AS (SELECT * FROM ({union_sql}) "  # noqa: S608
+        # MATERIALIZED: without it SQLite re-runs the FTS union for the IN subquery.
+        f"WITH hits AS MATERIALIZED (SELECT * FROM ({union_sql}) "  # noqa: S608
         "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?), "
-        "ranked AS (SELECT id, ROW_NUMBER() OVER "
+        "ranked AS (SELECT id, session_id, ROW_NUMBER() OVER "
         f"(PARTITION BY session_id ORDER BY {MESSAGE_ORDER_BY}) AS position "
         "FROM messages WHERE session_id IN (SELECT session_id FROM hits)) "
         "SELECT hits.*, ranked.position FROM hits "
-        "LEFT JOIN ranked ON ranked.id = hits.msg_id "
+        "LEFT JOIN ranked ON ranked.id = hits.msg_id AND ranked.session_id = hits.session_id "
         "ORDER BY (hits.timestamp IS NULL), hits.timestamp DESC"
     )
     params.append(int(limit))

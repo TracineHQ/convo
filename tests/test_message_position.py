@@ -213,3 +213,41 @@ def test_every_search_hit_round_trips_through_inspect(
 def test_inspect_select_uses_the_shared_message_order() -> None:
     """Search ranks positions by MESSAGE_ORDER_BY; inspect must list messages the same way."""
     assert _MSG_SELECT.endswith(" ORDER BY " + MESSAGE_ORDER_BY)
+
+
+def test_search_positions_are_numbered_per_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Hits from two sessions are numbered within their own session, never across both."""
+    live = tmp_path / "two.bin"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    other = "5e551011-0000-4000-8000-000000000002"
+    with Database(live) as db:
+        assert db.conn is not None
+        for n, sid in enumerate((_SID, other), start=1):
+            db.conn.execute(
+                "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+                "VALUES (?, ?, 0, 0, '2026-09-01T00:00:00Z')",
+                (n, f"/synthetic/{n}"),
+            )
+            db.conn.execute(
+                "INSERT INTO sessions(id, source_file_id, project_path, started_at) "
+                "VALUES (?, ?, '/work/two', '2026-09-01T10:00:00Z')",
+                (sid, n),
+            )
+            for seq in range(3):
+                db.conn.execute(
+                    "INSERT INTO messages(id, session_id, role, seq, timestamp, content, raw_json) "
+                    "VALUES (?, ?, 'user', ?, ?, ?, '{}')",
+                    (
+                        f"{sid[-1]}-{seq}",
+                        sid,
+                        seq,
+                        f"2026-09-01T10:0{n}:0{seq}Z",
+                        f"{_NEEDLE} {seq}" if seq == 2 else "filler",
+                    ),
+                )
+        db.conn.commit()
+    assert main(["search", _NEEDLE, "--json"]) == 0
+    hits = json.loads(capsys.readouterr().out)["search"]["hits"]
+    assert sorted((h["session_id"], h["position"]) for h in hits) == [(_SID, 3), (other, 3)]

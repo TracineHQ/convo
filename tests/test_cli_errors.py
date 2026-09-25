@@ -19,7 +19,7 @@ def _run_convo(*args: str) -> subprocess.CompletedProcess[str]:
 @pytest.mark.parametrize(
     ("flag", "expected_hint"),
     [
-        ("-C5", "excerpt-chars"),
+        ("-C5", "--from-message P --to-message P"),
         ("-A3", "inspect --timeline"),
         ("-B3", "inspect --timeline"),
         ("-E", "regex"),

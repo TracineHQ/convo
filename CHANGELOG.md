@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `convo inspect --max-chars N` sets the per-message content and tool-call
+  input limit (defaults unchanged: 200 content / 80 tool input, 80 for both
+  with `--timeline`); `--max-chars 0` returns full text.
+- `convo inspect --json` echoes `from_message`/`to_message` and adds
+  `tool_calls[].truncated`.
+- Message `position` (1-indexed, the number `inspect` prints and
+  `--from-message/--to-message` take) on `inspect` messages and timeline
+  events, and on `search` hits (message hits; the calling message for
+  tool_call hits; null for tool_result hits). Quote any hit in full with
+  `convo inspect <session_id> --from-message P --to-message P --max-chars 0`.
+  Messages that tie on both `seq` and `timestamp` (only possible across two
+  source files for one session) are now ordered by id instead of insertion
+  order, so numbering is deterministic.
+
+### Fixed
+
+- `convo inspect --from-message/--to-message` now apply without `--timeline`
+  and reject 0, negative, and reversed ranges, or a start past the last
+  message, with an error; an end past the last message is clamped (JSON echoes
+  the requested values). Timeline `message_count`/`duration_seconds` still
+  describe the whole session.
+- `convo inspect --timeline --json` emits a JSON envelope (with the full
+  session header) instead of prose.
+- `convo search --excerpt-chars` help claimed a 600-character window, but
+  FTS5 caps snippets at 64 tokens and the flag was mapped as if a token were
+  six characters. It is now mapped one token per character (the trigram
+  tokenizer), defaults to the 64 maximum (the same ~66-character excerpts as
+  before), says so in `--help`, and rejects negative values.
+
 ## [2.0.1] - 2026-05-24
 
 - Expand skill tool surface, harden hook timeout, document sqlite requirement (#22)

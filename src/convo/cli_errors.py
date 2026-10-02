@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 
 _GREP_FLAG_HINTS: dict[str, str] = {
-    "-C": "use --excerpt-chars to widen the snippet window",
+    "-C": "use `convo inspect <session> --from-message P --to-message P` (P = the hit's position)",
     "-A": "use `convo inspect --timeline` for context after the match",
     "-B": "use `convo inspect --timeline` for context before the match",
     "-E": "regex is not supported; FTS5 trigram handles substrings",

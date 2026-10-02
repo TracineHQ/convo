@@ -440,3 +440,46 @@ def test_extract_indices_empty_input() -> None:
     clean, indices = extract_indices_and_clean("")
     assert clean == ""
     assert indices == []
+
+
+def _seed_long_message(db: Database, content: str) -> None:
+    assert db.conn is not None
+    db.conn.execute(
+        "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+        "VALUES (1, '/data/long', 0, 0, ?)",
+        (_ts(timedelta(0)),),
+    )
+    db.conn.execute("INSERT INTO sessions(id, source_file_id) VALUES ('sl', 1)")
+    db.conn.execute(
+        "INSERT INTO messages(id, session_id, role, seq, timestamp, content, raw_json) "
+        "VALUES ('ml', 'sl', 'user', 0, ?, ?, '{}')",
+        (_ts(timedelta(0)), content),
+    )
+    db.conn.commit()
+
+
+def _plain(excerpt: str) -> str:
+    return excerpt.replace(SNIPPET_PRE, "").replace(SNIPPET_POST, "").replace("...", "")
+
+
+def test_excerpt_chars_small_width_is_close_to_request(db: Database) -> None:
+    """One trigram token spans about one character, so width ~= requested chars."""
+    content = "lorem ipsum " * 50 + "zebracorn" + " dolor sit" * 50
+    _seed_long_message(db, content)
+    (hit,) = search(db, "zebracorn", excerpt_chars=40)
+    assert 35 <= len(_plain(hit.excerpt)) <= 45
+
+
+def test_excerpt_chars_capped_at_snippet_maximum(db: Database) -> None:
+    """FTS5 caps snippet() at 64 tokens: wider requests return ~64 characters."""
+    content = "lorem ipsum " * 50 + "zebracorn" + " dolor sit" * 50
+    _seed_long_message(db, content)
+    (hit,) = search(db, "zebracorn", excerpt_chars=2000)
+    assert 62 <= len(_plain(hit.excerpt)) <= 66
+
+
+def test_search_default_excerpt_is_snippet_maximum(db: Database) -> None:
+    content = "lorem ipsum " * 50 + "zebracorn" + " dolor sit" * 50
+    _seed_long_message(db, content)
+    (hit,) = search(db, "zebracorn")
+    assert 62 <= len(_plain(hit.excerpt)) <= 66

@@ -339,11 +339,15 @@ Example (`tools`):
     "family": "tools",
     "total": 840,
     "top_by_frequency": [{"name": "Bash", "count": 420}],
-    "top_by_median_duration": [{"name": "Bash", "median_ms": 312.5, "sample_count": 420}],
+    "top_by_median_duration": [],
     "error_rates": [{"name": "Bash", "total": 420, "errors": 12, "error_rate": 0.0286}]
   }
 }
 ```
+
+`top_by_median_duration` is always `[]`: intake does not record tool-call
+durations. The key stays so v2 consumers don't break and goes away at the next
+`schema_version` bump.
 
 `hour_of_day` (sessions family) is always a 24-element array; index `h` is
 the count of sessions that started at hour `h` UTC. `null_count` (model family)

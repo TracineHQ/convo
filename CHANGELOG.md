@@ -96,6 +96,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `convo index --dry-run` ends with "Would index N files ... Dry run: nothing
   was written." instead of "Indexed N files" and an all-zero "Inserted" line.
 
+### Removed
+
+- The "top by median duration" section of `convo stats tools` and its help
+  text. Intake never records tool-call durations, so it always printed
+  "(none)". The JSON key `top_by_median_duration` stays, always `[]`, until the
+  next envelope `schema_version` bump.
+
 ## [2.1.0] - 2026-10-15
 
 ### Added

@@ -10,8 +10,8 @@ Wraps `convo stats`, which emits a v2 envelope when `--format=json` is passed.
 Parses at `stats.*`. See `JSON-ENVELOPE.md` at the repo root for the
 contract.
 
-Print the `tools` stats family: call frequency, median duration, and error
-rate per tool across all indexed sessions.
+Print the `tools` stats family: call frequency and error rate per tool across
+all indexed sessions.
 
 ```!
 convo stats tools

@@ -57,6 +57,18 @@ def test_stats_tools_prose(
     assert "Bash" in out
     assert "top by frequency" in out
     assert "error rates" in out
+    # Dropped: intake records no tool durations, so the section was always "(none)".
+    assert "median duration" not in out
+
+
+def test_stats_help_does_not_advertise_tool_durations(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit):
+        main(["stats", "--help"])
+    out = capsys.readouterr().out
+    assert "tools     call frequency / error rate" in out
+    assert "median duration" not in out
 
 
 def test_stats_tools_json(

@@ -89,10 +89,14 @@ Use this path if you want to track `main` directly or hack on convo locally.
 Installing convo as a Claude Code plugin (path 1 above) wires up three things
 on top of the CLI:
 
-**Auto-index after every session.** A `SessionEnd` hook runs `convo index`
-when each Claude Code session ends, so search results stay current without
-manual upkeep. Idempotent and fast (sha256-skipped); no-ops gracefully if
-`convo` isn't on `PATH`.
+**Auto-index after every session.** A `SessionEnd` hook runs
+`convo hook session-end`, which starts a background index of the session
+that just ended and returns in milliseconds (Claude Code gives SessionEnd
+hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`.
+If another convo writer is already running, the hook starts nothing. It
+never migrates the DB: after an upgrade that adds a migration, run
+`convo migrate` (or `convo index`) once. No-ops gracefully if `convo` isn't
+on `PATH`.
 
 **Nine slash commands** available inline in Claude Code:
 
@@ -159,10 +163,18 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
 
 ## Available commands
 
-- `convo index [--full] [--projects-dir PATH] [--dry-run] [--json]` --
-  walk `~/.claude/projects/<slug>/*.jsonl` and populate the database.
-  Idempotent: skips files whose sha256 hasn't changed. `--full` re-indexes
-  everything.
+- `convo index [--full] [--projects-dir PATH] [--session ID] [--dry-run]
+  [--json]` -- walk `~/.claude/projects/<slug>/*.jsonl`, most recently
+  modified first, and populate the database. Idempotent: skips files whose
+  sha256 hasn't changed. `--full` re-indexes everything; `--session` indexes
+  one session's transcript. Applies pending migrations, and waits for any
+  other convo writer to finish (`--no-wait` exits instead; `--no-migrate`
+  refuses to migrate).
+- `convo migrate [--backup] [--json]` -- apply pending schema migrations.
+  Read commands never migrate, so run this (or `convo index`) after an
+  upgrade; `convo info` shows how many are pending. `--backup` snapshots the
+  DB to the snapshot directory first. A migration can take minutes on a
+  large DB; reads keep working meanwhile.
 - `convo info [--json]` -- schema version, row counts per table, last index
   time, top 5 projects by session count, snapshot directory size.
 - `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N]

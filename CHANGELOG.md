@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `convo migrate [--backup] [--json]` applies pending schema migrations,
+  reporting each one as it runs. `--backup` first writes a snapshot to the
+  snapshot directory (`convo restore --latest` undoes the migration).
+  `convo info` reports `pending_migrations`.
+- `convo hook session-end` reads Claude Code's hook JSON on stdin, starts a
+  detached `convo index --session <id> --no-wait --no-migrate` for that one
+  transcript, and returns in milliseconds. The background run's output is
+  appended to `<CONVO_DB>.hook.log`.
+- `convo index --session ID` indexes one session's transcript; `--no-wait`
+  exits (status `busy`) instead of waiting for another convo writer;
+  `--no-migrate` refuses to run while migrations are pending.
+
+### Changed
+
+- The plugin's SessionEnd hook now runs `convo hook session-end`. Claude Code
+  gives SessionEnd hooks 1.5 s by default (a plugin hook's `timeout` does not
+  raise it), so the old in-hook `convo index` was cut off before it could
+  catch up on a grown session. The hook no longer runs `convo index-guard`;
+  run it yourself when you want guard decisions refreshed.
+- Read commands (`info`, `search`, `inspect`, `stats`, `summary`, `diff`) and
+  `backup` no longer apply migrations. `convo index` and `convo migrate` do;
+  the hook never does. A DB too old to read (schema 3 or earlier) now gets an
+  error telling you to run `convo migrate`, in the JSON envelope under
+  `--json` / `--format json`.
+- Writers (`index`, `index-guard`, `migrate`, `restore`, and the hook's
+  background run) share an advisory lock, `<CONVO_DB>.ingest.lock`, so they
+  no longer collide on the DB. `convo index` waits for the holder by default.
+- `convo index` processes transcripts most recently modified first, so fresh
+  sessions are searchable before a backlog, and walks the projects tree once
+  per run instead of twice.
+
+### Fixed
+
+- Re-indexing a grown transcript was quadratic in the size of the DB:
+  `messages.parent_id` and `tool_results.message_id` are `ON DELETE SET NULL`
+  foreign keys with no index, so deleting each old row scanned both tables.
+  One 20k-record file in a 120k-message DB took about 17 minutes; schema v5
+  (migration 0005) indexes both columns, which brings it to seconds.
+- The FTS update triggers fired on any column change, so the `SET NULL`
+  updates above (and any non-text update) rewrote search-index entries.
+  Schema v5 limits them to the indexed text columns.
+
 ## [2.1.0] - 2026-10-15
 
 ### Added

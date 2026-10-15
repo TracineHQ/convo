@@ -254,15 +254,88 @@ class _StringStdin:
         return self._tty
 
 
-def test_plugin_session_end_hook_runs_the_hook_command() -> None:
+def _plugin_session_end_command() -> str:
     config = json.loads(_HOOKS_JSON.read_text(encoding="utf-8"))
     commands = [h["command"] for entry in config["hooks"]["SessionEnd"] for h in entry["hooks"]]
     assert len(commands) == 1
-    command = commands[0]
+    command: str = commands[0]
+    return command
+
+
+def test_plugin_session_end_hook_runs_the_hook_command() -> None:
+    command = _plugin_session_end_command()
     assert "convo hook session-end" in command
-    # No in-process indexing: the SessionEnd budget is 1.5 s.
-    assert "convo index" not in command
     assert "timeout" not in command
+
+
+_FAKE_CONVO = """#!/bin/sh
+echo "$*" >> "$FAKE_CONVO_CALLS"
+if [ "$1" = hook ]; then exit "$FAKE_HOOK_RC"; fi
+exit 0
+"""
+
+
+def _run_plugin_hook(tmp_path: Path, *, hook_rc: int | None) -> list[str]:
+    """Run the plugin's SessionEnd command under sh with a fake `convo` on PATH.
+
+    `hook_rc` is what the fake returns for `convo hook ...` (2 is argparse's
+    exit for an unknown subcommand, i.e. a CLI older than the plugin); None
+    leaves `convo` off PATH entirely.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "calls.txt"
+    if hook_rc is not None:
+        fake = bin_dir / "convo"
+        fake.write_text(_FAKE_CONVO, encoding="utf-8")
+        fake.chmod(0o755)
+    (tmp_path / ".claude").mkdir()
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "HOME": str(tmp_path),
+        "FAKE_CONVO_CALLS": str(calls),
+        "FAKE_HOOK_RC": str(hook_rc),
+    }
+    proc = subprocess.run(  # noqa: S603 - fixed sh path, command from the repo's hooks.json
+        ["/bin/sh", "-c", _plugin_session_end_command()],
+        input=_payload(),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+
+
+_POSIX_SHELL = pytest.mark.skipif(sys.platform == "win32", reason="runs the hook under /bin/sh")
+
+
+@_POSIX_SHELL
+def test_plugin_hook_uses_only_the_hook_command_on_a_current_cli(tmp_path: Path) -> None:
+    assert _run_plugin_hook(tmp_path, hook_rc=0) == ["hook session-end"]
+
+
+@_POSIX_SHELL
+def test_plugin_hook_falls_back_to_index_on_a_cli_without_hook(tmp_path: Path) -> None:
+    # The marketplace ships the plugin from main; the CLI is a separate install
+    # and can be older. Its argparse exits 2 on `convo hook`.
+    assert _run_plugin_hook(tmp_path, hook_rc=2) == ["hook session-end", "index"]
+    errors = (tmp_path / ".claude" / "convo-hook-errors.log").read_text(encoding="utf-8")
+    assert errors == ""
+
+
+@_POSIX_SHELL
+def test_plugin_hook_does_not_index_in_budget_when_the_hook_command_fails(
+    tmp_path: Path,
+) -> None:
+    assert _run_plugin_hook(tmp_path, hook_rc=1) == ["hook session-end"]
+
+
+@_POSIX_SHELL
+def test_plugin_hook_is_a_no_op_without_convo_on_path(tmp_path: Path) -> None:
+    assert _run_plugin_hook(tmp_path, hook_rc=None) == []
 
 
 # --- index flags the hook relies on ------------------------------------------

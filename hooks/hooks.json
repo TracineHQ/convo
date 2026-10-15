@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "command -v convo >/dev/null 2>&1 && convo hook session-end >/dev/null 2>\"$HOME/.claude/convo-hook-errors.log\"; true"
+            "command": "command -v convo >/dev/null 2>&1 && { convo hook session-end || { [ $? -eq 2 ] && convo index; }; } >/dev/null 2>\"$HOME/.claude/convo-hook-errors.log\"; true"
           }
         ]
       }

@@ -27,7 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gives SessionEnd hooks 1.5 s by default (a plugin hook's `timeout` does not
   raise it), so the old in-hook `convo index` was cut off before it could
   catch up on a grown session. The hook no longer runs `convo index-guard`;
-  run it yourself when you want guard decisions refreshed.
+  run it yourself when you want guard decisions refreshed. Upgrade the CLI
+  (`uv tool upgrade tracine-convo` or `pipx upgrade tracine-convo`) along
+  with the plugin: the plugin updates from the marketplace on its own, and
+  with an older CLI the hook falls back to the old in-hook `convo index`.
 - Read commands (`info`, `search`, `inspect`, `stats`, `summary`, `diff`) and
   `backup` no longer apply migrations. `convo index` and `convo migrate` do;
   the hook never does. A DB too old to read (schema 3 or earlier) now gets an

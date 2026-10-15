@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `convo migrate [--backup] [--json]` applies pending schema migrations,
+  reporting each one as it runs. `--backup` first writes a snapshot to the
+  snapshot directory, and says so plainly (`backup_status` under `--json`)
+  when there was nothing pending to protect. `convo index` and the hook's
+  background run apply migrations themselves and log them on stderr (the
+  hook log, for the background run). `convo info` reports
+  `pending_migrations`.
+
+  **Upgrading from 2.1.0:** before upgrading, take a snapshot with the 2.1.0
+  CLI (`convo backup --auto`). The first `convo index` or session end after
+  the upgrade migrates the DB to schema 5, usually before you get to
+  `convo migrate --backup`, so that snapshot is your way back. To go back to
+  2.1.0, which refuses a v5 DB (its `restore` included): make sure no convo
+  process is running (including a hook's background run), downgrade, then
+  copy the snapshot over `<CONVO_DB>` by hand and delete the `-wal` and
+  `-shm` files beside it.
+- `convo hook session-end` reads Claude Code's hook JSON on stdin, starts a
+  detached `convo index --session <id>` for that one transcript, and returns
+  in milliseconds. If another convo writer is running, one background run
+  waits for it (up to an hour) and then indexes every transcript, newest
+  first; runs for sessions that end meanwhile leave theirs to it and exit.
+  The background run applies pending migrations like any `convo index` and
+  appends its output to `<CONVO_DB>.hook.log`, each line stamped with the
+  time and the session id.
+- `convo index --session ID` indexes one session's transcript; `--no-wait`
+  exits (status `busy`) instead of waiting for another convo writer;
+  `--no-migrate` refuses to run while migrations are pending.
+
+### Changed
+
+- The plugin's SessionEnd hook now runs `convo hook session-end`. Claude Code
+  gives SessionEnd hooks 1.5 s by default (a plugin hook's `timeout` does not
+  raise it), so the old in-hook `convo index` was cut off before it could
+  catch up on a grown session. The hook no longer runs `convo index-guard`;
+  run it yourself when you want guard decisions refreshed. Upgrade the CLI
+  (`uv tool upgrade tracine-convo` or `pipx upgrade tracine-convo`) along
+  with the plugin: the plugin updates from the marketplace on its own, and
+  with an older CLI the hook falls back to the old in-hook `convo index`.
+- Read commands (`info`, `search`, `inspect`, `stats`, `summary`, `diff`) and
+  `backup` no longer apply migrations. `convo index`, the hook's background
+  run and `convo migrate` do. A DB too old to read (schema 3 or earlier)
+  now gets an error telling you to run `convo migrate`, in the JSON envelope
+  under `--json` / `--format json`.
+- Writers (`index`, `index-guard`, `migrate`, `restore`, and the hook's
+  background run) share an advisory lock, `<CONVO_DB>.ingest.lock`, so they
+  no longer collide on the DB. `convo index` waits for the holder by default.
+- `convo index` processes transcripts most recently modified first, so fresh
+  sessions are searchable before a backlog, and walks the projects tree once
+  per run instead of twice.
+
+### Fixed
+
+- Re-indexing a grown transcript was quadratic in the size of the DB:
+  `messages.parent_id` and `tool_results.message_id` are `ON DELETE SET NULL`
+  foreign keys with no index, so deleting each old row scanned both tables.
+  One 20k-record file in a 120k-message DB took about 17 minutes; schema v5
+  (migration 0005) indexes both columns, which brings it to seconds.
+- The FTS update triggers fired on any column change, so the `SET NULL`
+  updates above (and any non-text update) rewrote search-index entries.
+  Schema v5 limits them to the indexed text columns.
+- A snapshot that failed partway (disk full, interrupted) left a partial file
+  that `convo restore --latest` would then pick. It is now removed. `backup`
+  and `migrate --backup` also check for free space first and say on stderr
+  when they start writing.
+
 ## [2.1.0] - 2026-10-15
 
 ### Added

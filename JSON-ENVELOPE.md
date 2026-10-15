@@ -48,7 +48,8 @@ shape.
 {
   "schema_version": 2,
   "info": {
-    "db_schema_version": 2,
+    "db_schema_version": 5,
+    "pending_migrations": 0,
     "row_counts": {
       "source_files": 12,
       "sessions": 42,
@@ -70,6 +71,8 @@ shape.
 
 `last_indexed_at` is ISO 8601 or `null` when the DB has never been indexed.
 `top_projects` contains up to 5 entries ordered by `session_count` descending.
+`pending_migrations` counts migrations this convo knows that the DB has not
+applied; read commands never apply them (`convo migrate` does).
 
 ---
 
@@ -486,7 +489,9 @@ Standard case (transcript ingest):
 ```
 
 `status` is `"success"`, `"partial"` (some files indexed, some failed), or
-`"error"` (all files failed). Exit code is 1 when `status="error"`.
+`"error"` (all files failed). Exit code is 1 when `status="error"`. With
+`--no-wait`, `status` is `"busy"` (counts all zero, exit code 0) when another
+convo writer holds the lock.
 
 Guard-log variant (`convo index-guard --json`):
 
@@ -508,6 +513,56 @@ Guard-log variant (`convo index-guard --json`):
 
 ---
 
+### `migrate`
+
+```json
+{
+  "schema_version": 2,
+  "migrate": {
+    "status": "migrated",
+    "from_version": 4,
+    "to_version": 5,
+    "applied": [
+      {"version": 5, "filename": "0005_fk_child_indexes.sql", "duration_ms": 412}
+    ],
+    "backup_path": "/home/user/.claude/convo-backups/convo-20261015-120000-000000.db",
+    "backup_status": "written"
+  }
+}
+```
+
+`status` is `"migrated"` or `"up_to_date"` (`applied` empty).
+`backup_status` says what `--backup` did: `"written"` (`backup_path` is the
+snapshot), `"up_to_date"` (no migration was pending, so no snapshot; the
+SessionEnd hook's background run has usually migrated already), `"empty_db"`
+(no indexed rows to snapshot) or `"not_requested"` (no `--backup`).
+`backup_path` is `null` unless `backup_status` is `"written"`.
+
+---
+
+### `hook`
+
+```json
+{
+  "schema_version": 2,
+  "hook": {
+    "event": "session-end",
+    "status": "spawned",
+    "session_id": "5e551011-0000-4000-8000-000000000001",
+    "pid": 48213,
+    "log_path": "/home/user/.claude/convo.db.hook.log"
+  }
+}
+```
+
+`status` is `"spawned"` (a background `convo index --session` run started;
+if another convo writer holds the lock, it waits for it, or leaves the
+session to a run that is already waiting) or
+`"skipped"` (no usable session id on stdin). `pid` and `log_path` are `null`
+unless `spawned`. Exit code is 0 in every case.
+
+---
+
 ### Error envelope
 
 Any command that encounters a fatal error (bad DB path, ambiguous session
@@ -521,6 +576,10 @@ prefix, project not found, etc.) emits:
 ```
 
 Exit code is always 1 for error envelopes.
+
+A read command on a DB older than it can query (schema 3 or earlier), or
+`convo index --no-migrate` on a DB with pending migrations, returns an error
+envelope whose message includes `Run: convo migrate`.
 
 ---
 

@@ -1,7 +1,7 @@
 """Argparse CLI for convo.
 
-Subcommands: backup, restore, index, info, search, inspect, snapshots,
-stats, projects, tools, sessions.
+Subcommands: backup, restore, index, index-guard, migrate, hook, info, search,
+inspect, snapshots, stats, summary, diff, projects, tools, sessions.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, override
@@ -42,9 +43,24 @@ from convo.analytics import (
     stats_tools,
 )
 from convo.cli_errors import precheck_argv
-from convo.db import Database, resolve_db_path, resolve_snapshot_dir
+from convo.db import (
+    READ_MIN_SCHEMA_VERSION,
+    SCHEMA_VERSION,
+    AppliedMigration,
+    Database,
+    resolve_db_path,
+    resolve_snapshot_dir,
+)
+from convo.hook import HookOutcome, run_session_end
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
-from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
+from convo.intake.orchestrator import (
+    IndexReport,
+    IndexResult,
+    discover_transcripts,
+    index_tree,
+    is_valid_session_id,
+)
+from convo.lock import WaiterLock, WriterLock
 from convo.read._db_access import open_ro as _open_ro
 from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
 from convo.read.info import InfoReport, ProjectCount, gather_info
@@ -78,7 +94,7 @@ from convo.read.suggestions import Suggestion, generate_suggestions
 from convo.read.tools import ToolRow, list_tools
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 # referenced below in _projects_command, _tools_command, _sessions_command
 _DISCOVERY_REFS = (ProjectRow, list_projects, SessionRow, list_sessions, ToolRow, list_tools)
@@ -96,6 +112,8 @@ ERROR_ENVELOPE_VERSION: int = 2
 PROJECTS_ENVELOPE_VERSION: int = 2
 TOOLS_ENVELOPE_VERSION: int = 2
 SESSIONS_ENVELOPE_VERSION: int = 2
+MIGRATE_ENVELOPE_VERSION: int = 2
+HOOK_ENVELOPE_VERSION: int = 2
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _TIMELINE_PREVIEW_CHARS: int = 80
@@ -117,6 +135,110 @@ def _resolve_projects_dir(explicit: Path | str | None = None) -> Path:
     return DEFAULT_PROJECTS_DIR
 
 
+@contextmanager
+def _read_db(db_path: Path) -> Iterator[Database]:
+    """Open the DB for a read command: never migrate, refuse a too-old schema.
+
+    Pending migrations the read path does not need are left for `convo
+    migrate` (or the next `convo index`), so a read never waits on a slow
+    one. A DB older than `READ_MIN_SCHEMA_VERSION` raises
+    `MigrationRequiredError`, which `main` reports as the error envelope.
+    """
+    with Database(db_path, migrate=False) as db:
+        db.require_schema(READ_MIN_SCHEMA_VERSION)
+        yield db
+
+
+@contextmanager
+def _writer_lock(db_path: Path, *, wait: bool = True) -> Iterator[bool]:
+    """Hold the DB's writer lock for the block; yield whether it was taken.
+
+    With `wait`, block until another writer (often the SessionEnd hook's
+    background run) finishes; otherwise yield False at once if it is held.
+    """
+    lock = WriterLock(db_path)
+    acquired = lock.acquire(blocking=False)
+    if not acquired and wait:
+        print("convo: waiting for another convo writer to finish ...", file=sys.stderr, flush=True)
+        acquired = lock.acquire(blocking=True)
+    try:
+        yield acquired
+    finally:
+        lock.release()
+
+
+# How long a hook run that is next in line waits for the writer lock before
+# giving up. Generous: a first full index of a large history can take a while.
+_HOOK_RUN_MAX_WAIT_SECONDS: float = 3600.0
+
+
+@contextmanager
+def _index_lock(args: argparse.Namespace, db_path: Path) -> Iterator[str | None]:
+    """Take the lock `convo index` needs; yield how it got it.
+
+    Yields "now" (go ahead with the requested scope), "after_wait" (a hook run
+    that waited: index every transcript) or None (not taken: do nothing).
+    """
+    if args.dry_run:
+        # A dry run only reads, so it neither waits for the writer lock nor migrates.
+        yield "now"
+    elif args.hook_run:
+        with _hook_run_lock(db_path) as grant:
+            yield grant
+    else:
+        with _writer_lock(db_path, wait=not args.no_wait) as acquired:
+            yield "now" if acquired else None
+
+
+@contextmanager
+def _hook_run_lock(db_path: Path) -> Iterator[str | None]:
+    """The writer lock for the SessionEnd hook's background run, one waiter at most.
+
+    A free lock is taken at once ("now": index just this session). A held one
+    means waiting, but only one run waits: it takes the `WaiterLock` slot, and
+    a run that finds the slot taken exits (None), because the waiter indexes
+    every transcript once it gets the lock ("after_wait"), covering each
+    session that ended meanwhile. The waiter frees the slot the moment it
+    stops waiting, since its discovery comes after that and a session ending
+    during its run needs the next waiter. Waiting is capped (None).
+    """
+    writer = WriterLock(db_path)
+    if writer.acquire(blocking=False):
+        grant = "now"
+    else:
+        waiter = WaiterLock(db_path)
+        if not waiter.acquire(blocking=False):
+            print(
+                "convo: another convo writer is running; queued behind an existing waiter, "
+                "which will index this session",
+                file=sys.stderr,
+            )
+            yield None
+            return
+        try:
+            print(
+                "convo: waiting for another convo writer to finish ...",
+                file=sys.stderr,
+                flush=True,
+            )
+            acquired = writer.acquire(blocking=True, timeout=_HOOK_RUN_MAX_WAIT_SECONDS)
+        finally:
+            waiter.release()
+        if not acquired:
+            print(
+                f"convo: gave up after waiting {_HOOK_RUN_MAX_WAIT_SECONDS:.0f}s for another "
+                "convo writer; run `convo index` to catch up",
+                file=sys.stderr,
+            )
+            yield None
+            return
+        grant = "after_wait"
+    try:
+        yield grant
+    finally:
+        writer.release()
+
+
 def _positive_int(s: str) -> int:
     """Argparse type for `--limit`: rejects zero and negatives.
 
@@ -133,6 +255,14 @@ def _positive_int(s: str) -> int:
         msg = "--limit must be a positive integer"
         raise argparse.ArgumentTypeError(msg)
     return n
+
+
+def _session_id_arg(s: str) -> str:
+    """Argparse type for `index --session`: a bare session id, never a path or glob."""
+    if not is_valid_session_id(s):
+        msg = f"invalid session id {s!r}: expected letters, digits, '.', '_', '-'"
+        raise argparse.ArgumentTypeError(msg)
+    return s
 
 
 def _message_number(s: str) -> int:
@@ -244,6 +374,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_restore_parser(sub)
     _add_index_parser(sub)
     _add_index_guard_parser(sub)
+    _add_migrate_parser(sub)
+    _add_hook_parser(sub)
     _add_info_parser(sub)
     _add_search_parser(sub)
     _add_inspect_parser(sub)
@@ -321,14 +453,16 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help="Index Claude Code session JSONLs into the convo DB.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Walks <projects-dir>/<slug>/*.jsonl. Skips files whose sha256 is\n"
-            "already recorded in source_files. With --full, every file is\n"
-            "re-indexed. CLAUDE_PROJECTS_DIR overrides the default projects dir.\n"
+            "Walks <projects-dir>/<slug>/*.jsonl, most recently modified first.\n"
+            "Skips files whose sha256 is already recorded in source_files. With\n"
+            "--full, every file is re-indexed. CLAUDE_PROJECTS_DIR overrides the\n"
+            "default projects dir.\n"
             "\n"
             "Examples:\n"
             "  convo index\n"
             "  convo index --full --json\n"
             "  convo index --projects-dir /path/to/projects --dry-run\n"
+            "  convo index --session <session-id>\n"
         ),
     )
     index_p.add_argument(
@@ -337,6 +471,28 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         default=None,
         help="Projects dir (default: $CLAUDE_PROJECTS_DIR or ~/.claude/projects/).",
     )
+    index_p.add_argument(
+        "--session",
+        type=_session_id_arg,
+        default=None,
+        metavar="ID",
+        help="Index only <projects-dir>/<slug>/<ID>.jsonl (a full session id, not a prefix).",
+    )
+    index_p.add_argument(
+        "--no-wait",
+        action="store_true",
+        help=(
+            "If another convo writer is running, exit 0 without indexing "
+            "(default: wait for it to finish)."
+        ),
+    )
+    index_p.add_argument(
+        "--no-migrate",
+        action="store_true",
+        help="Refuse to run if the DB has pending migrations instead of applying them.",
+    )
+    # Internal: the SessionEnd hook's background run (see `_hook_run_lock`).
+    index_p.add_argument("--hook-run", action="store_true", help=argparse.SUPPRESS)
     index_p.add_argument(
         "--full",
         action="store_true",
@@ -379,6 +535,57 @@ def _add_index_guard_parser(sub: argparse._SubParsersAction[argparse.ArgumentPar
         help="Re-index regardless of recorded sha256.",
     )
     guard_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _add_migrate_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    migrate_p = sub.add_parser(
+        "migrate",
+        help="Apply pending schema migrations to the convo DB.",
+        epilog=(
+            "Read commands never migrate; `convo index` (including the SessionEnd hook's "
+            "background run) and this command do. On a large DB a migration can take "
+            "minutes; it holds the write lock, and reads keep working. Afterwards, "
+            "`convo index` catches up. --backup first writes a snapshot to the "
+            "snapshot directory ($CONVO_BACKUP_DIR, default <CONVO_DB>'s parent / "
+            "convo-backups), which `convo restore --latest` restores. It only does so "
+            "while a migration is pending, and the hook's background run usually "
+            "migrates first: to keep a way back, run `convo backup --auto` with your "
+            "current CLI before upgrading."
+        ),
+    )
+    migrate_p.add_argument(
+        "--backup",
+        action="store_true",
+        help="Snapshot the DB before applying migrations (skipped when none are pending).",
+    )
+    migrate_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _add_hook_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    hook_p = sub.add_parser(
+        "hook",
+        help="Entry point for Claude Code hooks; reads the hook's JSON on stdin.",
+        epilog=(
+            "session-end starts `convo index --session <id>` in the background for the "
+            "session that just ended and returns at once, inside Claude Code's 1.5 s "
+            "SessionEnd budget. That run's output is appended to <CONVO_DB>.hook.log. If "
+            "another convo writer is running, one background run waits for it (up to an "
+            "hour) and then indexes every transcript; later ones leave their sessions to "
+            "it. Like any `convo index`, it applies pending migrations first."
+        ),
+    )
+    hook_p.add_argument("event", choices=["session-end"], help="The hook event to handle.")
+    hook_p.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -629,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(args)
     except (RuntimeError, ValueError, FileExistsError, OSError, sqlite3.DatabaseError) as exc:
-        if getattr(args, "as_json", False):
+        if getattr(args, "as_json", False) or getattr(args, "format", None) == "json":
             envelope = {
                 "schema_version": ERROR_ENVELOPE_VERSION,
                 "error": {"message": str(exc)},
@@ -648,6 +855,8 @@ def _dispatch(args: argparse.Namespace) -> int:
         "restore": _restore_command,
         "index": _index_command,
         "index-guard": _index_guard_command,
+        "migrate": _migrate_command,
+        "hook": _hook_command,
         "info": _info_command,
         "search": _search_command,
         "inspect": _inspect_command,
@@ -666,8 +875,18 @@ def _dispatch(args: argparse.Namespace) -> int:
     return rc
 
 
+def _announce_snapshot() -> None:
+    # stderr: stdout stays the single result line or JSON envelope.
+    print(
+        "convo: writing snapshot (can take minutes on a large DB) ...",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _backup_command(args: argparse.Namespace, db_path: Path) -> int:
-    with Database(db_path) as db:
+    with Database(db_path, migrate=False) as db:
+        _announce_snapshot()
         if args.auto:
             written = db.backup_snapshot()
             snapshot_path = written
@@ -696,7 +915,9 @@ def _build_backup_envelope(snapshot_path: Path) -> dict[str, object]:
 
 def _restore_command(args: argparse.Namespace, db_path: Path) -> int:
     src: Path = _resolve_restore_src(args, db_path)
-    with Database(db_path) as db:
+    # migrate=False: restoring a pre-migration snapshot is how `migrate
+    # --backup` is undone, so neither the live DB nor the restored copy migrates.
+    with _writer_lock(db_path), Database(db_path, migrate=False) as db:
         db.restore_snapshot(src)
     if args.as_json:
         print(json.dumps(_build_restore_envelope(src)))
@@ -831,11 +1052,11 @@ def _envelope_status(report: IndexReport) -> str:
     return "partial"
 
 
-def _build_envelope(report: IndexReport) -> dict[str, object]:
+def _build_envelope(report: IndexReport, *, status: str | None = None) -> dict[str, object]:
     return {
         "schema_version": INDEX_ENVELOPE_VERSION,
         "index": {
-            "status": _envelope_status(report),
+            "status": status or _envelope_status(report),
             "files_seen": report.files_seen,
             "files_indexed": report.files_indexed,
             "files_skipped": report.files_skipped_unchanged + report.files_skipped_empty,
@@ -851,40 +1072,101 @@ def _build_envelope(report: IndexReport) -> dict[str, object]:
     }
 
 
-def _index_command(args: argparse.Namespace, db_path: Path) -> int:
-    projects_dir = _resolve_projects_dir(args.projects_dir)
+def _migrate_noting_it(db: Database) -> None:
+    """Apply pending migrations, saying so on stderr.
+
+    stderr keeps a `--json` envelope alone on stdout, and for the SessionEnd
+    hook's background run it is the log, so an upgrade shows up there.
+    """
+    from_version = db.schema_version()
+
+    def announce(_version: int, filename: str) -> None:
+        print(
+            f"convo: applying {filename} (can take minutes on a large DB) ...",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    if db.apply_migrations(on_start=announce):
+        print(f"convo: migrated schema {from_version} -> {db.schema_version()}", file=sys.stderr)
+
+
+def _existing_projects_dir(explicit: Path | None) -> Path:
+    projects_dir = _resolve_projects_dir(explicit)
     if not projects_dir.exists():
         msg = f"projects dir does not exist: {projects_dir}"
         raise RuntimeError(msg)
     if not projects_dir.is_dir():
         msg = f"projects dir is not a directory: {projects_dir}"
         raise RuntimeError(msg)
+    return projects_dir
 
-    from convo.intake.orchestrator import _discover_jsonl  # noqa: PLC0415
 
-    total = len(_discover_jsonl(projects_dir))
-    i = 0
+def _index_scope(args: argparse.Namespace, grant: str) -> str | None:
+    """Return the `--session` filter to index under `grant` (None: every transcript)."""
+    if grant != "after_wait":
+        return cast("str | None", args.session)
+    if not args.as_json:
+        print("indexing every transcript, newest first: other sessions may have ended meanwhile")
+    return None
 
-    def progress(result: IndexResult) -> None:
-        nonlocal i
-        i += 1
-        if not args.as_json:
-            print(_format_file_line(i, total, projects_dir, result))
 
-    with Database(db_path) as db:
-        report = index_tree(
-            db,
-            projects_dir,
-            full=args.full,
-            dry_run=args.dry_run,
-            on_file=progress,
-        )
+def _index_command(args: argparse.Namespace, db_path: Path) -> int:
+    projects_dir = _existing_projects_dir(args.projects_dir)
+    with _index_lock(args, db_path) as grant:
+        if grant is None:
+            # A hook run already logged why it is not indexing.
+            return 0 if args.hook_run else _report_index_busy(args)
+        files = discover_transcripts(projects_dir, session_id=_index_scope(args, grant))
+        total = len(files)
+        i = 0
+
+        def progress(result: IndexResult) -> None:
+            nonlocal i
+            i += 1
+            if not args.as_json:
+                print(_format_file_line(i, total, projects_dir, result))
+
+        with Database(db_path, migrate=False) as db:
+            if args.no_migrate:
+                db.require_schema(SCHEMA_VERSION)
+            elif args.dry_run:
+                db.require_schema(READ_MIN_SCHEMA_VERSION)
+            else:
+                _migrate_noting_it(db)
+            report = index_tree(
+                db,
+                projects_dir,
+                full=args.full,
+                dry_run=args.dry_run,
+                on_file=progress,
+                files=files,
+            )
 
     if args.as_json:
         print(json.dumps(_build_envelope(report)))
     else:
         _print_summary(report)
     return 1 if _envelope_status(report) == "error" else 0
+
+
+def _report_index_busy(args: argparse.Namespace) -> int:
+    if args.as_json:
+        empty = IndexReport(
+            files_seen=0,
+            files_indexed=0,
+            files_skipped_unchanged=0,
+            files_skipped_empty=0,
+            files_failed=0,
+            rows_inserted={},
+            unknown_record_types={},
+            errors=[],
+            duration_ms=0,
+        )
+        print(json.dumps(_build_envelope(empty, status="busy")))
+    else:
+        print("another convo writer is running; nothing indexed (run convo index again later)")
+    return 0
 
 
 def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -903,7 +1185,7 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
         else:
             print(f"convo: {msg}", file=sys.stderr)
         return 1 if explicit_miss else 0
-    with Database(db_path) as db:
+    with _writer_lock(db_path), Database(db_path) as db:
         result = index_guard_file(db, log_path, force=args.full)
     if args.as_json:
         envelope = {
@@ -931,8 +1213,121 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
     return 0
 
 
+def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
+    def announce(_version: int, filename: str) -> None:
+        if not args.as_json:
+            print(f"applying {filename} (can take minutes on a large DB) ...", flush=True)
+
+    with _writer_lock(db_path), Database(db_path, migrate=False) as db:
+        assert db.conn is not None
+        from_version = db.schema_version()
+        backup_path, backup_status = (
+            _migrate_backup(db, as_json=args.as_json) if args.backup else (None, "not_requested")
+        )
+        applied = db.apply_migrations(on_start=announce)
+        if applied:
+            # Fold the migration's WAL pages back into the DB file. Best effort:
+            # an active reader can leave it incomplete, which is harmless.
+            db.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        to_version = db.schema_version()
+
+    if args.as_json:
+        envelope = _build_migrate_envelope(
+            from_version,
+            to_version,
+            applied,
+            backup_path,
+            backup_status,
+        )
+        print(json.dumps(envelope))
+    elif applied:
+        total_s = sum(m.duration_ms for m in applied) / 1000.0
+        plural = "" if len(applied) == 1 else "s"
+        print(
+            f"migrated schema {from_version} -> {to_version} "
+            f"({len(applied)} migration{plural}, {total_s:.1f}s)",
+        )
+        print("run `convo index` to catch up on sessions that changed since.")
+    else:
+        print(f"schema {to_version} is up to date; nothing to migrate")
+    return 0
+
+
+def _migrate_backup(db: Database, *, as_json: bool) -> tuple[Path | None, str]:
+    """Snapshot before migrating; return (snapshot path, `backup_status`).
+
+    `backup_status` is `written`, `up_to_date` (nothing pending, so nothing to
+    protect: usually the hook's background run has already migrated) or
+    `empty_db` (no indexed rows to save).
+    """
+    assert db.conn is not None
+    if not db.pending_migrations():
+        if not as_json:
+            print(f"no snapshot written: already at schema {db.schema_version()}")
+        return None, "up_to_date"
+    if not db.conn.execute("SELECT EXISTS(SELECT 1 FROM source_files)").fetchone()[0]:
+        if not as_json:
+            print("no snapshot written: the DB has no indexed rows")
+        return None, "empty_db"
+    _announce_snapshot()
+    backup_path = db.backup_snapshot()
+    if not as_json:
+        print(f"snapshot written: {backup_path}")
+    return backup_path, "written"
+
+
+def _build_migrate_envelope(
+    from_version: int,
+    to_version: int,
+    applied: list[AppliedMigration],
+    backup_path: Path | None,
+    backup_status: str,
+) -> dict[str, object]:
+    return {
+        "schema_version": MIGRATE_ENVELOPE_VERSION,
+        "migrate": {
+            "status": "migrated" if applied else "up_to_date",
+            "from_version": from_version,
+            "to_version": to_version,
+            "applied": [dataclasses.asdict(m) for m in applied],
+            "backup_path": None if backup_path is None else str(backup_path),
+            "backup_status": backup_status,
+        },
+    }
+
+
+def _hook_command(args: argparse.Namespace, db_path: Path) -> int:
+    # A terminal on stdin means a person typed the command: don't block on read().
+    stdin = sys.stdin
+    text = "" if stdin is None or stdin.isatty() else stdin.read()
+    outcome = run_session_end(text, db_path=db_path)
+    if args.as_json:
+        print(json.dumps(_build_hook_envelope(args.event, outcome)))
+    elif outcome.status == "spawned":
+        print(
+            f"convo: indexing session {outcome.session_id} in the background "
+            f"(pid {outcome.pid}); log: {outcome.log_path}",
+        )
+    else:
+        print("convo: no session id in the hook input; nothing started")
+    return 0
+
+
+def _build_hook_envelope(event: str, outcome: HookOutcome) -> dict[str, object]:
+    return {
+        "schema_version": HOOK_ENVELOPE_VERSION,
+        "hook": {
+            "event": event,
+            "status": outcome.status,
+            "session_id": outcome.session_id,
+            "pid": outcome.pid,
+            "log_path": None if outcome.log_path is None else str(outcome.log_path),
+        },
+    }
+
+
 def _info_command(args: argparse.Namespace, db_path: Path) -> int:
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = gather_info(db)
     if args.as_json:
         print(json.dumps(_build_info_envelope(report)))
@@ -952,6 +1347,7 @@ def _build_info_envelope(report: InfoReport) -> dict[str, object]:
         "schema_version": INFO_ENVELOPE_VERSION,
         "info": {
             "db_schema_version": report.schema_version,
+            "pending_migrations": report.pending_migrations,
             "row_counts": dict(report.row_counts),
             "last_indexed_at": report.last_indexed_at,
             "top_projects": [
@@ -980,8 +1376,12 @@ def _format_bytes(n: int) -> str:
 
 
 def _print_info(report: InfoReport) -> None:
+    schema = str(report.schema_version)
+    if report.pending_migrations:
+        plural = "" if report.pending_migrations == 1 else "s"
+        schema += f" ({report.pending_migrations} pending migration{plural}; run: convo migrate)"
     rows: list[tuple[str, str]] = [
-        ("schema_version", str(report.schema_version)),
+        ("schema_version", schema),
         ("db_size", _format_bytes(report.db_size_bytes)),
         ("last_indexed_at", report.last_indexed_at or "(never)"),
     ]
@@ -1017,7 +1417,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
     project_resolved: str | None = args.project
 
     if args.project:
-        with Database(db_path) as _db_proj:
+        with _read_db(db_path) as _db_proj:
             assert _db_proj.conn is not None
             try:
                 project_resolved = resolve_project_path(_db_proj.conn, args.project)
@@ -1035,7 +1435,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
                     print(f"convo: {exc}", file=sys.stderr)
                 return 1
 
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         hits = list(
             search(
                 db,
@@ -1166,7 +1566,7 @@ def _render_excerpt_for_tty(excerpt: str) -> str:
 
 
 def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         if args.latest:
             resolved = resolve_latest_session(db)
         else:
@@ -1426,7 +1826,7 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = func(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_stats_envelope(family, report)))
@@ -1692,7 +2092,7 @@ def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = gather_summary(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_summary_envelope(report)))
@@ -1870,7 +2270,7 @@ def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = compute_diff(db, span=span, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_diff_envelope(report)))

@@ -36,6 +36,7 @@ class InfoReport:
     """Aggregate, read-only snapshot of the convo DB's current state."""
 
     schema_version: int
+    pending_migrations: int
     row_counts: dict[str, int]
     last_indexed_at: str | None
     top_projects: list[ProjectCount]
@@ -108,7 +109,8 @@ def gather_info(db: Database) -> InfoReport:
     if db.conn is None:
         raise RuntimeError(_ERR_DB_NOT_OPEN)
 
-    schema_version = int(db.conn.execute("PRAGMA user_version").fetchone()[0])
+    schema_version = db.schema_version()
+    pending = len(db.pending_migrations())
     counts = _row_counts(db)
     last_at = _last_indexed_at(db)
     projects = _top_projects(db)
@@ -118,6 +120,7 @@ def gather_info(db: Database) -> InfoReport:
 
     return InfoReport(
         schema_version=schema_version,
+        pending_migrations=pending,
         row_counts=counts,
         last_indexed_at=last_at,
         top_projects=projects,

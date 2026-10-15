@@ -43,7 +43,7 @@ def test_backup_explicit_dest(
 
     with Database(out) as restored:
         assert restored.conn is not None
-        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 5
 
 
 def test_backup_auto_writes_timestamped(
@@ -62,6 +62,32 @@ def test_backup_auto_writes_timestamped(
     assert out.startswith("snapshot written: ")
     assert _AUTO_NAME_RE.search(out)
     assert any(_AUTO_NAME_RE.match(p.name) for p in snaps.iterdir())
+
+
+@pytest.mark.parametrize("target", ["dest", "--auto"])
+def test_backup_announces_the_copy_before_it_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+) -> None:
+    live = tmp_path / "live.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    monkeypatch.setenv("CONVO_BACKUP_DIR", str(tmp_path / "snaps"))
+    _populate(live)
+    stderr_at_copy: list[str] = []
+    real = Database.backup
+
+    def watching(self: Database, dest: Path | str) -> None:
+        stderr_at_copy.append(capsys.readouterr().err)
+        real(self, dest)
+
+    monkeypatch.setattr(Database, "backup", watching)
+    argv = ["backup", str(tmp_path / "out.db") if target == "dest" else target]
+    assert main(argv) == 0
+    # On stderr, so stdout stays the one result line (or the JSON envelope).
+    assert "writing snapshot" in stderr_at_copy[0]
+    assert "writing snapshot" not in capsys.readouterr().out
 
 
 def test_db_flag_overrides_env(
@@ -184,4 +210,4 @@ def test_subprocess_smoke(tmp_path: Path) -> None:
 
     with Database(out) as restored:
         assert restored.conn is not None
-        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 5

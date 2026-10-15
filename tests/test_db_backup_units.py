@@ -37,6 +37,8 @@ def _make_db_with_fake_conn(
     fake_cursor.fetchone.return_value = (count,)
     fake_conn.execute.return_value = fake_cursor
 
+    # An open DB has a file on disk; backup sizes it for the free-space check.
+    db_path.touch()
     db = Database(db_path)
     db.conn = fake_conn
     return db, fake_conn

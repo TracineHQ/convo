@@ -19,9 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Upgrading from 2.1.0:** before upgrading, take a snapshot with the 2.1.0
   CLI (`convo backup --auto`). The first `convo index` or session end after
-  the upgrade migrates the DB to schema 6, usually before you get to
+  the upgrade migrates the DB to schema 5, usually before you get to
   `convo migrate --backup`, so that snapshot is your way back. To go back to
-  2.1.0, which refuses a v6 DB (its `restore` included): make sure no convo
+  2.1.0, which refuses a v5 DB (its `restore` included): make sure no convo
   process is running (including a hook's background run), downgrade, then
   copy the snapshot over `<CONVO_DB>` by hand and delete the `-wal` and
   `-shm` files beside it.
@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3.7 GB test DB with a warm page cache, up to about 15 s cold. Until then,
   `convo search` on a schema 4 or 5 DB counts each hit's position at query
   time, as before.
+
+  **Upgrading from 2.1.1:** take a snapshot first (`convo backup --auto`).
+  The first `convo index` or session end after the upgrade migrates the DB
+  from schema 5 to 6, and 2.1.1 refuses a v6 DB (its `restore` included). To
+  go back, make sure no convo process is running (including a hook's
+  background run), downgrade, then copy the snapshot over `<CONVO_DB>` by
+  hand and delete the `-wal` and `-shm` files beside it.
 
 ### Fixed
 

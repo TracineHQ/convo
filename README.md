@@ -173,7 +173,7 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   sha256 hasn't changed. `--full` re-indexes everything; `--session` indexes
   one session's transcript. Applies pending migrations, and waits for any
   other convo writer to finish (`--no-wait` exits instead; `--no-migrate`
-  refuses to migrate).
+  refuses to migrate). `--dry-run` does neither.
 - `convo migrate [--backup] [--json]` -- apply pending schema migrations
   now. Read commands never migrate; `convo index` and the hook's background
   run do, so use this to migrate on your own schedule or when a read command

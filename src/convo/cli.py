@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, override
@@ -1003,7 +1003,13 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
         msg = f"projects dir is not a directory: {projects_dir}"
         raise RuntimeError(msg)
 
-    with _writer_lock(db_path, wait=not args.no_wait) as acquired:
+    # A dry run only reads, so it neither waits for the writer lock nor migrates.
+    lock = (
+        nullcontext(enter_result=True)
+        if args.dry_run
+        else _writer_lock(db_path, wait=not args.no_wait)
+    )
+    with lock as acquired:
         if not acquired:
             return _report_index_busy(args)
         files = discover_transcripts(projects_dir, session_id=args.session)
@@ -1016,9 +1022,11 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
             if not args.as_json:
                 print(_format_file_line(i, total, projects_dir, result))
 
-        with Database(db_path, migrate=not args.no_migrate) as db:
+        with Database(db_path, migrate=not (args.no_migrate or args.dry_run)) as db:
             if args.no_migrate:
                 db.require_schema(SCHEMA_VERSION)
+            elif args.dry_run:
+                db.require_schema(READ_MIN_SCHEMA_VERSION)
             report = index_tree(
                 db,
                 projects_dir,

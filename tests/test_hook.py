@@ -507,6 +507,27 @@ def test_index_waits_for_the_writer_lock_by_default(
     assert "waiting for another convo writer" in out.err
 
 
+def test_index_dry_run_neither_waits_for_the_lock_nor_migrates(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = tmp_path / "convo.db"
+    build_db_at_version(db_path, 4).close()
+    root = _projects(tmp_path)
+    holder = WriterLock(db_path)
+    assert holder.acquire(blocking=False)
+    # Fails instead of hanging if --dry-run ever waits on the lock again.
+    threading.Timer(2.0, holder.release).start()
+
+    argv = ["--db", str(db_path), "index", "--projects-dir", str(root), "--dry-run", "--json"]
+    assert main(argv) == 0
+    out = capsys.readouterr()
+    assert "waiting for another convo writer" not in out.err
+    assert json.loads(out.out)["index"]["files_seen"] == 1
+    with Database(db_path, migrate=False) as db:
+        assert db.schema_version() == 4
+
+
 def test_index_no_migrate_refuses_a_db_with_pending_migrations(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

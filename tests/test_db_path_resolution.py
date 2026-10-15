@@ -12,21 +12,24 @@ from convo.read._db_access import open_ro
 from tests._seed import seed_message, seed_session, seed_source_file, seed_tool_call
 
 
-def test_explicit_path_wins_over_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CONVO_DB", "/env/wins.db")
-    assert resolve_db_path(Path("/nonexistent/x.db")) == Path("/nonexistent/x.db")
+# Absolute paths come from tmp_path: on Windows a rooted path like "/x.db" has
+# no drive, so making it absolute adds the current one.
+def test_explicit_path_wins_over_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CONVO_DB", str(tmp_path / "env" / "wins.db"))
+    explicit = tmp_path / "nonexistent" / "x.db"
+    assert resolve_db_path(explicit) == explicit
 
 
-def test_explicit_str_arg_coerced_to_path(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_explicit_str_arg_coerced_to_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CONVO_DB", raising=False)
-    result = resolve_db_path("/nonexistent/y.db")
+    result = resolve_db_path(str(tmp_path / "nonexistent" / "y.db"))
     assert isinstance(result, Path)
-    assert result == Path("/nonexistent/y.db")
+    assert result == tmp_path / "nonexistent" / "y.db"
 
 
-def test_env_var_used_without_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CONVO_DB", "/env/path.db")
-    assert resolve_db_path() == Path("/env/path.db")
+def test_env_var_used_without_explicit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CONVO_DB", str(tmp_path / "env" / "path.db"))
+    assert resolve_db_path() == tmp_path / "env" / "path.db"
 
 
 def test_default_when_neither_set(monkeypatch: pytest.MonkeyPatch) -> None:

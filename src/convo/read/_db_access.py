@@ -11,7 +11,7 @@ def open_ro(path: Path | str) -> sqlite3.Connection:
 
     Returned connection has `row_factory = sqlite3.Row`. Caller owns close.
     """
-    uri = f"{Path(path).as_uri()}?mode=ro"
+    uri = f"{Path(path).absolute().as_uri()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn

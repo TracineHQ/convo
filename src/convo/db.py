@@ -89,12 +89,16 @@ def resolve_snapshot_dir(explicit: Path | str | None, db_path: Path) -> Path:
 
 
 def resolve_db_path(explicit: Path | str | None = None) -> Path:
-    """Resolve DB path with precedence: explicit arg > $CONVO_DB > DEFAULT_DB_PATH."""
+    """Resolve DB path with precedence: explicit arg > $CONVO_DB > DEFAULT_DB_PATH.
+
+    Relative paths are made absolute against the current directory: read
+    commands open the DB through a `file:` URI, which needs an absolute path.
+    """
     if explicit is not None:
-        return Path(explicit).expanduser()
+        return Path(explicit).expanduser().absolute()
     env = os.environ.get("CONVO_DB")
     if env:
-        return Path(env).expanduser()
+        return Path(env).expanduser().absolute()
     return DEFAULT_DB_PATH
 
 

@@ -151,17 +151,10 @@ def test_index_cli_rejects_unsafe_session(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    rc = main(
-        [
-            "--db",
-            str(tmp_path / "convo.db"),
-            "index",
-            "--projects-dir",
-            str(root),
-            "--session",
-            "../etc",
-            "--json",
-        ],
-    )
-    assert rc == 1
-    assert "session id" in json.loads(capsys.readouterr().out)["error"]["message"]
+    db_path = tmp_path / "convo.db"
+    argv = ["--db", str(db_path), "index", "--projects-dir", str(root), "--session", "../etc"]
+    with pytest.raises(SystemExit) as excinfo:
+        main(argv)
+    assert excinfo.value.code == 2
+    assert "invalid session id" in capsys.readouterr().err
+    assert not db_path.exists()

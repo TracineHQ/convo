@@ -391,6 +391,11 @@ def _classify_dry_run(
     return IndexResult(path=path, source_file_id=existing[0], skipped_reason=_SKIP_DRY_RUN_NEW)
 
 
+def is_valid_session_id(session_id: str) -> bool:
+    """True if `session_id` is safe to use as a transcript file stem in a glob."""
+    return _SESSION_ID_RE.fullmatch(session_id) is not None
+
+
 def _mtime_ns(path: Path) -> int | None:
     try:
         return path.stat().st_mtime_ns
@@ -408,7 +413,7 @@ def discover_transcripts(projects_dir: Path, *, session_id: str | None = None) -
     """
     if session_id is None:
         pattern = "*/*.jsonl"
-    elif _SESSION_ID_RE.fullmatch(session_id):
+    elif is_valid_session_id(session_id):
         pattern = f"*/{session_id}.jsonl"
     else:
         raise ValueError(_ERR_BAD_SESSION_ID.format(session_id=session_id))

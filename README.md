@@ -94,13 +94,14 @@ on top of the CLI:
 that just ended and returns in milliseconds (Claude Code gives SessionEnd
 hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`,
 each line stamped with the time and the session id.
-If another convo writer is already running, the background run waits for it
-to finish, so every session still gets indexed. After an upgrade that adds a
-migration, the next background run applies it before indexing; read
-commands never migrate, and on a DB too old to read they ask you to run
-`convo migrate`. Upgrade the CLI along with the plugin: with an older CLI
-the hook falls back to an in-hook `convo index`. No-ops gracefully if
-`convo` isn't on `PATH`.
+If another convo writer is already running, one background run waits for it
+(up to an hour) and then indexes every transcript, so sessions that end in
+the meantime still get indexed; their own runs see it waiting and exit.
+After an upgrade that adds a migration, the next background run applies it
+before indexing; read commands never migrate, and on a DB too old to read
+they ask you to run `convo migrate`. Upgrade the CLI along with the plugin:
+with an older CLI the hook falls back to an in-hook `convo index`. No-ops
+gracefully if `convo` isn't on `PATH`.
 
 **Nine slash commands** available inline in Claude Code:
 

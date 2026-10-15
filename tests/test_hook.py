@@ -18,7 +18,7 @@ from convo import cli, hook, hook_worker
 from convo.cli import main
 from convo.db import SCHEMA_VERSION, Database
 from convo.hook import child_argv, run_session_end, session_id_from_payload, spawn_detached
-from convo.lock import WriterLock
+from convo.lock import WaiterLock, WriterLock
 from tests._seed import build_db_at_version
 from tests.perf._synth import write_transcript
 
@@ -86,6 +86,24 @@ def test_writer_lock_release_is_idempotent(tmp_path: Path) -> None:
     assert lock.acquire(blocking=False)
     lock.release()
     lock.release()
+
+
+def test_writer_lock_blocking_acquire_gives_up_after_its_timeout(held_lock: Path) -> None:
+    other = WriterLock(held_lock)
+    start = time.monotonic()
+    assert other.acquire(blocking=True, timeout=0.3) is False
+    assert time.monotonic() - start >= 0.3
+
+
+def test_waiter_lock_is_separate_from_the_writer_lock(tmp_path: Path) -> None:
+    db_path = tmp_path / "convo.db"
+    writer, waiter = WriterLock(db_path), WaiterLock(db_path)
+    assert waiter.path == tmp_path / "convo.db.ingest.waiter.lock"
+    assert writer.acquire(blocking=False)
+    assert waiter.acquire(blocking=False)
+    assert WaiterLock(db_path).acquire(blocking=False) is False
+    waiter.release()
+    writer.release()
 
 
 # --- payload parsing ---------------------------------------------------------
@@ -192,16 +210,17 @@ def test_child_argv_runs_this_interpreter_without_cwd_on_path(tmp_path: Path) ->
     assert argv[:6] == [sys.executable, "-P", "-X", "utf8", "-m", "convo.hook_worker"]
 
 
-def test_worker_runs_a_plain_scoped_index() -> None:
-    # No --no-wait: the run is detached, so it waits for the writer lock for
-    # free. No --no-migrate: it migrates outside the hook's budget, under the
-    # lock, while readers keep working, so an upgrade never stalls indexing.
+def test_worker_runs_a_scoped_index_in_hook_run_mode() -> None:
+    # --hook-run: at most one run waits for the writer lock (see the
+    # index --hook-run tests below). No --no-migrate: it migrates outside the
+    # hook's budget, under the lock, while readers keep working.
     assert hook_worker.index_argv("/x/convo.db", _SID) == [
         "--db",
         "/x/convo.db",
         "index",
         "--session",
         _SID,
+        "--hook-run",
     ]
 
 
@@ -537,6 +556,104 @@ def test_index_waits_for_the_writer_lock_by_default(
     assert "waiting for another convo writer" in out.err
 
 
+_OTHER_SID = "5e551011-0000-4000-8000-0000000000bb"
+
+
+def _two_sessions(tmp_path: Path) -> Path:
+    root = _projects(tmp_path)
+    write_transcript(root / "slug" / f"{_OTHER_SID}.jsonl", _OTHER_SID, start=0, count=4)
+    return root
+
+
+def _hook_run(db_path: Path, root: Path) -> int:
+    argv = ["--db", str(db_path), "index", "--projects-dir", str(root)]
+    return main([*argv, "--session", _SID, "--hook-run"])
+
+
+def _indexed_sessions(db_path: Path) -> set[str]:
+    if not db_path.exists():
+        return set()
+    with Database(db_path, migrate=False) as db:
+        assert db.conn is not None
+        return {r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()}
+
+
+def _assert_waiter_slot_free(db_path: Path) -> None:
+    probe = WaiterLock(db_path)
+    assert probe.acquire(blocking=False)
+    probe.release()
+
+
+def test_hook_run_with_the_lock_free_indexes_only_its_session(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = tmp_path / "convo.db"
+    assert _hook_run(db_path, _two_sessions(tmp_path)) == 0
+    assert _indexed_sessions(db_path) == {_SID}
+    assert "waiting" not in capsys.readouterr().err
+
+
+def test_hook_run_exits_when_another_run_is_already_waiting(
+    held_lock: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    waiter = WaiterLock(held_lock)
+    assert waiter.acquire(blocking=False)
+    try:
+        start = time.monotonic()
+        assert _hook_run(held_lock, _two_sessions(tmp_path)) == 0
+        assert time.monotonic() - start < 1.0
+    finally:
+        waiter.release()
+    assert "queued behind an existing waiter" in capsys.readouterr().err
+    assert _indexed_sessions(held_lock) == set()
+
+
+def test_hook_run_that_waited_indexes_every_transcript(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = tmp_path / "convo.db"
+    root = _two_sessions(tmp_path)
+    holder = WriterLock(db_path)
+    assert holder.acquire(blocking=False)
+    seen_waiter_held: list[bool] = []
+
+    def release() -> None:
+        probe = WaiterLock(db_path)
+        seen_waiter_held.append(not probe.acquire(blocking=False))
+        probe.release()
+        holder.release()
+
+    threading.Timer(0.5, release).start()
+    assert _hook_run(db_path, root) == 0
+
+    # It held the waiter slot while it waited, and gave it up once it ran.
+    assert seen_waiter_held == [True]
+    _assert_waiter_slot_free(db_path)
+    # Sessions that ended while it waited exited behind it: it indexes them all.
+    assert _indexed_sessions(db_path) == {_SID, _OTHER_SID}
+    out = capsys.readouterr()
+    assert "waiting for another convo writer" in out.err
+    assert "every transcript" in out.out
+
+
+def test_hook_run_gives_up_waiting_after_the_cap(
+    held_lock: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "_HOOK_RUN_MAX_WAIT_SECONDS", 0.3)
+    assert _hook_run(held_lock, _two_sessions(tmp_path)) == 0
+    assert "gave up" in capsys.readouterr().err
+    assert _indexed_sessions(held_lock) == set()
+    # The slot is free for the next run.
+    _assert_waiter_slot_free(held_lock)
+
+
 def test_index_dry_run_neither_waits_for_the_lock_nor_migrates(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -654,8 +771,10 @@ def _run_hook(db_path: Path, session_id: str, env: dict[str, str]) -> dict[str, 
     return body
 
 
-def test_hook_runs_queue_behind_a_writer_and_each_indexes_its_session(tmp_path: Path) -> None:
-    sids = [f"5e551011-0000-4000-8000-{i:012d}" for i in range(1, 4)]
+def test_hook_runs_behind_a_writer_keep_one_waiter_that_indexes_every_session(
+    tmp_path: Path,
+) -> None:
+    sids = [f"5e551011-0000-4000-8000-{i:012d}" for i in range(1, 7)]
     root = tmp_path / "projects"
     for sid in sids:
         write_transcript(root / "slug" / f"{sid}.jsonl", sid, start=0, count=8)
@@ -672,13 +791,20 @@ def test_hook_runs_queue_behind_a_writer_and_each_indexes_its_session(tmp_path: 
     try:
         for sid in sids:
             assert _run_hook(db_path, sid, env)["status"] == "spawned"
-        # Every child is parked on the lock; none has given up.
-        assert _wait_for(lambda: log_count("waiting for another convo writer") == 3, timeout=60)
+        # One run waits; every other one finds the waiter slot taken and exits.
+        queued = len(sids) - 1
+        assert _wait_for(
+            lambda: log_count("queued behind an existing waiter") == queued,
+            timeout=60,
+        ), log_path.read_text(encoding="utf-8")
+        assert log_count("waiting for another convo writer") == 1
+        assert WaiterLock(db_path).acquire(blocking=False) is False
         assert log_count("Inserted:") == 0
     finally:
         holder.release()
 
-    assert _wait_for(lambda: log_count("Inserted:") == 3, timeout=120), log_path.read_text(
+    # The waiter indexes the whole tree in one run.
+    assert _wait_for(lambda: log_count("Inserted:") == 1, timeout=120), log_path.read_text(
         encoding="utf-8",
     )
     assert _wait_for(lambda: holder.acquire(blocking=False), timeout=30)

@@ -552,7 +552,8 @@ had rows to snapshot.
 ```
 
 `status` is `"spawned"` (a background `convo index --session` run started;
-if another convo writer holds the lock, that run waits for it) or
+if another convo writer holds the lock, it waits for it, or leaves the
+session to a run that is already waiting) or
 `"skipped"` (no usable session id on stdin). `pid` and `log_path` are `null`
 unless `spawned`. Exit code is 0 in every case.
 

@@ -8,8 +8,10 @@ JSON from stdin, starts a detached `convo index --session <id>` (through
 id) with its output appended to `<db>.hook.log`, and returns in milliseconds.
 
 The background run indexes only that session's transcript. If another writer
-holds the lock, it waits its turn (it is detached, so waiting costs the hook
-nothing), so a session that ends mid-index still gets indexed. Like any
+holds the lock, one background run waits for it (it is detached, so waiting
+costs the hook nothing) and then indexes every transcript; the rest leave
+their sessions to it and exit, so sessions that end mid-index still get
+indexed without a pile of waiting processes. Like any
 `convo index`, it applies pending migrations first, so an upgrade never
 stalls indexing; readers keep working meanwhile.
 """

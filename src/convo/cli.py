@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 import sys
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, override
@@ -60,7 +60,7 @@ from convo.intake.orchestrator import (
     index_tree,
     is_valid_session_id,
 )
-from convo.lock import WriterLock
+from convo.lock import WaiterLock, WriterLock
 from convo.read._db_access import open_ro as _open_ro
 from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
 from convo.read.info import InfoReport, ProjectCount, gather_info
@@ -165,6 +165,78 @@ def _writer_lock(db_path: Path, *, wait: bool = True) -> Iterator[bool]:
         yield acquired
     finally:
         lock.release()
+
+
+# How long a hook run that is next in line waits for the writer lock before
+# giving up. Generous: a first full index of a large history can take a while.
+_HOOK_RUN_MAX_WAIT_SECONDS: float = 3600.0
+
+
+@contextmanager
+def _index_lock(args: argparse.Namespace, db_path: Path) -> Iterator[str | None]:
+    """Take the lock `convo index` needs; yield how it got it.
+
+    Yields "now" (go ahead with the requested scope), "after_wait" (a hook run
+    that waited: index every transcript) or None (not taken: do nothing).
+    """
+    if args.dry_run:
+        # A dry run only reads, so it neither waits for the writer lock nor migrates.
+        yield "now"
+    elif args.hook_run:
+        with _hook_run_lock(db_path) as grant:
+            yield grant
+    else:
+        with _writer_lock(db_path, wait=not args.no_wait) as acquired:
+            yield "now" if acquired else None
+
+
+@contextmanager
+def _hook_run_lock(db_path: Path) -> Iterator[str | None]:
+    """The writer lock for the SessionEnd hook's background run, one waiter at most.
+
+    A free lock is taken at once ("now": index just this session). A held one
+    means waiting, but only one run waits: it takes the `WaiterLock` slot, and
+    a run that finds the slot taken exits (None), because the waiter indexes
+    every transcript once it gets the lock ("after_wait"), covering each
+    session that ended meanwhile. The waiter frees the slot the moment it
+    stops waiting, since its discovery comes after that and a session ending
+    during its run needs the next waiter. Waiting is capped (None).
+    """
+    writer = WriterLock(db_path)
+    if writer.acquire(blocking=False):
+        grant = "now"
+    else:
+        waiter = WaiterLock(db_path)
+        if not waiter.acquire(blocking=False):
+            print(
+                "convo: another convo writer is running; queued behind an existing waiter, "
+                "which will index this session",
+                file=sys.stderr,
+            )
+            yield None
+            return
+        try:
+            print(
+                "convo: waiting for another convo writer to finish ...",
+                file=sys.stderr,
+                flush=True,
+            )
+            acquired = writer.acquire(blocking=True, timeout=_HOOK_RUN_MAX_WAIT_SECONDS)
+        finally:
+            waiter.release()
+        if not acquired:
+            print(
+                f"convo: gave up after waiting {_HOOK_RUN_MAX_WAIT_SECONDS:.0f}s for another "
+                "convo writer; run `convo index` to catch up",
+                file=sys.stderr,
+            )
+            yield None
+            return
+        grant = "after_wait"
+    try:
+        yield grant
+    finally:
+        writer.release()
 
 
 def _positive_int(s: str) -> int:
@@ -419,6 +491,8 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         action="store_true",
         help="Refuse to run if the DB has pending migrations instead of applying them.",
     )
+    # Internal: the SessionEnd hook's background run (see `_hook_run_lock`).
+    index_p.add_argument("--hook-run", action="store_true", help=argparse.SUPPRESS)
     index_p.add_argument(
         "--full",
         action="store_true",
@@ -502,8 +576,9 @@ def _add_hook_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
             "session-end starts `convo index --session <id>` in the background for the "
             "session that just ended and returns at once, inside Claude Code's 1.5 s "
             "SessionEnd budget. That run's output is appended to <CONVO_DB>.hook.log. If "
-            "another convo writer is running, the background run waits for it; like any "
-            "`convo index`, it applies pending migrations first."
+            "another convo writer is running, one background run waits for it (up to an "
+            "hour) and then indexes every transcript; later ones leave their sessions to "
+            "it. Like any `convo index`, it applies pending migrations first."
         ),
     )
     hook_p.add_argument("event", choices=["session-end"], help="The hook event to handle.")
@@ -994,25 +1069,33 @@ def _build_envelope(report: IndexReport, *, status: str | None = None) -> dict[s
     }
 
 
-def _index_command(args: argparse.Namespace, db_path: Path) -> int:
-    projects_dir = _resolve_projects_dir(args.projects_dir)
+def _existing_projects_dir(explicit: Path | None) -> Path:
+    projects_dir = _resolve_projects_dir(explicit)
     if not projects_dir.exists():
         msg = f"projects dir does not exist: {projects_dir}"
         raise RuntimeError(msg)
     if not projects_dir.is_dir():
         msg = f"projects dir is not a directory: {projects_dir}"
         raise RuntimeError(msg)
+    return projects_dir
 
-    # A dry run only reads, so it neither waits for the writer lock nor migrates.
-    lock = (
-        nullcontext(enter_result=True)
-        if args.dry_run
-        else _writer_lock(db_path, wait=not args.no_wait)
-    )
-    with lock as acquired:
-        if not acquired:
-            return _report_index_busy(args)
-        files = discover_transcripts(projects_dir, session_id=args.session)
+
+def _index_scope(args: argparse.Namespace, grant: str) -> str | None:
+    """Return the `--session` filter to index under `grant` (None: every transcript)."""
+    if grant != "after_wait":
+        return cast("str | None", args.session)
+    if not args.as_json:
+        print("indexing every transcript, newest first: other sessions may have ended meanwhile")
+    return None
+
+
+def _index_command(args: argparse.Namespace, db_path: Path) -> int:
+    projects_dir = _existing_projects_dir(args.projects_dir)
+    with _index_lock(args, db_path) as grant:
+        if grant is None:
+            # A hook run already logged why it is not indexing.
+            return 0 if args.hook_run else _report_index_busy(args)
+        files = discover_transcripts(projects_dir, session_id=_index_scope(args, grant))
         total = len(files)
         i = 0
 

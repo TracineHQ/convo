@@ -47,10 +47,11 @@ class _StampedWriter(io.TextIOBase):
 def index_argv(db_path: str, session_id: str) -> list[str]:
     """Return the `convo` argv for the session's index run.
 
-    A plain `convo index`: it waits for the writer lock (the run is detached,
-    so waiting costs the hook nothing) and applies pending migrations.
+    `--hook-run` keeps at most one run waiting for the writer lock (see
+    `convo.cli._hook_run_lock`). Like any `convo index`, it applies pending
+    migrations.
     """
-    return ["--db", db_path, "index", "--session", session_id]
+    return ["--db", db_path, "index", "--session", session_id, "--hook-run"]
 
 
 def main(argv: list[str] | None = None) -> int:

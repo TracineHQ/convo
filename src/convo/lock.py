@@ -4,7 +4,8 @@ convo's writers (`index`, `index-guard`, `migrate`, `restore`, and the
 SessionEnd hook's background run) take it so they never interleave. It is an
 OS-level lock on an open file (`flock` on POSIX, `msvcrt.locking` on
 Windows), so the OS drops it when the holder exits, crashed or not; a stale
-lock file on disk is harmless.
+lock file on disk is harmless. `<db>.ingest.waiter.lock` works the same way
+and limits the hook's background runs to one waiting for the writer lock.
 """
 
 from __future__ import annotations
@@ -54,22 +55,27 @@ def lock_path_for(db_path: Path) -> Path:
     return db_path.with_name(db_path.name + ".ingest.lock")
 
 
-class WriterLock:
-    """Exclusive advisory lock shared by every convo writer for one DB."""
+class _FileLock:
+    """Exclusive advisory lock on the file at `path`."""
 
-    def __init__(self, db_path: Path) -> None:
-        self.path = lock_path_for(db_path)
+    def __init__(self, path: Path) -> None:
+        self.path = path
         self._fd: int | None = None
 
-    def acquire(self, *, blocking: bool) -> bool:
-        """Take the lock. Without `blocking`, return False at once if it is held."""
+    def acquire(self, *, blocking: bool, timeout: float | None = None) -> bool:
+        """Take the lock. Without `blocking`, return False at once if it is held.
+
+        With `blocking`, wait until it frees up, or return False once
+        `timeout` seconds pass (None waits indefinitely).
+        """
         if self._fd is not None:
             return True
+        deadline = None if timeout is None else time.monotonic() + timeout
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             while not _try_lock(fd):
-                if not blocking:
+                if not blocking or (deadline is not None and time.monotonic() >= deadline):
                     os.close(fd)
                     return False
                 time.sleep(_POLL_SECONDS)
@@ -88,3 +94,22 @@ class WriterLock:
             _unlock(fd)
         finally:
             os.close(fd)
+
+
+class WriterLock(_FileLock):
+    """Exclusive advisory lock shared by every convo writer for one DB."""
+
+    def __init__(self, db_path: Path) -> None:
+        super().__init__(lock_path_for(db_path))
+
+
+class WaiterLock(_FileLock):
+    """The single "next in line" slot for the SessionEnd hook's background runs.
+
+    A hook run that finds the writer lock held takes this before waiting, so
+    at most one run waits at a time; a run that finds it taken exits, and the
+    waiter indexes its session along with every other transcript.
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        super().__init__(db_path.with_name(db_path.name + ".ingest.waiter.lock"))

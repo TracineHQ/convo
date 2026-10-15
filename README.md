@@ -93,8 +93,8 @@ on top of the CLI:
 `convo hook session-end`, which starts a background index of the session
 that just ended and returns in milliseconds (Claude Code gives SessionEnd
 hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`.
-If another convo writer is already running, the hook starts nothing. It
-never migrates the DB: after an upgrade that adds a migration, run
+If another convo writer is already running, the background run waits for it
+to finish, so every session still gets indexed. It never migrates the DB: after an upgrade that adds a migration, run
 `convo migrate` (or `convo index`) once. No-ops gracefully if `convo` isn't
 on `PATH`.
 

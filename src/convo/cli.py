@@ -498,11 +498,11 @@ def _add_hook_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         "hook",
         help="Entry point for Claude Code hooks; reads the hook's JSON on stdin.",
         epilog=(
-            "session-end starts `convo index --session <id> --no-wait --no-migrate` in the "
-            "background for the session that just ended and returns at once, inside Claude "
-            "Code's 1.5 s SessionEnd budget. That run's output is appended to "
-            "<CONVO_DB>.hook.log. If another convo writer is running, nothing starts. The "
-            "hook never migrates the DB; run `convo migrate` after upgrading."
+            "session-end starts `convo index --session <id> --no-migrate` in the background "
+            "for the session that just ended and returns at once, inside Claude Code's 1.5 s "
+            "SessionEnd budget. That run's output is appended to <CONVO_DB>.hook.log. If "
+            "another convo writer is running, the background run waits for it. The hook "
+            "never migrates the DB; run `convo migrate` after upgrading."
         ),
     )
     hook_p.add_argument("event", choices=["session-end"], help="The hook event to handle.")
@@ -1037,7 +1037,7 @@ def _report_index_busy(args: argparse.Namespace) -> int:
         )
         print(json.dumps(_build_envelope(empty, status="busy")))
     else:
-        print("another convo writer is running; skipped (a later index picks these files up)")
+        print("another convo writer is running; nothing indexed (run convo index again later)")
     return 0
 
 
@@ -1152,8 +1152,6 @@ def _hook_command(args: argparse.Namespace, db_path: Path) -> int:
             f"convo: indexing session {outcome.session_id} in the background "
             f"(pid {outcome.pid}); log: {outcome.log_path}",
         )
-    elif outcome.status == "busy":
-        print("convo: another convo writer is running; nothing started")
     else:
         print("convo: no session id in the hook input; nothing started")
     return 0

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from convo import hook
+from convo import cli, hook
 from convo.cli import main
 from convo.db import SCHEMA_VERSION, Database
 from convo.hook import child_argv, run_session_end, session_id_from_payload, spawn_detached
@@ -128,18 +128,20 @@ def test_hook_spawns_scoped_index_without_migrating(tmp_path: Path) -> None:
     assert argv == child_argv(db_path, _SID)
     assert argv[argv.index("--db") + 1] == str(db_path)
     assert argv[argv.index("--session") + 1] == _SID
-    assert "--no-wait" in argv
+    # The child is detached, so it can wait for the writer lock for free.
+    assert "--no-wait" not in argv
     assert "--no-migrate" in argv
     assert log_path == tmp_path / "convo.db.hook.log"
     # The hook itself never opens (and so never creates or migrates) the DB.
     assert not db_path.exists()
 
 
-def test_hook_exits_when_writer_lock_held(held_lock: Path) -> None:
+def test_hook_spawns_even_while_another_writer_holds_the_lock(held_lock: Path) -> None:
+    # A session that ends mid-index must still get indexed: its child queues.
     spawn = _FakeSpawn()
     outcome = run_session_end(_payload(), db_path=held_lock, spawn=spawn)
-    assert outcome.status == "busy"
-    assert spawn.calls == []
+    assert outcome.status == "spawned"
+    assert len(spawn.calls) == 1
 
 
 @pytest.mark.parametrize("text", ["", "{}", _payload(session_id="../../etc/x")])
@@ -210,11 +212,18 @@ def test_spawn_detached_truncates_an_oversized_log(
 # --- CLI ---------------------------------------------------------------------
 
 
-def test_hook_cli_json_reports_busy(
+def test_hook_cli_json_reports_the_spawned_run(
     held_lock: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    spawn = _FakeSpawn()
+    real = hook.run_session_end
+
+    def with_fake_spawn(text: str, *, db_path: Path) -> hook.HookOutcome:
+        return real(text, db_path=db_path, spawn=spawn)
+
+    monkeypatch.setattr(cli, "run_session_end", with_fake_spawn)
     monkeypatch.setattr(sys, "stdin", _StringStdin(_payload()))
     rc = main(["--db", str(held_lock), "hook", "session-end", "--json"])
     assert rc == 0
@@ -223,10 +232,10 @@ def test_hook_cli_json_reports_busy(
         "schema_version": 2,
         "hook": {
             "event": "session-end",
-            "status": "busy",
+            "status": "spawned",
             "session_id": _SID,
-            "pid": None,
-            "log_path": None,
+            "pid": 4242,
+            "log_path": str(spawn.calls[0][1]),
         },
     }
 
@@ -361,7 +370,11 @@ def test_index_no_wait_skips_when_another_writer_holds_the_lock(
     assert not held_lock.exists()
 
     assert main(argv) == 0
-    assert "another convo writer" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "another convo writer" in out
+    # Nothing re-queues these files: say so instead of promising a later run will.
+    assert "picks these files up" not in out
+    assert "run convo index again" in out
 
 
 def test_index_waits_for_the_writer_lock_by_default(
@@ -464,3 +477,53 @@ def test_hook_returns_fast_and_indexes_in_the_background(tmp_path: Path) -> None
     lock = WriterLock(db_path)
     assert _wait_for(lambda: lock.acquire(blocking=False), timeout=30)
     lock.release()
+
+
+def _run_hook(db_path: Path, session_id: str, env: dict[str, str]) -> dict[str, Any]:
+    proc = subprocess.run(  # noqa: S603 - sys.executable + literal args, no shell
+        [sys.executable, "-m", "convo", "--db", str(db_path), "hook", "session-end", "--json"],
+        input=_payload(session_id=session_id),
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    body: dict[str, Any] = json.loads(proc.stdout)["hook"]
+    return body
+
+
+def test_hook_runs_queue_behind_a_writer_and_each_indexes_its_session(tmp_path: Path) -> None:
+    sids = [f"5e551011-0000-4000-8000-{i:012d}" for i in range(1, 4)]
+    root = tmp_path / "projects"
+    for sid in sids:
+        write_transcript(root / "slug" / f"{sid}.jsonl", sid, start=0, count=8)
+    db_path = tmp_path / "convo.db"
+    log_path = tmp_path / "convo.db.hook.log"
+    env = {**os.environ, "CLAUDE_PROJECTS_DIR": str(root)}
+    env.pop("CONVO_DB", None)
+
+    def log_count(needle: str) -> int:
+        return log_path.read_text(encoding="utf-8").count(needle) if log_path.exists() else 0
+
+    holder = WriterLock(db_path)
+    assert holder.acquire(blocking=False)
+    try:
+        for sid in sids:
+            assert _run_hook(db_path, sid, env)["status"] == "spawned"
+        # Every child is parked on the lock; none has given up.
+        assert _wait_for(lambda: log_count("waiting for another convo writer") == 3, timeout=60)
+        assert log_count("Inserted:") == 0
+    finally:
+        holder.release()
+
+    assert _wait_for(lambda: log_count("Inserted:") == 3, timeout=120), log_path.read_text(
+        encoding="utf-8",
+    )
+    assert _wait_for(lambda: holder.acquire(blocking=False), timeout=30)
+    holder.release()
+    with Database(db_path, migrate=False) as db:
+        assert db.conn is not None
+        indexed = {r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()}
+    assert indexed == set(sids)

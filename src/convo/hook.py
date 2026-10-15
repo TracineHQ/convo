@@ -3,14 +3,14 @@
 Claude Code gives SessionEnd hooks a 1.5 s budget by default (plugin hook
 `timeout` values do not raise it), and re-indexing a grown transcript takes
 longer than that. So the hook does no indexing itself. It reads the hook's
-JSON from stdin, checks the writer lock, starts a detached
-`convo index --session <id> --no-wait --no-migrate` with its output appended
-to `<db>.hook.log`, and returns in milliseconds.
+JSON from stdin, starts a detached `convo index --session <id> --no-migrate`
+with its output appended to `<db>.hook.log`, and returns in milliseconds.
 
-The background run indexes only that session's transcript, exits at once if
-another writer holds the lock (that writer, or the next run, picks the file
-up), and never applies migrations; after an upgrade it logs
-"Run: convo migrate" until someone does.
+The background run indexes only that session's transcript. If another writer
+holds the lock, it waits its turn (it is detached, so waiting costs the hook
+nothing), so a session that ends mid-index still gets indexed. It never
+applies migrations; after an upgrade it logs "Run: convo migrate" until
+someone does.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from convo.intake.orchestrator import is_valid_session_id
-from convo.lock import WriterLock
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,9 +36,9 @@ LOG_MAX_BYTES: int = 1024 * 1024
 class HookOutcome:
     """What `convo hook session-end` did.
 
-    `status` is `spawned` (a background index run started), `busy` (another
-    writer holds the lock, so nothing started) or `skipped` (no usable
-    session id in the hook input).
+    `status` is `spawned` (a background index run started; it waits for the
+    writer lock if another writer holds it) or `skipped` (no usable session
+    id in the hook input).
     """
 
     status: str
@@ -90,7 +89,6 @@ def child_argv(db_path: Path, session_id: str) -> list[str]:
         "index",
         "--session",
         session_id,
-        "--no-wait",
         "--no-migrate",
     ]
 
@@ -138,12 +136,6 @@ def run_session_end(
     session_id = session_id_from_payload(stdin_text)
     if session_id is None or not is_valid_session_id(session_id):
         return HookOutcome(status="skipped", session_id=None)
-    lock = WriterLock(db_path)
-    if not lock.acquire(blocking=False):
-        return HookOutcome(status="busy", session_id=session_id)
-    # Only a probe: the background run takes the lock itself, and exits if
-    # another writer wins it in between.
-    lock.release()
     log_path = log_path_for(db_path)
     pid = spawn(child_argv(db_path, session_id), log_path)
     return HookOutcome(status="spawned", session_id=session_id, pid=pid, log_path=log_path)

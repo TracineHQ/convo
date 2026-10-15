@@ -14,9 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot directory (`convo restore --latest` undoes the migration).
   `convo info` reports `pending_migrations`.
 - `convo hook session-end` reads Claude Code's hook JSON on stdin, starts a
-  detached `convo index --session <id> --no-wait --no-migrate` for that one
-  transcript, and returns in milliseconds. The background run's output is
-  appended to `<CONVO_DB>.hook.log`.
+  detached `convo index --session <id> --no-migrate` for that one
+  transcript, and returns in milliseconds. The background run waits its turn
+  if another convo writer is running, and its output is appended to
+  `<CONVO_DB>.hook.log`.
 - `convo index --session ID` indexes one session's transcript; `--no-wait`
   exits (status `busy`) instead of waiting for another convo writer;
   `--no-migrate` refuses to run while migrations are pending.

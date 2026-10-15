@@ -31,7 +31,7 @@ jobs:
           node-version: '20'
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @anthropic-ai/claude-code  # zizmor: ignore[adhoc-packages] tests against the latest CLI on purpose
 
       - run: claude --version
 
@@ -74,7 +74,7 @@ jobs:
           node-version: '20'
 
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: npm install -g @anthropic-ai/claude-code  # zizmor: ignore[adhoc-packages] tests against the latest CLI on purpose
 
       - run: claude --version
 

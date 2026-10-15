@@ -140,7 +140,16 @@ the same number `inspect` reports as `messages[].position` and accepts in
 `convo inspect <session_id> --from-message P --to-message P --max-chars 0`
 returns the hit's full message. For `kind="tool_call"` and `kind="tool_result"`
 it is the message that made the call: inspect lists the call's input there but
-not its output. `null` only if that message is missing from the DB.
+not its output.
+
+`hits[].position` is always set for `kind="message"`. For `kind="tool_call"`
+and `kind="tool_result"` it is `null` when the call's message is stored under
+a different session than the hit. That happens when two transcripts share
+message ids (a resumed or copied session): `convo index` keeps each shared
+message in the session it indexed first, while a call with its own id is
+stored under the transcript that made it. `convo inspect` on the hit's
+`session_id` does not list such a call; inspecting the session that kept the
+message lists it under that message.
 
 When `total=0` a `"suggestions"` key may appear:
 

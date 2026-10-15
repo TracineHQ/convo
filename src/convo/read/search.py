@@ -92,7 +92,11 @@ class SearchHit:
     """1-indexed message number in the session, as ``convo inspect`` numbers it
     (``--from-message/--to-message``). For tool_call and tool_result hits, the
     message that made the call (inspect lists the call there; it does not show
-    tool output). None only if that message is missing from the DB."""
+    tool output). Message hits always have one. A tool_call or tool_result hit
+    gets None when the call's message is stored under another session: when
+    two transcripts share message ids (a resumed or copied session), each shared
+    message stays in the session indexed first, while a call with its own id is
+    stored under the transcript that made it."""
 
 
 def build_fts_query(raw: str) -> str:

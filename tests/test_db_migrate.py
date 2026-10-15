@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from convo.db import Database, _discover_migrations
+from convo.intake.positions import assign_positions
+from convo.read.inspect import _MSG_SELECT
 
 _BASE_TABLES = {
     "messages",
@@ -324,11 +326,15 @@ def test_upgrade_v5_to_v6_backfills_positions_without_touching_messages(db_path:
         (now,),
     )
     rows = [
-        # (id, session, seq, timestamp): s1 has a NULL timestamp and a seq tie.
+        # (id, session, seq, timestamp): s1 has a NULL timestamp, a seq tie,
+        # and a seq tie between a NULL and a non-NULL timestamp. The NULL one
+        # (a9) sorts first, so NULLS LAST or an id-only order would misnumber it.
         ("a2", "s1", 0, "2026-10-01T10:00:00Z"),
         ("a1", "s1", 1, None),
         ("a4", "s1", 2, "2026-10-01T10:00:02Z"),
         ("a3", "s1", 2, "2026-10-01T10:00:02Z"),
+        ("a5", "s1", 3, "2026-10-01T10:00:03Z"),
+        ("a9", "s1", 3, None),
         ("b1", "s2", 5, "2026-10-01T11:00:00Z"),
         ("b2", "s2", 7, "2026-10-01T11:00:01Z"),
     ]
@@ -350,10 +356,19 @@ def test_upgrade_v5_to_v6_backfills_positions_without_touching_messages(db_path:
     with Database(db_path) as db:
         assert db.conn is not None
         assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
-        stored = dict(db.conn.execute("SELECT message_id, position FROM message_positions"))
-        assert stored == {"a2": 1, "a1": 2, "a3": 3, "a4": 4, "b1": 1, "b2": 2}
+        positions = "SELECT message_id, position FROM message_positions"
+        stored = dict(db.conn.execute(positions))
+        assert stored == {"a2": 1, "a1": 2, "a3": 3, "a4": 4, "a9": 5, "a5": 6, "b1": 1, "b2": 2}
+        # The backfill numbers each session in the order inspect lists it...
+        for sid in ("s1", "s2"):
+            listed = [r[0] for r in db.conn.execute(_MSG_SELECT, (sid,))]
+            assert [stored[mid] for mid in listed] == list(range(1, len(listed) + 1)), sid
+        # ...and exactly as intake numbers the same rows.
+        db.conn.execute("DELETE FROM message_positions")
+        assign_positions(db.conn, {"s1": (0, 2), "s2": (5, 2)})
+        assert dict(db.conn.execute(positions)) == stored
         assert db.conn.execute("SELECT count(*) FROM touched").fetchone()[0] == 0
         fts = "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'wombat'"
         assert db.conn.execute(fts).fetchone()[0] == len(rows)
         db.conn.execute("DELETE FROM sessions WHERE id = 's2'")
-        assert db.conn.execute("SELECT count(*) FROM message_positions").fetchone()[0] == 4
+        assert db.conn.execute("SELECT count(*) FROM message_positions").fetchone()[0] == 6

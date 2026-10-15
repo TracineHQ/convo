@@ -100,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   even when a nested folder also contains it (`eval-kit` vs
   `eval-kit/python`). The basename match never fired, so these fell through to
   the substring match and errored as ambiguous.
+- `--project` ignores a trailing `/` or `\`, which tab completion adds. Before,
+  `--project /work/eval-kit/` skipped `/work/eval-kit` and picked
+  `/work/eval-kit/python`, the only path containing the slash.
 - `convo search` JSON `total` is the number of matches before `--limit`, not
   the size of the returned page. Prose output reports both
   (`-- 120 hits, showing 10`) and numbers hits `hit N of <total>`.

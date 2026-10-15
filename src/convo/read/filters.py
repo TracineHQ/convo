@@ -97,16 +97,26 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
       2. Basename match (last path component)
       3. Substring match anywhere in path
 
+    Trailing path separators are ignored, so ``/x/eval-kit/`` names
+    /x/eval-kit.
+
     Raises :class:`ProjectResolveError` if ambiguous (multiple matches)
     or if no candidates exist.
     """
-    # 1. Exact match
-    row = conn.execute(
-        "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?",
-        (value,),
-    ).fetchone()
-    if row is not None:
-        return str(row[0])
+    # Shell tab completion appends a separator. Left on, `/x/eval-kit/` misses
+    # the exact and basename matches and the substring match picks
+    # /x/eval-kit/python. A bare root ("/", "C:\") is kept for the exact match:
+    # stripped, "/" would be empty.
+    name = value.rstrip("/\\") or value
+
+    # 1. Exact match, as typed or without the trailing separator
+    for exact in dict.fromkeys((value, name)):
+        row = conn.execute(
+            "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?",
+            (exact,),
+        ).fetchone()
+        if row is not None:
+            return str(row[0])
 
     # 2. Basename match: last path component equals value. An exact basename
     # beats substring matches, so `eval-kit` picks /x/eval-kit over
@@ -119,7 +129,7 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
             "WHERE project_path IS NOT NULL "
             "AND substr(project_path, length(project_path) - length(?)) "
             "= ('/' || ?)",
-            (value, value),
+            (name, name),
         )
     ]
     if len(candidates_basename) == 1:
@@ -134,7 +144,7 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
         str(r[0])
         for r in conn.execute(
             "SELECT DISTINCT project_path FROM sessions WHERE project_path LIKE ?",
-            (f"%{value}%",),
+            (f"%{name}%",),
         )
     ]
     if len(candidates_substring) == 1:

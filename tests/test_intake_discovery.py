@@ -115,7 +115,7 @@ def test_index_cli_walks_the_tree_once(
     assert calls == [None]
     lines = [ln for ln in capsys.readouterr().out.splitlines() if ln[:2] in {"1/", "2/", "3/"}]
     assert [ln.split(" ")[0] for ln in lines] == ["1/3", "2/3", "3/3"]
-    assert lines[0].startswith("1/3 gamma/")
+    assert lines[0].startswith(f"1/3 gamma{os.sep}")
 
 
 def test_index_cli_session_scope_indexes_only_that_file(

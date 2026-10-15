@@ -4,12 +4,13 @@ When a transcript grows, `convo index` deletes the file's rows and re-inserts
 them. `messages.parent_id` and `tool_results.message_id` are `ON DELETE SET
 NULL` foreign keys; without an index on those child columns SQLite scans both
 tables once per deleted message, so the delete is quadratic. On this shape the
-re-index took about 17 minutes before migration 0005 and a few seconds after.
+re-index took about 12 minutes before migration 0005 and a few seconds after.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -23,7 +24,10 @@ if TYPE_CHECKING:
 
 _FILES = 5
 _RECORDS_PER_FILE = 20_000
-_BUDGET_SECONDS = 15.0
+# The quadratic delete this guards against takes about 12 minutes on this
+# shape; with the indexes it takes a few seconds. Windows CI runners' disk I/O
+# is several times slower and noisier, so they get more headroom.
+_BUDGET_SECONDS = 60.0 if sys.platform == "win32" else 15.0
 
 
 def _sid(i: int) -> str:

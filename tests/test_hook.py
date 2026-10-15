@@ -138,6 +138,21 @@ def test_hook_spawns_a_scoped_index(tmp_path: Path) -> None:
     assert not db_path.exists()
 
 
+def test_hook_hands_the_child_an_absolute_db_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The child runs with cwd = the log's directory, so a relative --db or
+    # CONVO_DB would resolve against the wrong place there.
+    monkeypatch.chdir(tmp_path)
+    spawn = _FakeSpawn()
+    run_session_end(_payload(), db_path=Path("sub") / "convo.db", spawn=spawn)
+    argv, log_path = spawn.calls[0]
+    expected = (tmp_path / "sub" / "convo.db").resolve()
+    assert argv[argv.index("--db") + 1] == str(expected)
+    assert log_path == expected.with_name("convo.db.hook.log")
+
+
 def test_hook_spawns_even_while_another_writer_holds_the_lock(held_lock: Path) -> None:
     # A session that ends mid-index must still get indexed: its child queues.
     spawn = _FakeSpawn()

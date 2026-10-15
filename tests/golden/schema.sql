@@ -16,6 +16,9 @@ CREATE INDEX idx_guard_decisions_tool    ON guard_decisions(tool_name);
 -- index idx_messages_multiline
 CREATE INDEX idx_messages_multiline ON messages(session_id) WHERE has_newlines = 1;
 
+-- index idx_messages_parent
+CREATE INDEX idx_messages_parent ON messages(parent_id);
+
 -- index idx_messages_session
 CREATE INDEX idx_messages_session ON messages(session_id, seq);
 
@@ -48,6 +51,9 @@ CREATE INDEX idx_tool_calls_name_session ON tool_calls(name, session_id);
 
 -- index idx_tool_calls_session
 CREATE INDEX idx_tool_calls_session ON tool_calls(session_id);
+
+-- index idx_tool_results_message
+CREATE INDEX idx_tool_results_message ON tool_results(message_id);
 
 -- table guard_decisions
 CREATE TABLE "guard_decisions" (
@@ -183,7 +189,7 @@ CREATE TRIGGER guard_decisions_ai AFTER INSERT ON guard_decisions BEGIN
 END;
 
 -- trigger guard_decisions_au
-CREATE TRIGGER guard_decisions_au AFTER UPDATE ON guard_decisions BEGIN
+CREATE TRIGGER guard_decisions_au AFTER UPDATE OF reason, command_excerpt ON guard_decisions BEGIN
     INSERT INTO guard_decisions_fts(guard_decisions_fts, rowid, reason, command_excerpt)
     VALUES ('delete', old.id, old.reason, COALESCE(old.command_excerpt, ''));
     INSERT INTO guard_decisions_fts(rowid, reason, command_excerpt)
@@ -203,7 +209,7 @@ CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
 END;
 
 -- trigger messages_au
-CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+CREATE TRIGGER messages_au AFTER UPDATE OF content ON messages BEGIN
     INSERT INTO messages_fts(messages_fts, rowid, content)
     VALUES ('delete', old.rowid, old.content);
     INSERT INTO messages_fts(rowid, content)
@@ -223,7 +229,7 @@ CREATE TRIGGER tool_calls_ai AFTER INSERT ON tool_calls BEGIN
 END;
 
 -- trigger tool_calls_au
-CREATE TRIGGER tool_calls_au AFTER UPDATE ON tool_calls BEGIN
+CREATE TRIGGER tool_calls_au AFTER UPDATE OF name, input_json ON tool_calls BEGIN
     INSERT INTO tool_calls_fts(tool_calls_fts, rowid, name, input_json)
     VALUES ('delete', old.rowid, old.name, old.input_json);
     INSERT INTO tool_calls_fts(rowid, name, input_json)
@@ -243,7 +249,7 @@ CREATE TRIGGER tool_results_ai AFTER INSERT ON tool_results BEGIN
 END;
 
 -- trigger tool_results_au
-CREATE TRIGGER tool_results_au AFTER UPDATE ON tool_results BEGIN
+CREATE TRIGGER tool_results_au AFTER UPDATE OF output_text ON tool_results BEGIN
     INSERT INTO tool_results_fts(tool_results_fts, rowid, output_text)
     VALUES ('delete', old.rowid, old.output_text);
     INSERT INTO tool_results_fts(rowid, output_text)

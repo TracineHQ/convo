@@ -26,7 +26,7 @@ def test_backup_writes_queryable_v1_db(db: Database, tmp_path: Path) -> None:
 
     with Database(dest) as restored:
         assert restored.conn is not None
-        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert restored.conn.execute("PRAGMA user_version").fetchone()[0] == 6
         rows = restored.conn.execute(
             "SELECT path FROM source_files",
         ).fetchall()

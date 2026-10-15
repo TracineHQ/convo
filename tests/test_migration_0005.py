@@ -215,11 +215,11 @@ def test_0005_replays_on_populated_v4_db(db_path: Path) -> None:
     raw.close()
 
     # Exactly the 2.1.x writer path: open() sets foreign_keys=ON, then migrate()
-    # runs 0005 inside BEGIN EXCLUSIVE.
+    # runs 0005 (and 0006 after it) inside BEGIN EXCLUSIVE.
     with Database(db_path) as db:
         assert db.conn is not None
         conn = db.conn
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert _counts(conn) == before
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

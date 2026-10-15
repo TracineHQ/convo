@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from convo.intake.mapper import INSERT_SQL, map_record
 from convo.intake.parser import IntakeParseError, parse_file
+from convo.intake.positions import assign_positions
 from convo.intake.records import AssistantMessage, ToolUseBlock, UnknownRecord, UserMessage
 from convo.intake.signature import compute_file_signature
 
@@ -43,6 +44,10 @@ _INSERT_SESSION = (
     ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _UPDATE_SOURCE_FILE = "UPDATE source_files SET last_indexed_at = ?, message_count = ? WHERE id = ?"
+_SESSION_OWNER = "SELECT source_file_id FROM sessions WHERE id = ?"
+# Column offsets in a mapper "messages" row (see INSERT_SQL["messages"]).
+_MSG_SESSION_COL = 1
+_MSG_SEQ_COL = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +149,30 @@ def _session_metadata(
     return (started_at, ended_at, model, project_path, git_branch)
 
 
+def _position_batch(
+    conn: Any,
+    message_rows: list[tuple[Any, ...]],
+    source_file_id: int,
+) -> dict[str, tuple[int, int]]:
+    """Build the `assign_positions` hand-off: {session_id: (min_new_seq, source_count)}.
+
+    A session row records the file that created it. Rows written for a
+    session another file created make it multi-source; 2 is a lower bound,
+    which is all the maintainer needs to choose the renumber path.
+    """
+    min_seq: dict[str, int] = {}
+    for row in message_rows:
+        session_id, seq = row[_MSG_SESSION_COL], row[_MSG_SEQ_COL]
+        if session_id not in min_seq or seq < min_seq[session_id]:
+            min_seq[session_id] = seq
+    batch: dict[str, tuple[int, int]] = {}
+    for session_id, seq in min_seq.items():
+        owner = conn.execute(_SESSION_OWNER, (session_id,)).fetchone()
+        single = owner is not None and owner[0] == source_file_id
+        batch[session_id] = (seq, 1 if single else 2)
+    return batch
+
+
 def _collect_in_file_ids(
     records: list[IntakeRecord],
 ) -> tuple[frozenset[str], frozenset[str]]:
@@ -228,6 +257,7 @@ def _persist(
     for table, rows in batches.items():
         if rows:
             conn.executemany(INSERT_SQL[table], rows)
+    assign_positions(conn, _position_batch(conn, batches["messages"], source_file_id))
 
     conn.execute(_UPDATE_SOURCE_FILE, (now_iso, len(batches["messages"]), source_file_id))
 

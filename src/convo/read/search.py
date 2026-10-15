@@ -11,6 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from convo.db import STORED_POSITIONS_SCHEMA_VERSION
 from convo.read._db_access import open_ro
 from convo.read.filters import since_iso as _filters_since_iso
 
@@ -43,22 +44,30 @@ _ERR_SHORT_QUERY_TERM = (
 )
 _MIN_TERM_LEN = 3
 
-# A hit's `position` is 1 + the number of session messages that sort before the
-# hit's message (`hm`) under MESSAGE_ORDER_BY (seq, timestamp, id; NULL
-# timestamps first). The `seq <` count is a covering range scan of
-# idx_messages_session(session_id, seq); only rows tied on seq are fetched.
-# This replaced a ROW_NUMBER() over every message of each hit's session, which
-# cost ~0.1 s per search when a hit sat in a 32k-message session.
-_POSITION_SQL = (
-    "CASE WHEN hm.id IS NULL THEN NULL ELSE 1"
+# A hit's `position` is read from message_positions, which intake fills at
+# index time (convo.intake.positions). This replaced a ROW_NUMBER() over every
+# message of each hit's session, which cost ~0.1 s per search when a hit sat in
+# a 32k-message session. A message with no stored row (written outside intake)
+# falls back to the counted position: 1 + the number of session messages that
+# sort before it under MESSAGE_ORDER_BY (seq, timestamp, id; NULL timestamps
+# first). COALESCE only evaluates the count when the stored position is NULL.
+_COUNTED_POSITION = (
+    "1"
     " + (SELECT COUNT(*) FROM messages b"
     " WHERE b.session_id = hm.session_id AND b.seq < hm.seq)"
     " + (SELECT COUNT(*) FROM messages b"
     " WHERE b.session_id = hm.session_id AND b.seq = hm.seq"
     " AND ((b.timestamp IS NULL AND hm.timestamp IS NOT NULL)"
     " OR b.timestamp < hm.timestamp"
-    " OR (b.timestamp IS hm.timestamp AND b.id < hm.id))) END"
+    " OR (b.timestamp IS hm.timestamp AND b.id < hm.id)))"
 )
+_POSITION_SQL = (
+    f"CASE WHEN hm.id IS NULL THEN NULL ELSE COALESCE(p.position, {_COUNTED_POSITION}) END"
+)
+_POSITIONS_JOIN = "LEFT JOIN message_positions p ON p.message_id = hm.id "
+# Reads accept schema 4 and 5 (READ_MIN_SCHEMA_VERSION), which predate
+# message_positions: there every hit takes the counted position.
+_COUNTED_POSITION_SQL = f"CASE WHEN hm.id IS NULL THEN NULL ELSE {_COUNTED_POSITION} END"
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +237,12 @@ def search(  # noqa: PLR0913
     ro = open_ro(db.path)
     try:
         try:
-            rows = _run_search(ro, filters, limit=limit)
+            rows = _run_search(
+                ro,
+                filters,
+                limit=limit,
+                stored_positions=_has_stored_positions(ro),
+            )
         except sqlite3.OperationalError as exc:
             raise ValueError(_ERR_INVALID_QUERY.format(reason=exc)) from exc
     finally:
@@ -279,11 +293,18 @@ def _branches(filters: _Filters, *, count_only: bool = False) -> list[tuple[str,
     return parts
 
 
+def _has_stored_positions(conn: sqlite3.Connection) -> bool:
+    """True if the DB's schema has `message_positions` (migration 0006)."""
+    version: int = conn.execute("PRAGMA user_version").fetchone()[0]
+    return version >= STORED_POSITIONS_SCHEMA_VERSION
+
+
 def _run_search(
     conn: sqlite3.Connection,
     filters: _Filters,
     *,
     limit: int,
+    stored_positions: bool = True,
 ) -> list[SearchHit]:
     parts = _branches(filters)
 
@@ -291,13 +312,16 @@ def _run_search(
     params: list[object] = []
     for _, p in parts:
         params.extend(p)
+    position_sql = _POSITION_SQL if stored_positions else _COUNTED_POSITION_SQL
+    positions_join = _POSITIONS_JOIN if stored_positions else ""
     # MATERIALIZED: the FTS union runs once; `position` is then computed only for
     # the returned hits (see `_POSITION_SQL`), never for whole sessions.
     full_sql = (
         f"WITH hits AS MATERIALIZED (SELECT * FROM ({union_sql}) "  # noqa: S608
         "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?) "
-        f"SELECT hits.*, {_POSITION_SQL} AS position FROM hits "
+        f"SELECT hits.*, {position_sql} AS position FROM hits "
         "LEFT JOIN messages hm ON hm.id = hits.msg_id AND hm.session_id = hits.session_id "
+        f"{positions_join}"
         "ORDER BY (hits.timestamp IS NULL), hits.timestamp DESC"
     )
     params.append(int(limit))

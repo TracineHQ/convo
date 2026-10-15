@@ -151,6 +151,27 @@ def test_migrate_applies_pending(v4_db: Path, capsys: pytest.CaptureFixture[str]
     assert _version(v4_db) == SCHEMA_VERSION
 
 
+def test_migrate_v5_to_v6_numbers_existing_messages(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = _db_at(tmp_path / "convo.db", 5)
+    assert main(["--db", str(db_path), "migrate", "--json"]) == 0
+    body = json.loads(capsys.readouterr().out)["migrate"]
+    assert (body["from_version"], body["to_version"]) == (5, 6)
+    assert [(m["version"], m["filename"]) for m in body["applied"]] == [
+        (6, "0006_message_positions.sql"),
+    ]
+    conn = sqlite3.connect(db_path)
+    try:
+        stored = conn.execute(
+            "SELECT message_id, position FROM message_positions ORDER BY position",
+        ).fetchall()
+    finally:
+        conn.close()
+    assert stored == [(f"{_SID}-m{n}", n + 1) for n in range(4)]
+
+
 def test_migrate_prose_names_each_migration(
     v4_db: Path,
     capsys: pytest.CaptureFixture[str],

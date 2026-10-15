@@ -19,9 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Upgrading from 2.1.0:** before upgrading, take a snapshot with the 2.1.0
   CLI (`convo backup --auto`). The first `convo index` or session end after
-  the upgrade migrates the DB to schema 5, usually before you get to
+  the upgrade migrates the DB to schema 6, usually before you get to
   `convo migrate --backup`, so that snapshot is your way back. To go back to
-  2.1.0, which refuses a v5 DB (its `restore` included): make sure no convo
+  2.1.0, which refuses a v6 DB (its `restore` included): make sure no convo
   process is running (including a hook's background run), downgrade, then
   copy the snapshot over `<CONVO_DB>` by hand and delete the `-wal` and
   `-shm` files beside it.
@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `convo index` processes transcripts most recently modified first, so fresh
   sessions are searchable before a backlog, and walks the projects tree once
   per run instead of twice.
+- Schema v6 (migration `0006_message_positions.sql`) stores each message's
+  `position` in a new `message_positions` table. `convo index` fills it as it
+  writes messages. Existing messages are numbered when the DB migrates
+  (`convo migrate`, `convo index` or the hook's background run), without
+  rewriting `messages` or its FTS index: about 3 s for 665k messages on a
+  3.7 GB test DB with a warm page cache, up to about 15 s cold. Until then,
+  `convo search` on a schema 4 or 5 DB counts each hit's position at query
+  time, as before.
 
 ### Fixed
 
@@ -73,11 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that `convo restore --latest` would then pick. It is now removed. `backup`
   and `migrate --backup` also check for free space first and say on stderr
   when they start writing.
-- `convo search` computes each hit's `position` from the hit's own message
-  (an index range count) instead of numbering every message in the hit's
-  session. A search with hits in a 32k-message session drops from about
-  115 ms to 15 ms. `tool_result` hits now carry the position of the message
-  that made the call instead of `null`.
+- `convo search` reads each hit's `position` from `message_positions` instead
+  of numbering every message in each hit's session on every query. A search
+  with hits in a 32k-message session drops from about 120 ms to 7 to 10 ms
+  (`--limit` 10 to 500). `tool_result` hits now carry the position of the
+  message that made the call instead of `null`.
 - A relative `--db` or `CONVO_DB` path is resolved against the current
   directory. Before, every read command failed with "relative path can't be
   expressed as a file URI".

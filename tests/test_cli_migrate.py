@@ -158,6 +158,8 @@ def test_migrate_prose_names_each_migration(
     out = capsys.readouterr().out
     assert "0005_fk_child_indexes.sql" in out
     assert f"4 -> {SCHEMA_VERSION}" in out
+    # Migrating indexes nothing; point at the command that catches up.
+    assert out.rstrip().endswith("run `convo index` to catch up on sessions that changed since.")
 
 
 def test_migrate_when_up_to_date_is_a_no_op(

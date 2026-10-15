@@ -3,14 +3,14 @@
 Claude Code gives SessionEnd hooks a 1.5 s budget by default (plugin hook
 `timeout` values do not raise it), and re-indexing a grown transcript takes
 longer than that. So the hook does no indexing itself. It reads the hook's
-JSON from stdin, starts a detached `convo index --session <id> --no-migrate`
-with its output appended to `<db>.hook.log`, and returns in milliseconds.
+JSON from stdin, starts a detached `convo index --session <id>` with its
+output appended to `<db>.hook.log`, and returns in milliseconds.
 
 The background run indexes only that session's transcript. If another writer
 holds the lock, it waits its turn (it is detached, so waiting costs the hook
-nothing), so a session that ends mid-index still gets indexed. It never
-applies migrations; after an upgrade it logs "Run: convo migrate" until
-someone does.
+nothing), so a session that ends mid-index still gets indexed. Like any
+`convo index`, it applies pending migrations first, so an upgrade never
+stalls indexing; readers keep working meanwhile.
 """
 
 from __future__ import annotations
@@ -89,7 +89,6 @@ def child_argv(db_path: Path, session_id: str) -> list[str]:
         "index",
         "--session",
         session_id,
-        "--no-migrate",
     ]
 
 

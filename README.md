@@ -94,9 +94,12 @@ on top of the CLI:
 that just ended and returns in milliseconds (Claude Code gives SessionEnd
 hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`.
 If another convo writer is already running, the background run waits for it
-to finish, so every session still gets indexed. It never migrates the DB: after an upgrade that adds a migration, run
-`convo migrate` (or `convo index`) once. No-ops gracefully if `convo` isn't
-on `PATH`.
+to finish, so every session still gets indexed. After an upgrade that adds a
+migration, the next background run applies it before indexing; read
+commands never migrate, and on a DB too old to read they ask you to run
+`convo migrate`. Upgrade the CLI along with the plugin: with an older CLI
+the hook falls back to an in-hook `convo index`. No-ops gracefully if
+`convo` isn't on `PATH`.
 
 **Nine slash commands** available inline in Claude Code:
 
@@ -170,11 +173,13 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   one session's transcript. Applies pending migrations, and waits for any
   other convo writer to finish (`--no-wait` exits instead; `--no-migrate`
   refuses to migrate).
-- `convo migrate [--backup] [--json]` -- apply pending schema migrations.
-  Read commands never migrate, so run this (or `convo index`) after an
-  upgrade; `convo info` shows how many are pending. `--backup` snapshots the
-  DB to the snapshot directory first. A migration can take minutes on a
-  large DB; reads keep working meanwhile.
+- `convo migrate [--backup] [--json]` -- apply pending schema migrations
+  now. Read commands never migrate; `convo index` and the hook's background
+  run do, so use this to migrate on your own schedule or when a read command
+  asks for it. `convo info` shows how many are pending. `--backup` snapshots
+  the DB to the snapshot directory first. A migration can take minutes on a
+  large DB; reads keep working meanwhile. Run `convo index` afterwards to
+  catch up.
 - `convo info [--json]` -- schema version, row counts per table, last index
   time, top 5 projects by session count, snapshot directory size.
 - `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N]

@@ -116,7 +116,7 @@ class _FakeSpawn:
         return 4242
 
 
-def test_hook_spawns_scoped_index_without_migrating(tmp_path: Path) -> None:
+def test_hook_spawns_a_scoped_index(tmp_path: Path) -> None:
     db_path = tmp_path / "convo.db"
     spawn = _FakeSpawn()
     outcome = run_session_end(_payload(), db_path=db_path, spawn=spawn)
@@ -130,7 +130,9 @@ def test_hook_spawns_scoped_index_without_migrating(tmp_path: Path) -> None:
     assert argv[argv.index("--session") + 1] == _SID
     # The child is detached, so it can wait for the writer lock for free.
     assert "--no-wait" not in argv
-    assert "--no-migrate" in argv
+    # It migrates too: outside the hook's budget, under the lock, and readers
+    # keep working, so an upgrade never stalls indexing.
+    assert "--no-migrate" not in argv
     assert log_path == tmp_path / "convo.db.hook.log"
     # The hook itself never opens (and so never creates or migrates) the DB.
     assert not db_path.exists()
@@ -527,3 +529,26 @@ def test_hook_runs_queue_behind_a_writer_and_each_indexes_its_session(tmp_path: 
         assert db.conn is not None
         indexed = {r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()}
     assert indexed == set(sids)
+
+
+def test_hook_run_migrates_an_old_db_then_indexes(tmp_path: Path) -> None:
+    root = _projects(tmp_path)
+    db_path = tmp_path / "convo.db"
+    build_db_at_version(db_path, 4).close()
+    log_path = tmp_path / "convo.db.hook.log"
+    env = {**os.environ, "CLAUDE_PROJECTS_DIR": str(root)}
+    env.pop("CONVO_DB", None)
+
+    assert _run_hook(db_path, _SID, env)["status"] == "spawned"
+
+    def done() -> bool:
+        return log_path.exists() and "Inserted:" in log_path.read_text(encoding="utf-8")
+
+    assert _wait_for(done, timeout=120), log_path.read_text(encoding="utf-8")
+    lock = WriterLock(db_path)
+    assert _wait_for(lambda: lock.acquire(blocking=False), timeout=30)
+    lock.release()
+    with Database(db_path, migrate=False) as db:
+        assert db.schema_version() == SCHEMA_VERSION
+        assert db.conn is not None
+        assert [r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()] == [_SID]

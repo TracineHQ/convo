@@ -473,9 +473,10 @@ def _add_migrate_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "migrate",
         help="Apply pending schema migrations to the convo DB.",
         epilog=(
-            "Read commands and the SessionEnd hook never migrate; `convo index` and this "
-            "command do. On a large DB a migration can take minutes; it holds the write "
-            "lock, and reads keep working. --backup first writes a snapshot to the "
+            "Read commands never migrate; `convo index` (including the SessionEnd hook's "
+            "background run) and this command do. On a large DB a migration can take "
+            "minutes; it holds the write lock, and reads keep working. Afterwards, "
+            "`convo index` catches up. --backup first writes a snapshot to the "
             "snapshot directory ($CONVO_BACKUP_DIR, default <CONVO_DB>'s parent / "
             "convo-backups), which `convo restore --latest` restores."
         ),
@@ -498,11 +499,11 @@ def _add_hook_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         "hook",
         help="Entry point for Claude Code hooks; reads the hook's JSON on stdin.",
         epilog=(
-            "session-end starts `convo index --session <id> --no-migrate` in the background "
-            "for the session that just ended and returns at once, inside Claude Code's 1.5 s "
+            "session-end starts `convo index --session <id>` in the background for the "
+            "session that just ended and returns at once, inside Claude Code's 1.5 s "
             "SessionEnd budget. That run's output is appended to <CONVO_DB>.hook.log. If "
-            "another convo writer is running, the background run waits for it. The hook "
-            "never migrates the DB; run `convo migrate` after upgrading."
+            "another convo writer is running, the background run waits for it; like any "
+            "`convo index`, it applies pending migrations first."
         ),
     )
     hook_p.add_argument("event", choices=["session-end"], help="The hook event to handle.")
@@ -1117,6 +1118,7 @@ def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
             f"migrated schema {from_version} -> {to_version} "
             f"({len(applied)} migration{plural}, {total_s:.1f}s)",
         )
+        print("run `convo index` to catch up on sessions that changed since.")
     else:
         print(f"schema {to_version} is up to date; nothing to migrate")
     return 0

@@ -14,10 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot directory (`convo restore --latest` undoes the migration).
   `convo info` reports `pending_migrations`.
 - `convo hook session-end` reads Claude Code's hook JSON on stdin, starts a
-  detached `convo index --session <id> --no-migrate` for that one
-  transcript, and returns in milliseconds. The background run waits its turn
-  if another convo writer is running, and its output is appended to
-  `<CONVO_DB>.hook.log`.
+  detached `convo index --session <id>` for that one transcript, and returns
+  in milliseconds. The background run waits its turn if another convo writer
+  is running, applies pending migrations like any `convo index`, and appends
+  its output to `<CONVO_DB>.hook.log`.
 - `convo index --session ID` indexes one session's transcript; `--no-wait`
   exits (status `busy`) instead of waiting for another convo writer;
   `--no-migrate` refuses to run while migrations are pending.
@@ -33,10 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the plugin: the plugin updates from the marketplace on its own, and
   with an older CLI the hook falls back to the old in-hook `convo index`.
 - Read commands (`info`, `search`, `inspect`, `stats`, `summary`, `diff`) and
-  `backup` no longer apply migrations. `convo index` and `convo migrate` do;
-  the hook never does. A DB too old to read (schema 3 or earlier) now gets an
-  error telling you to run `convo migrate`, in the JSON envelope under
-  `--json` / `--format json`.
+  `backup` no longer apply migrations. `convo index`, the hook's background
+  run and `convo migrate` do. A DB too old to read (schema 3 or earlier)
+  now gets an error telling you to run `convo migrate`, in the JSON envelope
+  under `--json` / `--format json`.
 - Writers (`index`, `index-guard`, `migrate`, `restore`, and the hook's
   background run) share an advisory lock, `<CONVO_DB>.ingest.lock`, so they
   no longer collide on the DB. `convo index` waits for the holder by default.

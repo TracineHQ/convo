@@ -1,5 +1,5 @@
 ---
-description: Activity dashboard for the last 7 days (tools, commands, sessions, files, model, hooks).
+description: Activity dashboard for the last 7 days (tools, commands, sessions, files, model).
 argument-hint: "[--since SPAN]"
 allowed-tools: "Bash(convo summary *)"
 disable-model-invocation: true

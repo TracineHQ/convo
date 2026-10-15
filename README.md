@@ -83,7 +83,7 @@ gracefully if `convo` isn't on `PATH`.
 - `/convo:search <query>` -- FTS5 search over messages, tool calls, and tool
   results. Shows up to 20 hits.
 - `/convo:summary [--since SPAN]` -- activity dashboard (tools, commands,
-  sessions, files, model, hooks). Defaults to 7 days.
+  sessions, files, model). Defaults to 7 days.
 - `/convo:diff [--since SPAN]` -- current vs previous window comparison with
   deltas. Defaults to 7 days.
 - `/convo:inspect <session-id-prefix | --latest>` -- full message timeline for
@@ -209,8 +209,9 @@ against the current directory.
   `$CONVO_BACKUP_DIR`.
 - `convo stats <family> [--since SPAN] [--project P] [--json]` -- analytics
   families: `tools`, `commands`, `sessions`, `files`, `model`, `hooks`.
-- `convo summary [--since SPAN] [--project P] [--json]` -- composite of all
-  six families in one report.
+- `convo summary [--since SPAN] [--project P] [--json]` -- composite of the
+  `tools`, `commands`, `sessions`, `files` and `model` families in one report.
+  `hooks` is not included; run `convo stats hooks` for it.
 - `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
   window comparison with deltas. Default span 7d.
 - `convo projects [--format prose|json]` -- list indexed projects with session

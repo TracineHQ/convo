@@ -136,7 +136,7 @@ jobs:
         # dist/ as InvalidDistribution, so move it out before publishing.
         run: rm -f dist/SHA256SUMS
       - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
 
@@ -273,7 +273,7 @@ jobs:
       - name: Publish to PyPI
         # Trusted Publisher exchanges the GitHub OIDC token for a short-lived
         # PyPI upload credential. No password / API token is configured here.
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
   github-release:
     name: Draft GitHub Release with notes and assets

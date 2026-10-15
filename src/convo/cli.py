@@ -827,7 +827,9 @@ def _build_backup_envelope(snapshot_path: Path) -> dict[str, object]:
 
 def _restore_command(args: argparse.Namespace, db_path: Path) -> int:
     src: Path = _resolve_restore_src(args, db_path)
-    with _writer_lock(db_path), Database(db_path) as db:
+    # migrate=False: restoring a pre-migration snapshot is how `migrate
+    # --backup` is undone, so neither the live DB nor the restored copy migrates.
+    with _writer_lock(db_path), Database(db_path, migrate=False) as db:
         db.restore_snapshot(src)
     if args.as_json:
         print(json.dumps(_build_restore_envelope(src)))

@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `convo migrate [--backup] [--json]` applies pending schema migrations,
   reporting each one as it runs. `--backup` first writes a snapshot to the
-  snapshot directory (`convo restore --latest` undoes the migration).
+  snapshot directory. To go back to 2.1.0, which refuses a v5 DB (its
+  `restore` included), downgrade first, then copy that snapshot over
+  `<CONVO_DB>` by hand and delete the `-wal` and `-shm` files beside it.
   `convo info` reports `pending_migrations`.
 - `convo hook session-end` reads Claude Code's hook JSON on stdin, starts a
   detached `convo index --session <id>` for that one transcript, and returns

@@ -202,6 +202,32 @@ def test_migrate_backup_snapshots_before_applying(
     assert _version(v4_db) == SCHEMA_VERSION
 
 
+def test_restore_latest_brings_back_the_pre_migration_schema(
+    v4_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("CONVO_BACKUP_DIR", raising=False)
+    assert main(["--db", str(v4_db), "migrate", "--backup", "--json"]) == 0
+    assert _version(v4_db) == SCHEMA_VERSION
+    capsys.readouterr()
+
+    assert main(["--db", str(v4_db), "restore", "--latest", "--json"]) == 0
+    # Restoring is the undo for `migrate --backup`; it must not migrate again.
+    assert _version(v4_db) == 4
+
+
+def test_restore_does_not_migrate_the_live_db(
+    v4_db: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "no-such-snapshot.db"
+    assert main(["--db", str(v4_db), "restore", str(missing), "--json"]) == 1
+    assert "error" in json.loads(capsys.readouterr().out)
+    assert _version(v4_db) == 4
+
+
 def test_migrate_refuses_a_db_from_the_future(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -103,6 +103,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty column.
 - `convo index --dry-run` ends with "Would index N files ... Dry run: nothing
   was written." instead of "Indexed N files" and an all-zero "Inserted" line.
+- The README, plugin descriptions and the plugin shim's "not installed" hint
+  say the plugin needs the CLI and give `pipx install tracine-convo` (the shim
+  pointed at a git URL). The README lists all nine slash commands, documents
+  `index-guard`, `--db`, `--session`, `--tool-exact` and `--fields`, and shows
+  `--format json` instead of the deprecated `search --json`.
+- Slash-command docs for `diff`, `info`, `inspect`, `stats` and `summary` said
+  `--format=json`, which those commands reject; they take `--json`.
+  `/convo:projects` and `/convo:tools` no longer hint a `--limit` they don't
+  accept.
+- `convo search --help` says `--since` also takes an ISO date, and its
+  example uses `--format json`.
+- `LICENSE` is the official Apache 2.0 text again. Sections 6 and 9 had been
+  reworded.
 
 ### Removed
 

@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # /convo:diff
 
-Wraps `convo diff`, which emits a v2 envelope when `--format=json` is passed.
+Wraps `convo diff`, which emits a v2 envelope when `--json` is passed.
 Parses at `diff.deltas.*`. See `JSON-ENVELOPE.md` at the repo root for
 the contract.
 

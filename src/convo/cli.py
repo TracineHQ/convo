@@ -630,14 +630,14 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         epilog=(
             "Tokens are ANDed by default across whitespace-separated terms;\n"
             'quote literals as "phrase" for phrase search; OR keyword between\n'
-            "terms; -token excludes. Time spans for --since use the shorthand\n"
-            "<N><unit>: 7d, 24h, 90m, 30s, 2w, 1y.\n"
+            "terms; -token excludes. --since takes <N><unit> (7d, 24h, 90m,\n"
+            "30s, 2w, 1y) or an ISO date (2026-04-01).\n"
             "\n"
             "Examples:\n"
             "  convo search 'TypeError'\n"
             "  convo search 'flaky test' --since 7d\n"
             "  convo search 'migration -rollback' --tool Bash\n"
-            "  convo search 'auth' --project /Users/dev/myapp --json\n"
+            "  convo search 'auth' --project /Users/dev/myapp --format json\n"
         ),
     )
     search_p.add_argument("query", help="Search query string.")

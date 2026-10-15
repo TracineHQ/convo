@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # /convo:stats
 
-Wraps `convo stats`, which emits a v2 envelope when `--format=json` is passed.
+Wraps `convo stats`, which emits a v2 envelope when `--json` is passed.
 Parses at `stats.*`. See `JSON-ENVELOPE.md` at the repo root for the
 contract.
 

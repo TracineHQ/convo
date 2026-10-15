@@ -19,8 +19,38 @@ and discovery commands (`projects`, `tools`, `sessions`).
 
 ## Install
 
-Three install paths, in priority order. All require Python 3.12+. Verify
-with `convo --version` after installing.
+convo is a CLI plus a Claude Code plugin. The plugin's slash commands, skill
+and hook all run the `convo` CLI, so install both. Requires Python 3.12+.
+
+1. The CLI, from PyPI (distribution `tracine-convo`, command `convo`):
+
+   ```
+   pipx install tracine-convo
+   ```
+
+   `uv tool install tracine-convo` works too. Check with `convo --version`.
+
+2. The plugin, inside Claude Code:
+
+   ```
+   /plugin marketplace add TracineHQ/plugins
+   /plugin install convo@tracine
+   ```
+
+   This comes from the [TracineHQ plugin catalog](https://github.com/TracineHQ/plugins),
+   which also hosts [guard](https://github.com/TracineHQ/guard) and
+   [eval-kit](https://github.com/TracineHQ/eval-kit). See
+   [What you get when you install the plugin](#what-you-get-when-you-install-the-plugin).
+
+Then run `convo index` once to build the database. The plugin's hook re-runs
+it at the end of every session.
+
+**Other routes.** The CLI works on its own, without the plugin. To install the
+plugin from this repo instead of the catalog:
+`/plugin marketplace add TracineHQ/convo`, then `/plugin install convo@tracinehq`.
+To track `main` or hack on convo: `git clone git@github.com:TracineHQ/convo.git`,
+`cd convo`, `uv tool install .`. To try it without installing:
+`uvx --from tracine-convo convo --help`.
 
 **SQLite substrate.** convo uses SQLite STRICT tables (3.37+) and FTS5
 virtual tables. Stock Python on macOS, Windows, and mainstream Linux distros
@@ -30,64 +60,9 @@ Check yours with `python -c "import sqlite3; print(sqlite3.sqlite_version);
 conn=sqlite3.connect(':memory:'); conn.execute('CREATE VIRTUAL TABLE t USING fts5(x)')"` --
 if that runs cleanly, you're good.
 
-### 1. Claude Code plugin (recommended)
-
-Inside Claude Code:
-
-```
-/plugin marketplace add TracineHQ/plugins
-/plugin install convo@tracine
-```
-
-This installs convo from the unified [TracineHQ plugin catalog](https://github.com/TracineHQ/plugins).
-The same marketplace also hosts [guard](https://github.com/TracineHQ/guard); once
-the marketplace is registered you can install either with one command. See
-[What you get when you install the plugin](#what-you-get-when-you-install-the-plugin)
-for the full surface.
-
-Standalone alternative (skip the catalog and install convo directly from this repo):
-
-```
-/plugin marketplace add TracineHQ/convo
-/plugin install convo@tracinehq
-```
-
-### 2. PyPI
-
-The PyPI distribution is `tracine-convo`; the installed CLI command is `convo`.
-
-For end-users:
-
-```
-pipx install tracine-convo
-```
-
-For uv users:
-
-```
-uv tool install tracine-convo
-```
-
-For one-shot use without installing globally:
-
-```
-uvx --from tracine-convo convo --help
-```
-
-### 3. From source (fallback)
-
-```
-git clone git@github.com:TracineHQ/convo.git
-cd convo
-uv tool install .
-```
-
-Use this path if you want to track `main` directly or hack on convo locally.
-
 ## What you get when you install the plugin
 
-Installing convo as a Claude Code plugin (path 1 above) wires up three things
-on top of the CLI:
+The plugin wires up three things on top of the CLI:
 
 **Auto-index after every session.** A `SessionEnd` hook runs
 `convo hook session-end`, which starts a background index of the session
@@ -106,9 +81,9 @@ gracefully if `convo` isn't on `PATH`.
 **Nine slash commands** available inline in Claude Code:
 
 - `/convo:search <query>` -- FTS5 search over messages, tool calls, and tool
-  results. Default `--limit 10`.
+  results. Shows up to 20 hits.
 - `/convo:summary [--since SPAN]` -- activity dashboard (tools, commands,
-  sessions, files, model). Defaults to 7 days.
+  sessions, files, model, hooks). Defaults to 7 days.
 - `/convo:diff [--since SPAN]` -- current vs previous window comparison with
   deltas. Defaults to 7 days.
 - `/convo:inspect <session-id-prefix | --latest>` -- full message timeline for
@@ -123,9 +98,9 @@ gracefully if `convo` isn't on `PATH`.
 
 **A `searching-conversation-history` skill** Claude itself can invoke when you
 ask history-recall questions like "did I solve this before?", "what was that
-fix for X?", or "summarize last week". The skill calls `convo search` /
-`convo summary` with `--json`, parses the result, and surfaces matched session
-IDs and excerpts back to you.
+fix for X?", or "summarize last week". The skill runs `convo search`,
+`convo summary` and the discovery commands, and surfaces matched session IDs
+and excerpts back to you.
 
 ## Quickstart
 
@@ -143,9 +118,9 @@ convo snapshots                      # list backup snapshots
 `convo info` looks like this on a fresh DB:
 
 ```
-schema_version   2
-db_size          156.0 KiB
-last_indexed_at  2026-05-01T04:57:28+00:00
+schema_version   6
+db_size          208.0 KiB
+last_indexed_at  2026-10-15T19:19:02.725664+00:00
 
 row counts:
   source_files  1
@@ -168,6 +143,10 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
 
 ## Available commands
 
+Every command takes the global `--db PATH` before the command name
+(`convo --db ./work.db info`). It beats `CONVO_DB`; a relative path resolves
+against the current directory.
+
 - `convo index [--full] [--projects-dir PATH] [--session ID] [--dry-run]
   [--json]` -- walk `~/.claude/projects/<slug>/*.jsonl`, most recently
   modified first, and populate the database. Idempotent: skips files whose
@@ -184,17 +163,35 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   with your current CLI before upgrading if you want a way back. A migration
   can take minutes on a large DB; reads keep working meanwhile. Run
   `convo index` afterwards to catch up.
+- `convo index-guard [--path PATH] [--full] [--json]` -- index
+  [guard](https://github.com/TracineHQ/guard)'s decision log for
+  `convo stats hooks`. Path: `--path`, then `$GUARD_DECISIONS_PATH`, then
+  `~/.claude/guard-decisions.jsonl`. Skips an unchanged log.
 - `convo info [--json]` -- schema version, row counts per table, last index
   time, top 5 projects by session count, snapshot directory size.
-- `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N]
-  [--excerpt-chars N] [--json]`
-  -- FTS5 search over messages, tool calls, and tool results. `--excerpt-chars`
-  sets the excerpt width, up to the FTS5 snippet maximum of about 64 characters
-  (the default). Each hit reports its message `position`; pass it to
-  `convo inspect <session> --from-message P --to-message P --max-chars 0` for
-  the full text. `SPAN` accepts
-  `7d` / `24h` / `90m` / `30s`. Query supports FTS5 prefix exclusion (`-excluded`);
-  `+required` AND-syntax is not supported in v2.
+- `convo search "<query>" [--since SPAN] [--project P] [--session ID]
+  [--tool T] [--tool-exact] [--limit N] [--excerpt-chars N] [--fields LIST]
+  [--format prose|json]` -- FTS5 search over messages, tool calls, and tool
+  results.
+  - Terms are ANDed. Quote a `"phrase"`, put `OR` between terms, and prefix a
+    term with `-` to exclude it.
+  - `SPAN` is `7d` / `24h` / `90m` / `30s` / `2w` / `1y` or an ISO date.
+  - `--project` takes an exact path, a basename or a unique substring
+    (`convo projects` lists them). `--session` takes a session-id prefix.
+    `--tool` is a prefix match unless `--tool-exact` is given.
+  - `--limit` defaults to 10. JSON `total` counts every match, before the
+    limit.
+  - `--excerpt-chars` sets the excerpt width, up to the FTS5 snippet maximum
+    of about 64 characters (the default).
+  - `--fields` (prose output) prints one tab-separated line per hit with the
+    listed fields:
+    `session`, `ts`, `when`, `project`, `kind`, `excerpt`, `command`,
+    `content`, `output`, `tool`, `position`.
+  - Each hit reports its message `position`; pass it to
+    `convo inspect <session> --from-message P --to-message P --max-chars 0`
+    for the full text.
+  - `--json` still works as an alias for `--format json` but is deprecated
+    for `search`.
 - `convo inspect <session-id> | --latest [--json] [--full] [--timeline]
   [--from-message N] [--to-message M] [--max-chars N]` -- session timeline
   with inline tool calls. Accepts a UUID prefix; ambiguous prefixes list
@@ -216,14 +213,15 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   six families in one report.
 - `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
   window comparison with deltas. Default span 7d.
-- `convo projects [--json]` -- list indexed projects with session counts and
-  last-seen timestamps.
-- `convo tools [--json]` -- list tool names with total call counts and
-  last-seen timestamps.
-- `convo sessions [--since SPAN] [--project P] [--limit N] [--json]` -- list
-  recent sessions with project, message count, and timestamps.
+- `convo projects [--format prose|json]` -- list indexed projects with session
+  counts and last-seen timestamps.
+- `convo tools [--format prose|json]` -- list tool names with total call
+  counts and last-seen timestamps.
+- `convo sessions [--since SPAN] [--project P] [--limit N] [--format prose|json]`
+  -- list recent sessions with project, message count, and timestamps.
 
-The JSON envelope shape for every command is documented in
+`projects`, `tools` and `sessions` also accept `--json` as an alias for
+`--format json`. The JSON envelope shape for every command is documented in
 [JSON-ENVELOPE.md](JSON-ENVELOPE.md).
 
 ## Storage
@@ -248,13 +246,13 @@ then atomically replaces. `-wal` / `-shm` sidecars are unlinked first to
 prevent corruption.
 
 Snapshot files are written `0600` (owner read/write only) regardless of the
-process umask, since convo data may include prompt/response content. The live
-DB at `~/.claude/convo.db` still inherits the process umask -- set
-`umask 077` in the shell or cron line that creates it if you want owner-only
-permissions on the live DB as well:
+process umask, since convo data may include prompt/response content. convo
+creates the live DB `0600` too and tightens its `-wal` / `-shm` sidecars to
+`0600` on every open. On Windows the mode bits are ignored; see
+[SECURITY.md](SECURITY.md). A nightly snapshot from cron:
 
 ```cron
-0 3 * * * umask 077 && /path/to/convo backup --auto
+0 3 * * * /path/to/convo backup --auto
 ```
 
 ### Known limitations

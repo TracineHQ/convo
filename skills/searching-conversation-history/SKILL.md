@@ -86,7 +86,7 @@ inspect clips messages to 200 characters. To quote a hit verbatim, use its
 `position`, the message number `convo inspect` uses:
 
 ```bash
-convo search "<terms>" --json
+convo search "<terms>" --format json
 # take hits[].session_id and hits[].position (P), then:
 convo inspect <session_id> --from-message P --to-message P --max-chars 0
 ```
@@ -115,7 +115,9 @@ The `--project` filter accepts an absolute path prefix.
 
 ## JSON output (when needed)
 
-Add `--format=json` (or `--json`) to get machine-parseable output. The v2
+Add `--json` to get machine-parseable output. `search`, `projects`, `tools`
+and `sessions` also take `--format json`; use it for `search`, where `--json`
+is deprecated. The v2
 envelope shape is `{"schema_version": 2, "<command>": {...}}`. See
 `JSON-ENVELOPE.md` at the repo root for per-command field contracts.
 
@@ -138,7 +140,7 @@ User: "Did I ever fix that thing where the auth token kept expiring?"
 convo search "auth token expir" --since 90d --limit 5
 ```
 
-Quote the matching excerpts. For one message verbatim, rerun with `--json` and
+Quote the matching excerpts. For one message verbatim, rerun with `--format json` and
 pass the hit's `session_id` and `position` to
 `convo inspect <session_id> --from-message P --to-message P --max-chars 0`.
 

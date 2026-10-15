@@ -250,6 +250,25 @@ def test_search_help_lists_flags(capsys: pytest.CaptureFixture[str]) -> None:
     assert "--json" in out
 
 
+def test_search_help_examples_avoid_deprecated_json(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["search", "--help"])
+    examples = capsys.readouterr().out.split("Examples:")[1]
+    assert "--format json" in examples
+    assert "--json" not in examples
+
+
+def test_search_since_accepts_an_iso_date(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The help says --since takes an ISO date; check it parses."""
+    monkeypatch.setenv("CONVO_DB", str(tmp_path / "convo.db"))
+    assert main(["search", "anything", "--since", "2026-04-01", "--format", "json"]) == 0
+    assert json.loads(capsys.readouterr().out)["search"]["hits"] == []
+
+
 def test_top_level_help_lists_search(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         main(["--help"])

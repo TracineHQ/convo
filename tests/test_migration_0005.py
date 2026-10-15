@@ -247,7 +247,8 @@ def test_0005_replays_on_populated_v4_db(db_path: Path) -> None:
         ).fetchone()[0]
         assert applied == "0005_fk_child_indexes.sql"
 
-        # Deleting a file still cascades and nulls cross-file parents.
+        # Deleting a file still cascades to its sessions and messages, keeps
+        # the FTS index consistent and leaves no dangling foreign keys.
         conn.execute("DELETE FROM source_files WHERE id = 1")
         conn.commit()
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

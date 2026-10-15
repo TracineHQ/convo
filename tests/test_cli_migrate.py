@@ -147,6 +147,7 @@ def test_migrate_applies_pending(v4_db: Path, capsys: pytest.CaptureFixture[str]
     assert body["applied"][0]["filename"] == "0005_fk_child_indexes.sql"
     assert body["applied"][0]["duration_ms"] >= 0
     assert body["backup_path"] is None
+    assert body["backup_status"] == "not_requested"
     assert _version(v4_db) == SCHEMA_VERSION
 
 
@@ -173,7 +174,19 @@ def test_migrate_when_up_to_date_is_a_no_op(
     assert body["status"] == "up_to_date"
     assert body["applied"] == []
     assert body["backup_path"] is None
+    # Usually the hook's background run migrated first; say why there is no snapshot.
+    assert body["backup_status"] == "up_to_date"
     assert not (tmp_path / "convo-backups").exists()
+
+
+def test_migrate_backup_says_plainly_when_there_is_nothing_to_snapshot(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db_path = _db_at(tmp_path / "convo.db", SCHEMA_VERSION)
+    assert main(["--db", str(db_path), "migrate", "--backup"]) == 0
+    out = capsys.readouterr().out
+    assert f"no snapshot written: already at schema {SCHEMA_VERSION}" in out
 
 
 def test_migrate_backup_snapshots_before_applying(
@@ -187,6 +200,7 @@ def test_migrate_backup_snapshots_before_applying(
     assert rc == 0
     body = json.loads(capsys.readouterr().out)["migrate"]
     assert body["backup_path"] is not None
+    assert body["backup_status"] == "written"
     snapshot = Path(body["backup_path"])
     # Beside the DB, in the snapshot dir `convo snapshots` / `restore --latest` use.
     assert snapshot.parent == tmp_path / "convo-backups"
@@ -266,5 +280,10 @@ def test_index_still_migrates(
     empty = tmp_path / "projects"
     empty.mkdir()
     assert main(["--db", str(v4_db), "index", "--projects-dir", str(empty), "--json"]) == 0
-    capsys.readouterr()
+    out = capsys.readouterr()
     assert _version(v4_db) == SCHEMA_VERSION
+    # On stderr (the JSON envelope stays alone on stdout), which is also how
+    # the hook's background run records the migration in its log.
+    assert "applying 0005_fk_child_indexes.sql" in out.err
+    assert f"migrated schema 4 -> {SCHEMA_VERSION}" in out.err
+    assert json.loads(out.out)["index"]["status"] == "success"

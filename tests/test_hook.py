@@ -840,3 +840,5 @@ def test_hook_run_migrates_an_old_db_then_indexes(tmp_path: Path) -> None:
         assert db.schema_version() == SCHEMA_VERSION
         assert db.conn is not None
         assert [r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()] == [_SID]
+    # The log says the background run, not the user, did the upgrade.
+    assert f"migrated schema 4 -> {SCHEMA_VERSION}" in log_path.read_text(encoding="utf-8")

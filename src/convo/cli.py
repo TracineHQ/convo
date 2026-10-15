@@ -552,7 +552,10 @@ def _add_migrate_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
             "minutes; it holds the write lock, and reads keep working. Afterwards, "
             "`convo index` catches up. --backup first writes a snapshot to the "
             "snapshot directory ($CONVO_BACKUP_DIR, default <CONVO_DB>'s parent / "
-            "convo-backups), which `convo restore --latest` restores."
+            "convo-backups), which `convo restore --latest` restores. It only does so "
+            "while a migration is pending, and the hook's background run usually "
+            "migrates first: to keep a way back, run `convo backup --auto` with your "
+            "current CLI before upgrading."
         ),
     )
     migrate_p.add_argument(
@@ -1069,6 +1072,25 @@ def _build_envelope(report: IndexReport, *, status: str | None = None) -> dict[s
     }
 
 
+def _migrate_noting_it(db: Database) -> None:
+    """Apply pending migrations, saying so on stderr.
+
+    stderr keeps a `--json` envelope alone on stdout, and for the SessionEnd
+    hook's background run it is the log, so an upgrade shows up there.
+    """
+    from_version = db.schema_version()
+
+    def announce(_version: int, filename: str) -> None:
+        print(
+            f"convo: applying {filename} (can take minutes on a large DB) ...",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    if db.apply_migrations(on_start=announce):
+        print(f"convo: migrated schema {from_version} -> {db.schema_version()}", file=sys.stderr)
+
+
 def _existing_projects_dir(explicit: Path | None) -> Path:
     projects_dir = _resolve_projects_dir(explicit)
     if not projects_dir.exists():
@@ -1105,11 +1127,13 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
             if not args.as_json:
                 print(_format_file_line(i, total, projects_dir, result))
 
-        with Database(db_path, migrate=not (args.no_migrate or args.dry_run)) as db:
+        with Database(db_path, migrate=False) as db:
             if args.no_migrate:
                 db.require_schema(SCHEMA_VERSION)
             elif args.dry_run:
                 db.require_schema(READ_MIN_SCHEMA_VERSION)
+            else:
+                _migrate_noting_it(db)
             report = index_tree(
                 db,
                 projects_dir,
@@ -1197,15 +1221,9 @@ def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
     with _writer_lock(db_path), Database(db_path, migrate=False) as db:
         assert db.conn is not None
         from_version = db.schema_version()
-        backup_path: Path | None = None
-        if args.backup and db.pending_migrations():
-            if db.conn.execute("SELECT EXISTS(SELECT 1 FROM source_files)").fetchone()[0]:
-                _announce_snapshot()
-                backup_path = db.backup_snapshot()
-                if not args.as_json:
-                    print(f"snapshot written: {backup_path}")
-            elif not args.as_json:
-                print("no snapshot written: the DB has no indexed rows")
+        backup_path, backup_status = (
+            _migrate_backup(db, as_json=args.as_json) if args.backup else (None, "not_requested")
+        )
         applied = db.apply_migrations(on_start=announce)
         if applied:
             # Fold the migration's WAL pages back into the DB file. Best effort:
@@ -1214,7 +1232,14 @@ def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
         to_version = db.schema_version()
 
     if args.as_json:
-        print(json.dumps(_build_migrate_envelope(from_version, to_version, applied, backup_path)))
+        envelope = _build_migrate_envelope(
+            from_version,
+            to_version,
+            applied,
+            backup_path,
+            backup_status,
+        )
+        print(json.dumps(envelope))
     elif applied:
         total_s = sum(m.duration_ms for m in applied) / 1000.0
         plural = "" if len(applied) == 1 else "s"
@@ -1228,11 +1253,35 @@ def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
     return 0
 
 
+def _migrate_backup(db: Database, *, as_json: bool) -> tuple[Path | None, str]:
+    """Snapshot before migrating; return (snapshot path, `backup_status`).
+
+    `backup_status` is `written`, `up_to_date` (nothing pending, so nothing to
+    protect: usually the hook's background run has already migrated) or
+    `empty_db` (no indexed rows to save).
+    """
+    assert db.conn is not None
+    if not db.pending_migrations():
+        if not as_json:
+            print(f"no snapshot written: already at schema {db.schema_version()}")
+        return None, "up_to_date"
+    if not db.conn.execute("SELECT EXISTS(SELECT 1 FROM source_files)").fetchone()[0]:
+        if not as_json:
+            print("no snapshot written: the DB has no indexed rows")
+        return None, "empty_db"
+    _announce_snapshot()
+    backup_path = db.backup_snapshot()
+    if not as_json:
+        print(f"snapshot written: {backup_path}")
+    return backup_path, "written"
+
+
 def _build_migrate_envelope(
     from_version: int,
     to_version: int,
     applied: list[AppliedMigration],
     backup_path: Path | None,
+    backup_status: str,
 ) -> dict[str, object]:
     return {
         "schema_version": MIGRATE_ENVELOPE_VERSION,
@@ -1242,6 +1291,7 @@ def _build_migrate_envelope(
             "to_version": to_version,
             "applied": [dataclasses.asdict(m) for m in applied],
             "backup_path": None if backup_path is None else str(backup_path),
+            "backup_status": backup_status,
         },
     }
 

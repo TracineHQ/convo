@@ -11,10 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `convo migrate [--backup] [--json]` applies pending schema migrations,
   reporting each one as it runs. `--backup` first writes a snapshot to the
-  snapshot directory. To go back to 2.1.0, which refuses a v5 DB (its
-  `restore` included), downgrade first, then copy that snapshot over
-  `<CONVO_DB>` by hand and delete the `-wal` and `-shm` files beside it.
-  `convo info` reports `pending_migrations`.
+  snapshot directory, and says so plainly (`backup_status` under `--json`)
+  when there was nothing pending to protect. `convo index` and the hook's
+  background run apply migrations themselves and log them on stderr (the
+  hook log, for the background run). `convo info` reports
+  `pending_migrations`.
+
+  **Upgrading from 2.1.0:** before upgrading, take a snapshot with the 2.1.0
+  CLI (`convo backup --auto`). The first `convo index` or session end after
+  the upgrade migrates the DB to schema 5, usually before you get to
+  `convo migrate --backup`, so that snapshot is your way back. To go back to
+  2.1.0, which refuses a v5 DB (its `restore` included): make sure no convo
+  process is running (including a hook's background run), downgrade, then
+  copy the snapshot over `<CONVO_DB>` by hand and delete the `-wal` and
+  `-shm` files beside it.
 - `convo hook session-end` reads Claude Code's hook JSON on stdin, starts a
   detached `convo index --session <id>` for that one transcript, and returns
   in milliseconds. If another convo writer is running, one background run

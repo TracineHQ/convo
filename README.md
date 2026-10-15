@@ -179,9 +179,11 @@ location; `CLAUDE_PROJECTS_DIR` to override the default `~/.claude/projects/`.
   now. Read commands never migrate; `convo index` and the hook's background
   run do, so use this to migrate on your own schedule or when a read command
   asks for it. `convo info` shows how many are pending. `--backup` snapshots
-  the DB to the snapshot directory first. A migration can take minutes on a
-  large DB; reads keep working meanwhile. Run `convo index` afterwards to
-  catch up.
+  the DB to the snapshot directory first, if anything is pending; since the
+  hook's background run usually migrates first, take a `convo backup --auto`
+  with your current CLI before upgrading if you want a way back. A migration
+  can take minutes on a large DB; reads keep working meanwhile. Run
+  `convo index` afterwards to catch up.
 - `convo info [--json]` -- schema version, row counts per table, last index
   time, top 5 projects by session count, snapshot directory size.
 - `convo search "<query>" [--since SPAN] [--project P] [--tool T] [--limit N]

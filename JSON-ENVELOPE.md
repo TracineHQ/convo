@@ -525,14 +525,18 @@ Guard-log variant (`convo index-guard --json`):
     "applied": [
       {"version": 5, "filename": "0005_fk_child_indexes.sql", "duration_ms": 412}
     ],
-    "backup_path": "/home/user/.claude/convo-backups/convo-20261015-120000-000000.db"
+    "backup_path": "/home/user/.claude/convo-backups/convo-20261015-120000-000000.db",
+    "backup_status": "written"
   }
 }
 ```
 
-`status` is `"migrated"` or `"up_to_date"` (`applied` empty). `backup_path`
-is `null` unless `--backup` was given, a migration was pending, and the DB
-had rows to snapshot.
+`status` is `"migrated"` or `"up_to_date"` (`applied` empty).
+`backup_status` says what `--backup` did: `"written"` (`backup_path` is the
+snapshot), `"up_to_date"` (no migration was pending, so no snapshot; the
+SessionEnd hook's background run has usually migrated already), `"empty_db"`
+(no indexed rows to snapshot) or `"not_requested"` (no `--backup`).
+`backup_path` is `null` unless `backup_status` is `"written"`.
 
 ---
 

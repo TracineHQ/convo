@@ -48,7 +48,7 @@ shape.
 {
   "schema_version": 2,
   "info": {
-    "db_schema_version": 5,
+    "db_schema_version": 6,
     "pending_migrations": 0,
     "row_counts": {
       "source_files": 12,
@@ -528,9 +528,10 @@ Guard-log variant (`convo index-guard --json`):
   "migrate": {
     "status": "migrated",
     "from_version": 4,
-    "to_version": 5,
+    "to_version": 6,
     "applied": [
-      {"version": 5, "filename": "0005_fk_child_indexes.sql", "duration_ms": 412}
+      {"version": 5, "filename": "0005_fk_child_indexes.sql", "duration_ms": 412},
+      {"version": 6, "filename": "0006_message_positions.sql", "duration_ms": 2950}
     ],
     "backup_path": "/home/user/.claude/convo-backups/convo-20261015-120000-000000.db",
     "backup_status": "written"

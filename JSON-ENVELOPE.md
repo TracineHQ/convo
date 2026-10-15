@@ -113,7 +113,7 @@ applied; read commands never apply them (`convo migrate` does).
         "indices": [[8, 11]],
         "project": "/workspace/myapp",
         "tool_origin": "Bash",
-        "position": null
+        "position": 13
       }
     ]
   }
@@ -135,9 +135,9 @@ present for `kind="tool_result"`.
 the same number `inspect` reports as `messages[].position` and accepts in
 `--from-message/--to-message`. So
 `convo inspect <session_id> --from-message P --to-message P --max-chars 0`
-returns the hit's full message. For `kind="tool_call"` it is the message that
-made the call; for `kind="tool_result"` it is `null` (inspect does not show
-tool output).
+returns the hit's full message. For `kind="tool_call"` and `kind="tool_result"`
+it is the message that made the call: inspect lists the call's input there but
+not its output. `null` only if that message is missing from the DB.
 
 When `total=0` a `"suggestions"` key may appear:
 

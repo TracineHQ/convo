@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
 from convo.read.filters import since_iso as _filters_since_iso
-from convo.read.inspect import MESSAGE_ORDER_BY
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -44,6 +43,23 @@ _ERR_SHORT_QUERY_TERM = (
 )
 _MIN_TERM_LEN = 3
 
+# A hit's `position` is 1 + the number of session messages that sort before the
+# hit's message (`hm`) under MESSAGE_ORDER_BY (seq, timestamp, id; NULL
+# timestamps first). The `seq <` count is a covering range scan of
+# idx_messages_session(session_id, seq); only rows tied on seq are fetched.
+# This replaced a ROW_NUMBER() over every message of each hit's session, which
+# cost ~0.1 s per search when a hit sat in a 32k-message session.
+_POSITION_SQL = (
+    "CASE WHEN hm.id IS NULL THEN NULL ELSE 1"
+    " + (SELECT COUNT(*) FROM messages b"
+    " WHERE b.session_id = hm.session_id AND b.seq < hm.seq)"
+    " + (SELECT COUNT(*) FROM messages b"
+    " WHERE b.session_id = hm.session_id AND b.seq = hm.seq"
+    " AND ((b.timestamp IS NULL AND hm.timestamp IS NOT NULL)"
+    " OR b.timestamp < hm.timestamp"
+    " OR (b.timestamp IS hm.timestamp AND b.id < hm.id))) END"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
@@ -65,8 +81,9 @@ class SearchHit:
 
     position: int | None = None
     """1-indexed message number in the session, as ``convo inspect`` numbers it
-    (``--from-message/--to-message``). For tool_call hits, the message that made
-    the call. None for tool_result hits: the output is not shown by inspect."""
+    (``--from-message/--to-message``). For tool_call and tool_result hits, the
+    message that made the call (inspect lists the call there; it does not show
+    tool output). None only if that message is missing from the DB."""
 
 
 def build_fts_query(raw: str) -> str:
@@ -236,17 +253,13 @@ def _run_search(
     params: list[object] = []
     for _, p in parts:
         params.extend(p)
-    # `position` is computed in the same statement, only for the sessions of
-    # the returned hits, under the ordering `convo inspect` numbers messages by.
+    # MATERIALIZED: the FTS union runs once; `position` is then computed only for
+    # the returned hits (see `_POSITION_SQL`), never for whole sessions.
     full_sql = (
-        # MATERIALIZED: without it SQLite re-runs the FTS union for the IN subquery.
         f"WITH hits AS MATERIALIZED (SELECT * FROM ({union_sql}) "  # noqa: S608
-        "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?), "
-        "ranked AS (SELECT id, session_id, ROW_NUMBER() OVER "
-        f"(PARTITION BY session_id ORDER BY {MESSAGE_ORDER_BY}) AS position "
-        "FROM messages WHERE session_id IN (SELECT session_id FROM hits)) "
-        "SELECT hits.*, ranked.position FROM hits "
-        "LEFT JOIN ranked ON ranked.id = hits.msg_id AND ranked.session_id = hits.session_id "
+        "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?) "
+        f"SELECT hits.*, {_POSITION_SQL} AS position FROM hits "
+        "LEFT JOIN messages hm ON hm.id = hits.msg_id AND hm.session_id = hits.session_id "
         "ORDER BY (hits.timestamp IS NULL), hits.timestamp DESC"
     )
     params.append(int(limit))
@@ -363,7 +376,7 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
         f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
-        f"NULL AS msg_id"
+        f"tc.message_id AS msg_id"
     )
     sql = (
         f"{select_clause} "

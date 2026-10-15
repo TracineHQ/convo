@@ -91,9 +91,9 @@ convo search "<terms>" --json
 convo inspect <session_id> --from-message P --to-message P --max-chars 0
 ```
 
-Prose search output shows the same number as `position: P`. A `tool_call`
-hit's position is the message that made the call; `tool_result` hits have no
-position (inspect does not show tool output). Widen the range
+Prose search output shows the same number as `position: P`. For `tool_call`
+and `tool_result` hits it is the message that made the call (inspect shows the
+call's input, not its output). Widen the range
 (`--from-message P --to-message Q`) for surrounding turns. `--max-chars 0`
 also shows full tool-call input.
 

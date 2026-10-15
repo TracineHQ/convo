@@ -8,6 +8,7 @@ A search hit's ``position`` must be exactly the number ``inspect`` prints and
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from hypothesis import strategies as st
 from convo.cli import main
 from convo.db import Database
 from convo.read.inspect import _MSG_SELECT, MESSAGE_ORDER_BY
+from convo.read.search import _POSITION_SQL
 
 _SID = "5e551011-0000-4000-8000-000000000001"
 _NEEDLE = "zebracorn"
@@ -78,9 +80,6 @@ def _assert_hits_round_trip(capsys: pytest.CaptureFixture[str]) -> list[dict[str
     """Every positioned hit resolves, via an inspect range of one, to its message."""
     hits = _hits(capsys)
     for hit in hits:
-        if hit["kind"] == "tool_result":
-            assert hit["position"] is None
-            continue
         pos = hit["position"]
         assert isinstance(pos, int)
         (msg,) = _json(
@@ -90,6 +89,8 @@ def _assert_hits_round_trip(capsys: pytest.CaptureFixture[str]) -> list[dict[str
         if hit["kind"] == "message":
             assert msg["id"] == hit["id"]
         else:
+            # tool_call and tool_result hits share the call's id and point at
+            # the message that made the call.
             assert hit["id"] in [tc["id"] for tc in msg["tool_calls"]]
     return hits
 
@@ -158,7 +159,7 @@ def test_search_hits_carry_position(capsys: pytest.CaptureFixture[str]) -> None:
     assert by_id == {
         ("message", "m-0"): 1,
         ("tool_call", "tc-m-1"): 2,
-        ("tool_result", "tc-m-1"): None,
+        ("tool_result", "tc-m-1"): 2,
         ("message", "m-a"): 4,
         ("message", "m-b"): 5,
         ("message", "m-5"): 6,
@@ -173,7 +174,7 @@ def test_search_prose_shows_position(capsys: pytest.CaptureFixture[str]) -> None
     assert main(["search", _NEEDLE, "--fields", "session,position"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert f"{_SID[:8]}\t4" in lines
-    assert f"{_SID[:8]}\t" in lines  # tool_result hit: no position
+    assert f"{_SID[:8]}\t" not in lines  # every hit, tool_result included, has a position
 
 
 _ROLES = st.sampled_from(["user", "assistant", "system"])
@@ -213,6 +214,25 @@ def test_every_search_hit_round_trips_through_inspect(
 def test_inspect_select_uses_the_shared_message_order() -> None:
     """Search ranks positions by MESSAGE_ORDER_BY; inspect must list messages the same way."""
     assert _MSG_SELECT.endswith(" ORDER BY " + MESSAGE_ORDER_BY)
+    # _POSITION_SQL hand-encodes this ordering; change both together.
+    assert MESSAGE_ORDER_BY == "seq, timestamp, id"
+
+
+def test_position_counts_only_the_hit_rows(mixed: Path) -> None:
+    """Position is an index range count per hit, not a window over the whole session.
+
+    Regression guard for the 2.1.0 ROW_NUMBER() form, which read every message of
+    each hit's session (~0.1 s per search with a hit in a 32k-message session).
+    """
+    conn = sqlite3.connect(mixed)
+    try:
+        # _POSITION_SQL is a module constant; nothing user-supplied is interpolated.
+        sql = f"EXPLAIN QUERY PLAN SELECT {_POSITION_SQL} FROM messages hm WHERE hm.id = 'm-a'"  # noqa: S608
+        plan = [str(row[3]) for row in conn.execute(sql)]
+    finally:
+        conn.close()
+    assert any("COVERING INDEX idx_messages_session (session_id=? AND seq<?)" in p for p in plan)
+    assert not any(p.startswith("SCAN b") for p in plan), plan
 
 
 def test_search_positions_are_numbered_per_session(

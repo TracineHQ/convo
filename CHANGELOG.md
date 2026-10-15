@@ -73,6 +73,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that `convo restore --latest` would then pick. It is now removed. `backup`
   and `migrate --backup` also check for free space first and say on stderr
   when they start writing.
+- `convo search` computes each hit's `position` from the hit's own message
+  (an index range count) instead of numbering every message in the hit's
+  session. A search with hits in a 32k-message session drops from about
+  115 ms to 15 ms. `tool_result` hits now carry the position of the message
+  that made the call instead of `null`.
+- A relative `--db` or `CONVO_DB` path is resolved against the current
+  directory. Before, every read command failed with "relative path can't be
+  expressed as a file URI".
+- `--project <name>` picks the project whose last path component is `<name>`
+  even when a nested folder also contains it (`eval-kit` vs
+  `eval-kit/python`). The basename match never fired, so these fell through to
+  the substring match and errored as ambiguous.
 
 ## [2.1.0] - 2026-10-15
 

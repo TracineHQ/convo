@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import sqlite3
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -51,4 +54,50 @@ def test_backup_refuses_empty_db(db: Database, tmp_path: Path) -> None:
     dest = tmp_path / "snap.db"
     with pytest.raises(RuntimeError, match="empty convo DB"):
         db.backup(dest)
+    assert not dest.exists()
+
+
+def test_backup_removes_a_partial_snapshot_when_the_copy_fails(
+    db: Database,
+    tmp_path: Path,
+) -> None:
+    # A half-written snapshot sorts newest, so `restore --latest` would pick it.
+    seed_source_file(db, path="/seed/a.jsonl")
+    assert db.conn is not None
+    steps = {"n": 0, "stop_at": 0}
+
+    def tick() -> int:
+        steps["n"] += 1
+        return 1 if steps["stop_at"] and steps["n"] >= steps["stop_at"] else 0
+
+    db.conn.set_progress_handler(tick, 1)
+    full = tmp_path / "full.db"
+    db.backup(full)
+    full.unlink()
+
+    steps["stop_at"], steps["n"] = steps["n"] // 2, 0
+    dest = tmp_path / "snap.db"
+    with pytest.raises(sqlite3.OperationalError, match="interrupted"):
+        db.backup(dest)
+    db.conn.set_progress_handler(None, 0)
+    assert not dest.exists()
+
+
+def test_backup_refuses_when_the_destination_lacks_space(
+    db: Database,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_source_file(db, path="/seed/a.jsonl")
+    dest = tmp_path / "snap.db"
+    seen: list[Path] = []
+
+    def no_space(path: Path) -> SimpleNamespace:
+        seen.append(path)
+        return SimpleNamespace(total=1, used=1, free=0)
+
+    monkeypatch.setattr(shutil, "disk_usage", no_space)
+    with pytest.raises(RuntimeError, match="Not enough free space"):
+        db.backup(dest)
+    assert seen == [tmp_path]
     assert not dest.exists()

@@ -48,6 +48,11 @@ _ERR_BACKUP_EMPTY_DB = (
     "Point CONVO_DB / --db at a populated convo database, "
     "or run intake first."
 )
+_ERR_BACKUP_NO_SPACE = (
+    "Not enough free space for a snapshot in {dir}: it needs up to {needed:.1f} MiB "
+    "(the DB plus its WAL) and {free:.1f} MiB is free"
+)
+_BYTES_PER_MIB = 1024 * 1024
 _ERR_RESTORE_SRC_MISSING = "Snapshot source does not exist: {src}"
 _ERR_RESTORE_BAD_DB = "Snapshot source is not a usable convo DB: {src} ({reason})"
 _ERR_RESTORE_FROM_FUTURE = (
@@ -268,10 +273,31 @@ class Database:
         if dest_path.exists():
             raise FileExistsError(_ERR_BACKUP_DEST_EXISTS.format(dest=dest_path))
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn.execute("VACUUM INTO ?", (str(dest_path),))
-        # VACUUM INTO honors the process umask (often 0o644). Snapshot may
-        # contain prompt/response text — tighten to owner-only by default.
-        dest_path.chmod(0o600)
+        self._check_snapshot_space(dest_path.parent)
+        try:
+            self.conn.execute("VACUUM INTO ?", (str(dest_path),))
+            # VACUUM INTO honors the process umask (often 0o644). Snapshot may
+            # contain prompt/response text — tighten to owner-only by default.
+            dest_path.chmod(0o600)
+        except BaseException:
+            # A partial snapshot would sort newest and be what `restore
+            # --latest` picks; never leave one behind.
+            dest_path.unlink(missing_ok=True)
+            raise
+
+    def _check_snapshot_space(self, target_dir: Path) -> None:
+        """Refuse up front if `target_dir` can't hold a copy of the DB and its WAL."""
+        wal = Path(str(self.path) + "-wal")
+        needed = self.path.stat().st_size + (wal.stat().st_size if wal.exists() else 0)
+        free = shutil.disk_usage(target_dir).free
+        if free < needed:
+            raise RuntimeError(
+                _ERR_BACKUP_NO_SPACE.format(
+                    dir=target_dir,
+                    needed=needed / _BYTES_PER_MIB,
+                    free=free / _BYTES_PER_MIB,
+                ),
+            )
 
     def backup_snapshot(self, snapshot_dir: Path | str | None = None) -> Path:
         target_dir = resolve_snapshot_dir(snapshot_dir, self.path)

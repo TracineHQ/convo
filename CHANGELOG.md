@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The FTS update triggers fired on any column change, so the `SET NULL`
   updates above (and any non-text update) rewrote search-index entries.
   Schema v5 limits them to the indexed text columns.
+- A snapshot that failed partway (disk full, interrupted) left a partial file
+  that `convo restore --latest` would then pick. It is now removed. `backup`
+  and `migrate --backup` also check for free space first and say on stderr
+  when they start writing.
 
 ## [2.1.0] - 2026-10-15
 

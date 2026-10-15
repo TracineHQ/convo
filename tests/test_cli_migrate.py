@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from convo.cli import main
-from convo.db import SCHEMA_VERSION
+from convo.db import SCHEMA_VERSION, Database
 from tests._seed import build_db_at_version, seed_raw_session
 
 _SID = "5e551011-0000-4000-8000-000000000042"
@@ -200,6 +200,24 @@ def test_migrate_backup_snapshots_before_applying(
     finally:
         conn.close()
     assert _version(v4_db) == SCHEMA_VERSION
+
+
+def test_migrate_backup_announces_the_snapshot_before_writing_it(
+    v4_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("CONVO_BACKUP_DIR", raising=False)
+    stderr_at_copy: list[str] = []
+    real = Database.backup
+
+    def watching(self: Database, dest: Path | str) -> None:
+        stderr_at_copy.append(capsys.readouterr().err)
+        real(self, dest)
+
+    monkeypatch.setattr(Database, "backup", watching)
+    assert main(["--db", str(v4_db), "migrate", "--backup"]) == 0
+    assert "writing snapshot" in stderr_at_copy[0]
 
 
 def test_restore_latest_brings_back_the_pre_migration_schema(

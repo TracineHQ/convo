@@ -797,8 +797,18 @@ def _dispatch(args: argparse.Namespace) -> int:
     return rc
 
 
+def _announce_snapshot() -> None:
+    # stderr: stdout stays the single result line or JSON envelope.
+    print(
+        "convo: writing snapshot (can take minutes on a large DB) ...",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _backup_command(args: argparse.Namespace, db_path: Path) -> int:
     with Database(db_path, migrate=False) as db:
+        _announce_snapshot()
         if args.auto:
             written = db.backup_snapshot()
             snapshot_path = written
@@ -1099,6 +1109,7 @@ def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
         backup_path: Path | None = None
         if args.backup and db.pending_migrations():
             if db.conn.execute("SELECT EXISTS(SELECT 1 FROM source_files)").fetchone()[0]:
+                _announce_snapshot()
                 backup_path = db.backup_snapshot()
                 if not args.as_json:
                     print(f"snapshot written: {backup_path}")

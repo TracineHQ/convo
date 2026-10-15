@@ -148,6 +148,27 @@ def test_hook_hands_the_child_an_absolute_db_path(
     assert log_path == expected.with_name("convo.db.hook.log")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need extra privileges on Windows")
+def test_hook_keeps_a_symlinked_db_path_so_it_shares_the_manual_writers_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real = tmp_path / "real" / "convo.db"
+    real.parent.mkdir()
+    real.touch()
+    link = tmp_path / "convo.db"
+    link.symlink_to(real)
+    monkeypatch.chdir(tmp_path)
+    spawn = _FakeSpawn()
+    run_session_end(_payload(), db_path=Path("convo.db"), spawn=spawn)
+    argv, log_path = spawn.calls[0]
+    # Manual writers lock `<path as given>.ingest.lock`; resolving the link
+    # would put the hook's run on a different lock file beside the target.
+    assert argv[-2] == str(link)
+    assert WriterLock(Path(argv[-2])).path == WriterLock(link).path
+    assert log_path == tmp_path / "convo.db.hook.log"
+
+
 def test_hook_spawns_even_while_another_writer_holds_the_lock(held_lock: Path) -> None:
     # A session that ends mid-index must still get indexed: its child queues.
     spawn = _FakeSpawn()

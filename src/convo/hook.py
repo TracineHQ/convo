@@ -172,7 +172,9 @@ def run_session_end(
     if session_id is None or not is_valid_session_id(session_id):
         return HookOutcome(status="skipped", session_id=None)
     # The child runs in the log's directory; a relative path would move with it.
-    db_path = db_path.resolve()
+    # abspath, not resolve(): keep a symlinked DB's own name so the run locks
+    # `<path>.ingest.lock` just as a manual `convo index` on that path does.
+    db_path = Path(os.path.abspath(db_path))  # noqa: PTH100 - see above
     log_path = log_path_for(db_path)
     pid = spawn(child_argv(db_path, session_id), log_path)
     return HookOutcome(status="spawned", session_id=session_id, pid=pid, log_path=log_path)

@@ -176,6 +176,19 @@ def test_index_records_correct_kind(tmp_path: Path, db: Database) -> None:
     assert kind == "guard_decisions"
 
 
+def test_index_lockdown_mode_inserted(tmp_path: Path, db: Database) -> None:
+    # `guard mode lockdown` logs mode "lockdown"; those records must index, not quarantine.
+    log = tmp_path / "guard.jsonl"
+    _write_log(log, [_record(mode="lockdown")])
+    result = index_guard_file(db, log)
+    assert result.error is None
+    assert result.inserted_rows.get("guard_decisions") == 1
+    assert result.inserted_rows.get("quarantined", 0) == 0
+    assert db.conn is not None
+    mode = db.conn.execute("SELECT mode FROM guard_decisions").fetchone()[0]
+    assert mode == "lockdown"
+
+
 def test_index_fts_populated(tmp_path: Path, db: Database) -> None:
     log = tmp_path / "guard.jsonl"
     _write_log(log, [_record(reason="dangerous rm command")])

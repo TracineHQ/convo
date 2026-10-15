@@ -197,12 +197,47 @@ def test_spawn_detached_redirects_stdio_and_detaches(
     assert seen["stderr"] is subprocess.STDOUT
     assert seen["stdout"].name == str(log_path)
     assert seen["close_fds"] is True
-    if sys.platform == "win32":
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        assert seen["creationflags"] & flags == flags
-    else:
+    if sys.platform != "win32":
         assert seen["start_new_session"] is True
     assert log_path.exists()
+
+
+# The real Windows values, so the win32 branch runs (and is checked) on every OS.
+_CREATE_NO_WINDOW = 0x08000000
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+_DETACHED_PROCESS = 0x00000008
+
+
+def test_spawn_detached_on_windows_hides_the_console_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    class FakePopen:
+        pid = 1
+
+        def __init__(self, argv: list[str], **kwargs: Any) -> None:
+            del argv
+            seen.update(kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", _CREATE_NO_WINDOW, raising=False)
+    monkeypatch.setattr(
+        subprocess,
+        "CREATE_NEW_PROCESS_GROUP",
+        _CREATE_NEW_PROCESS_GROUP,
+        raising=False,
+    )
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", _DETACHED_PROCESS, raising=False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    spawn_detached(["prog"], tmp_path / "convo.db.hook.log")
+
+    # CREATE_NO_WINDOW gives the child a hidden console. DETACHED_PROCESS would
+    # override it, and a venv's python.exe launcher would then start the real
+    # interpreter in a fresh, visible console window.
+    assert seen["creationflags"] == _CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP
+    assert "start_new_session" not in seen
 
 
 def test_spawn_detached_truncates_an_oversized_log(

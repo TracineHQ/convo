@@ -95,8 +95,8 @@ def child_argv(db_path: Path, session_id: str) -> list[str]:
 def spawn_detached(argv: list[str], log_path: Path) -> int:
     """Start `argv` detached from the hook and return its pid.
 
-    The child gets its own session (POSIX) or a detached process group
-    (Windows), stdin from /dev/null, and stdout+stderr appended to
+    The child gets its own session (POSIX) or its own process group and a
+    hidden console (Windows), stdin from /dev/null, and stdout+stderr appended to
     `log_path`. It inherits none of the hook's pipes, so Claude Code is not
     left waiting on it.
     """
@@ -106,9 +106,12 @@ def spawn_detached(argv: list[str], log_path: Path) -> int:
         os.close(os.open(log_path, os.O_WRONLY | os.O_CREAT, 0o600))
     mode = "wb" if log_path.stat().st_size > LOG_MAX_BYTES else "ab"
     detach: dict[str, Any]
-    if sys.platform == "win32":  # pragma: no cover - exercised by the Windows CI job
+    if sys.platform == "win32":
+        # A hidden console, not DETACHED_PROCESS (which overrides
+        # CREATE_NO_WINDOW): with no console at all, a venv's python.exe
+        # launcher starts the real interpreter in a new, visible window.
         detach = {
-            "creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            "creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
         }
     else:
         detach = {"start_new_session": True}

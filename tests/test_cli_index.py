@@ -98,7 +98,12 @@ def test_index_dry_run_writes_nothing(
 ) -> None:
     rc = main(["index", "--projects-dir", str(projects_dir), "--dry-run"])
     assert rc == 0
-    capsys.readouterr()
+    out = capsys.readouterr().out
+    # Regression: the summary used to say "Indexed 2 files" on a dry run.
+    assert "Would index 2 files (0 unchanged, 0 empty, 0 failed)" in out
+    assert "Dry run: nothing was written." in out
+    assert "Indexed" not in out
+    assert "Inserted:" not in out
 
     with Database(live_db) as db:
         assert db.conn is not None

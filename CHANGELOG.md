@@ -85,6 +85,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   even when a nested folder also contains it (`eval-kit` vs
   `eval-kit/python`). The basename match never fired, so these fell through to
   the substring match and errored as ambiguous.
+- `convo search` JSON `total` is the number of matches before `--limit`, not
+  the size of the returned page. Prose output reports both
+  (`-- 120 hits, showing 10`) and numbers hits `hit N of <total>`.
+- Search prose says "1 hit", "1 session" and "1 project" instead of "1 hits",
+  "1 sessions" and "1 projects".
+- `convo search --fields` rejects unknown field names (exit 2) and lists the
+  valid ones in the error and in `--help`. Before, an unknown name printed an
+  empty column.
+- `convo index --dry-run` ends with "Would index N files ... Dry run: nothing
+  was written." instead of "Indexed N files" and an all-zero "Inserted" line.
 
 ## [2.1.0] - 2026-10-15
 

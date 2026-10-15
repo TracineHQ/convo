@@ -120,6 +120,9 @@ applied; read commands never apply them (`convo migrate` does).
 }
 ```
 
+`total` is the number of matches for the query and filters before `--limit`;
+`hits` holds at most `filters.limit` of them, newest first.
+
 `hits[].kind` is one of `"message"`, `"tool_call"`, or `"tool_result"`.
 
 `hits[].indices` is a list of `[start, end]` UTF-16 char offsets into

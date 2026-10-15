@@ -372,6 +372,98 @@ def test_search_limit_zero_rejected(capsys: pytest.CaptureFixture[str]) -> None:
     assert "--limit must be a positive integer" in err
 
 
+# `_populate` holds five "kafka" matches: m1, m2, m3 (messages), plus the
+# tool_call tc1 and its tool_result, both in s1 (/work/foo).
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected_total"),
+    [
+        ([], 5),
+        (["--tool", "Bash"], 2),
+        (["--project", "foo"], 4),
+        (["--session", "s2"], 1),
+    ],
+)
+def test_search_json_total_counts_all_matches(
+    extra: list[str],
+    expected_total: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: `total` used to equal the returned page size."""
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+
+    rc = main(["search", "kafka", "--limit", "1", "--format", "json", *extra])
+    assert rc == 0
+    body = json.loads(capsys.readouterr().out)["search"]
+    assert body["total"] == expected_total
+    assert len(body["hits"]) == 1
+
+
+def test_search_prose_reports_total_and_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+
+    assert main(["search", "kafka", "--limit", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "convo search 'kafka' -- 5 hits, showing 2 (raise --limit for more)" in out
+    assert "--- hit 1 of 5 ---" in out
+    assert "--- hit 3 of 5 ---" not in out
+    assert "2 hits across 1 session, 1 project." in out
+
+
+def test_search_prose_singular_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Regression: one match printed "1 hits" and "1 sessions"."""
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+
+    assert main(["search", "legacy"]) == 0
+    out = capsys.readouterr().out
+    assert "convo search 'legacy' -- 1 hit\n" in out
+    assert "showing" not in out
+    assert "1 hit across 1 session, 1 project." in out
+
+
+@pytest.mark.parametrize("value", ["bogus", "session,bogus", "", ","])
+def test_search_fields_rejects_unknown_names(
+    value: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: unknown --fields names were accepted and printed empty columns."""
+    with pytest.raises(SystemExit) as excinfo:
+        main(["search", "kafka", "--fields", value])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "unknown --fields name" in err
+    assert "valid: session,ts,when,project,kind,excerpt" in err
+
+
+def test_search_fields_accepts_spaces_after_commas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate(live)
+
+    assert main(["search", "legacy", "--fields", "session, kind"]) == 0
+    assert capsys.readouterr().out.strip() == "s2\tmessage"
+
+
 # ---------------------------------------------------------------------------
 # _span_to_str unit tests — regression guard for the 7d/"1w" mismatch
 # ---------------------------------------------------------------------------

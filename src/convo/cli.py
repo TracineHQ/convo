@@ -75,6 +75,7 @@ from convo.read.inspect import (
 )
 from convo.read.projects import ProjectRow, list_projects
 from convo.read.prose import (
+    PROJECTION_FIELDS,
     SearchRenderConfig,
     TimelineEvent,
     render_search_hits,
@@ -85,6 +86,7 @@ from convo.read.search import (
     SNIPPET_POST,
     SNIPPET_PRE,
     SearchHit,
+    count_matches,
     extract_indices_and_clean,
     search,
 )
@@ -276,6 +278,17 @@ def _message_number(s: str) -> int:
         msg = "message numbers are 1-indexed integers (>= 1)"
         raise argparse.ArgumentTypeError(msg)
     return n
+
+
+def _fields_list(s: str) -> list[str]:
+    """Argparse type for `search --fields`: comma-separated known field names."""
+    names = [name.strip() for name in s.split(",") if name.strip()]
+    unknown = [name for name in names if name not in PROJECTION_FIELDS]
+    if not names or unknown:
+        shown = ", ".join(repr(name) for name in unknown) or repr(s)
+        msg = f"unknown --fields name {shown}; valid: {','.join(PROJECTION_FIELDS)}"
+        raise argparse.ArgumentTypeError(msg)
+    return names
 
 
 def _non_negative_int(msg: str) -> Callable[[str], int]:
@@ -687,9 +700,12 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     )
     search_p.add_argument(
         "--fields",
-        type=str,
+        type=_fields_list,
         default=None,
-        help="comma-separated list of fields to project (TSV output)",
+        help=(
+            "print one tab-separated line per hit with these comma-separated fields "
+            f"(prose mode only): {','.join(PROJECTION_FIELDS)}"
+        ),
     )
 
 
@@ -1025,15 +1041,20 @@ def _format_file_line(idx: int, total: int, projects_dir: Path, result: IndexRes
     return f"{prefix}: indexed {msgs} messages / {tcs} tool_calls"
 
 
-def _print_summary(report: IndexReport) -> None:
+def _print_summary(report: IndexReport, *, dry_run: bool = False) -> None:
     secs = report.duration_ms / 1000.0
+    verb = "Would index" if dry_run else "Indexed"
+    noun = "file" if report.files_indexed == 1 else "files"
     print(
-        f"Indexed {report.files_indexed} files "
+        f"{verb} {report.files_indexed} {noun} "
         f"({report.files_skipped_unchanged} unchanged, "
         f"{report.files_skipped_empty} empty, "
         f"{report.files_failed} failed) "
         f"in {secs:.1f}s.",
     )
+    if dry_run:
+        print("Dry run: nothing was written.")
+        return
     rows = report.rows_inserted
     print(
         f"Inserted: {rows.get('messages', 0)} messages, "
@@ -1146,7 +1167,7 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
     if args.as_json:
         print(json.dumps(_build_envelope(report)))
     else:
-        _print_summary(report)
+        _print_summary(report, dry_run=args.dry_run)
     return 1 if _envelope_status(report) == "error" else 0
 
 
@@ -1449,6 +1470,19 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
                 limit=args.limit,
             ),
         )
+        # Matches before --limit. max() covers an index run landing between the queries.
+        total = max(
+            len(hits),
+            count_matches(
+                db,
+                args.query,
+                since=args.since,
+                project=project_resolved,
+                tool=args.tool,
+                session=args.session,
+                tool_exact=args.tool_exact,
+            ),
+        )
 
     cleaned: list[tuple[str, list[list[int]]]] = [
         extract_indices_and_clean(h.excerpt) for h in hits
@@ -1462,7 +1496,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
             "search": {
                 "query": args.query,
                 "filters": filters,
-                "total": len(hits),
+                "total": total,
                 "hits": [
                     _hit_to_dict_v2(h, clean, indices)
                     for h, (clean, indices) in zip(hits, cleaned, strict=True)
@@ -1481,13 +1515,11 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
             dataclasses.replace(h, excerpt=clean)
             for h, (clean, _) in zip(hits, cleaned, strict=True)
         ]
-        config = SearchRenderConfig(
-            fields=args.fields.split(",") if args.fields else [],
-        )
+        config = SearchRenderConfig(fields=args.fields or [])
         prose = render_search_hits(
             query=args.query,
             hits=cleaned_hits,
-            total=len(hits),
+            total=total,
             config=config,
             suggestions=[(s.kind, s.description) for s in suggestions],
         )

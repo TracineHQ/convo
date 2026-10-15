@@ -46,9 +46,10 @@ def render_search_hits(
 ) -> str:
     """Render a search result list as structured prose.
 
-    ``suggestions`` is a list of ``(kind, description)`` tuples emitted on
-    zero-hit results. Ignored when hits is non-empty. Returns the full
-    rendered string (no trailing newline).
+    ``total`` is the number of matches before ``--limit``; ``hits`` is the
+    returned page. ``suggestions`` is a list of ``(kind, description)`` tuples
+    emitted on zero-hit results. Ignored when hits is non-empty. Returns the
+    full rendered string (no trailing newline).
     """
     if config.fields:
         return _render_projection(hits, config.fields)
@@ -57,7 +58,10 @@ def render_search_hits(
         return _render_zero(query, suggestions or [])
 
     parts: list[str] = []
-    parts.append(f"convo search {query!r} -- {total} hits")
+    header = f"convo search {query!r} -- {_count(total, 'hit')}"
+    if len(hits) < total:
+        header += f", showing {len(hits)} (raise --limit for more)"
+    parts.append(header)
     parts.append("")
 
     for i, hit in enumerate(hits, start=1):
@@ -78,18 +82,27 @@ def render_search_hits(
         if parts[-1] == "":
             parts.pop()
         parts.append("")
-        footer_bits: list[str] = []
-        if config.show_total:
-            unique_sessions = len({h.session_id for h in hits})
-            unique_projects = len({h.project for h in hits if h.project})
-            footer_bits.append(
-                f"{len(hits)} hits across {unique_sessions} sessions, {unique_projects} projects."
-            )
-        if config.next_step_hint:
-            footer_bits.append("Inspect a session: convo inspect <session> --timeline")
-        parts.append(" ".join(footer_bits))
+        parts.append(_footer(hits, config))
 
     return "\n".join(parts)
+
+
+def _footer(hits: list[SearchHit], config: SearchRenderConfig) -> str:
+    footer_bits: list[str] = []
+    if config.show_total:
+        unique_sessions = len({h.session_id for h in hits})
+        unique_projects = len({h.project for h in hits if h.project})
+        footer_bits.append(
+            f"{_count(len(hits), 'hit')} across {_count(unique_sessions, 'session')}, "
+            f"{_count(unique_projects, 'project')}."
+        )
+    if config.next_step_hint:
+        footer_bits.append("Inspect a session: convo inspect <session> --timeline")
+    return " ".join(footer_bits)
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
 def _render_zero(query: str, suggestions: list[tuple[str, str]]) -> str:
@@ -175,6 +188,9 @@ _PROJECTION_FIELD_FNS: dict[str, Callable[[SearchHit], str]] = {
     "tool": lambda h: h.tool_origin or "",
     "position": lambda h: "" if h.position is None else str(h.position),
 }
+
+PROJECTION_FIELDS: tuple[str, ...] = tuple(_PROJECTION_FIELD_FNS)
+"""Valid ``convo search --fields`` names, in display order."""
 
 
 # ---------------------------------------------------------------------------

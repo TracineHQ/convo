@@ -236,18 +236,56 @@ def search(  # noqa: PLR0913
     yield from rows
 
 
+def count_matches(  # noqa: PLR0913
+    db: Database,
+    query: str,
+    *,
+    since: timedelta | None = None,
+    project: str | None = None,
+    tool: str | None = None,
+    session: str | None = None,
+    tool_exact: bool = False,
+) -> int:
+    """Count every hit ``search()`` would return with the same filters and no limit."""
+    filters = _Filters(
+        fts_match=build_fts_query(query),
+        since_iso=_filters_since_iso(since),
+        project=project,
+        tool=tool,
+        session=session,
+        tool_exact=tool_exact,
+        snippet_tokens=1,
+    )
+    parts = _branches(filters, count_only=True)
+    sql = "SELECT " + " + ".join(f"({branch})" for branch, _ in parts)
+    params = [p for _, branch_params in parts for p in branch_params]
+    ro = open_ro(db.path)
+    try:
+        try:
+            row = ro.execute(sql, params).fetchone()
+        except sqlite3.OperationalError as exc:
+            raise ValueError(_ERR_INVALID_QUERY.format(reason=exc)) from exc
+    finally:
+        ro.close()
+    return int(row[0])
+
+
+def _branches(filters: _Filters, *, count_only: bool = False) -> list[tuple[str, list[object]]]:
+    parts: list[tuple[str, list[object]]] = []
+    if filters.tool is None:
+        parts.append(_message_branch(filters, count_only=count_only))
+    parts.append(_tool_call_branch(filters, count_only=count_only))
+    parts.append(_tool_result_branch(filters, count_only=count_only))
+    return parts
+
+
 def _run_search(
     conn: sqlite3.Connection,
     filters: _Filters,
     *,
     limit: int,
 ) -> list[SearchHit]:
-    parts: list[tuple[str, list[object]]] = []
-
-    if filters.tool is None:
-        parts.append(_message_branch(filters))
-    parts.append(_tool_call_branch(filters))
-    parts.append(_tool_result_branch(filters))
+    parts = _branches(filters)
 
     union_sql = "\nUNION ALL\n".join(sql for sql, _ in parts)
     params: list[object] = []
@@ -280,6 +318,9 @@ def _run_search(
     ]
 
 
+_COUNT_SELECT = "SELECT COUNT(*)"
+
+
 def _snippet(table: str, col: int, tokens: int) -> str:
     return (
         f"snippet({table}, {col}, "
@@ -287,7 +328,7 @@ def _snippet(table: str, col: int, tokens: int) -> str:
     )
 
 
-def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
+def _message_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str, list[object]]:
     where: list[str] = ["messages_fts MATCH ?"]
     params: list[object] = [filters.fts_match]
     if filters.since_iso is not None:
@@ -306,6 +347,8 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"s.project_path AS project, m.role AS role, NULL AS tool_origin, "
         f"m.id AS msg_id"
     )
+    if count_only:
+        select_clause = _COUNT_SELECT
     sql = (
         f"{select_clause} "
         f"FROM messages_fts "
@@ -316,7 +359,7 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     return sql, params
 
 
-def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
+def _tool_call_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str, list[object]]:
     where: list[str] = ["tool_calls_fts MATCH ?"]
     params: list[object] = [filters.fts_match]
     if filters.since_iso is not None:
@@ -342,6 +385,8 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
         f"tc.message_id AS msg_id"
     )
+    if count_only:
+        select_clause = _COUNT_SELECT
     sql = (
         f"{select_clause} "
         f"FROM tool_calls_fts "
@@ -352,7 +397,7 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     return sql, params
 
 
-def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
+def _tool_result_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str, list[object]]:
     where: list[str] = ["tool_results_fts MATCH ?"]
     params: list[object] = [filters.fts_match]
     if filters.since_iso is not None:
@@ -378,6 +423,8 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
         f"tc.message_id AS msg_id"
     )
+    if count_only:
+        select_clause = _COUNT_SELECT
     sql = (
         f"{select_clause} "
         f"FROM tool_results_fts "

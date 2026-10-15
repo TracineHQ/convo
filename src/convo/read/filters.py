@@ -108,13 +108,16 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     if row is not None:
         return str(row[0])
 
-    # 2. Basename match: last path component equals value
+    # 2. Basename match: last path component equals value. An exact basename
+    # beats substring matches, so `eval-kit` picks /x/eval-kit over
+    # /x/eval-kit/python. substr() is 1-indexed: the last len(value) + 1
+    # characters start at length(path) - length(value).
     candidates_basename = [
         str(r[0])
         for r in conn.execute(
             "SELECT DISTINCT project_path FROM sessions "
             "WHERE project_path IS NOT NULL "
-            "AND substr(project_path, length(project_path) - length(?) - 1) "
+            "AND substr(project_path, length(project_path) - length(?)) "
             "= ('/' || ?)",
             (value, value),
         )

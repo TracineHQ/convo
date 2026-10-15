@@ -170,6 +170,36 @@ def test_resolve_basename(tmp_path) -> None:
     assert resolve_project_path(conn, "site-deploy") == "/Users/dev/develop/site-deploy"
 
 
+def test_resolve_basename_beats_nested_subfolder(tmp_path) -> None:
+    """`eval-kit` names /x/eval-kit even when /x/eval-kit/python also exists."""
+    conn = _make_projects_db(tmp_path)
+    conn.executemany(
+        "INSERT INTO sessions VALUES (?, ?)",
+        [
+            ("s5", "/Users/dev/develop/eval-kit"),
+            ("s6", "/Users/dev/develop/eval-kit/python"),
+            ("s7", "/Users/dev/develop/emulator"),
+            ("s8", "/Users/dev/develop/emulator/android"),
+            ("s9", "/Users/dev/develop/emulator/ios"),
+        ],
+    )
+    assert resolve_project_path(conn, "eval-kit") == "/Users/dev/develop/eval-kit"
+    assert resolve_project_path(conn, "python") == "/Users/dev/develop/eval-kit/python"
+    assert resolve_project_path(conn, "emulator") == "/Users/dev/develop/emulator"
+    # Substring-only values stay ambiguous.
+    with pytest.raises(ProjectResolveError, match="ambiguous"):
+        resolve_project_path(conn, "eval-")
+
+
+def test_resolve_basename_shared_by_two_paths_is_ambiguous(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    conn.execute("INSERT INTO sessions VALUES ('s5', '/Users/dev/work/convo')")
+    with pytest.raises(ProjectResolveError, match="ambiguous") as exc_info:
+        resolve_project_path(conn, "convo")
+    assert "/Users/dev/develop/convo" in str(exc_info.value)
+    assert "/Users/dev/work/convo" in str(exc_info.value)
+
+
 def test_resolve_substring_unambiguous(tmp_path) -> None:
     conn = _make_projects_db(tmp_path)
     assert resolve_project_path(conn, "api-client") == "/Users/dev/develop/api-client"

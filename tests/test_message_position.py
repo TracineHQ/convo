@@ -8,6 +8,7 @@ A search hit's ``position`` must be exactly the number ``inspect`` prints and
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -257,6 +258,11 @@ def test_inspect_select_uses_the_shared_message_order() -> None:
     assert MESSAGE_ORDER_BY == "seq, timestamp, id"
 
 
+# One EXPLAIN QUERY PLAN line per table read: "SEARCH b USING ..." on SQLite
+# 3.36+, "SEARCH TABLE messages AS b USING ..." before that.
+_PLAN_READ = re.compile(r"^(SCAN|SEARCH) (?:TABLE )?(\w+)(?: AS (\w+))?")
+
+
 def test_position_reads_only_the_hit_rows(mixed: Path) -> None:
     """Position is a key lookup per hit (a range count as fallback), never a session scan.
 
@@ -273,9 +279,17 @@ def test_position_reads_only_the_hit_rows(mixed: Path) -> None:
         plan = [str(row[3]) for row in conn.execute(sql)]
     finally:
         conn.close()
-    assert any("SEARCH p USING PRIMARY KEY (message_id=?)" in p for p in plan), plan
-    assert any("COVERING INDEX idx_messages_session (session_id=? AND seq<?)" in p for p in plan)
-    assert not any(p.startswith("SCAN") for p in plan), plan
+    # (operation, table alias) per table read. The plan text varies by SQLite
+    # version ("SEARCH p USING ..." vs "SEARCH TABLE message_positions AS p
+    # USING ..."), so match the shape, not the exact line.
+    reads = [(m[1], m[3] or m[2]) for line in plan if (m := _PLAN_READ.match(line))]
+    # The hit's row, its stored position and the fallback counts are all read
+    # by key or index range: no table is scanned.
+    assert {"hm", "p", "b"} <= {alias for _, alias in reads}, plan
+    assert all(op == "SEARCH" for op, _ in reads), plan
+    # The fallback count seeks the rows before the hit (a seq range), not the
+    # whole session.
+    assert any("idx_messages_session" in line and "seq<?" in line for line in plan), plan
 
 
 def test_search_reads_the_stored_position(

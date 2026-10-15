@@ -78,9 +78,19 @@ def child_argv(db_path: Path, session_id: str) -> list[str]:
     """Build the background index command (see `convo.hook_worker`).
 
     Runs this interpreter with `-P` so the working directory Claude Code
-    hands the hook never lands on `sys.path`.
+    hands the hook never lands on `sys.path`, and `-X utf8` so the log is
+    UTF-8 on Windows too (a detached run there would use the ANSI code page).
     """
-    return [sys.executable, "-P", "-m", "convo.hook_worker", str(db_path), session_id]
+    return [
+        sys.executable,
+        "-P",
+        "-X",
+        "utf8",
+        "-m",
+        "convo.hook_worker",
+        str(db_path),
+        session_id,
+    ]
 
 
 def spawn_detached(argv: list[str], log_path: Path) -> int:

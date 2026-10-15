@@ -166,7 +166,9 @@ def test_hook_skips_without_a_usable_session_id(tmp_path: Path, text: str) -> No
 
 def test_child_argv_runs_this_interpreter_without_cwd_on_path(tmp_path: Path) -> None:
     argv = child_argv(tmp_path / "convo.db", _SID)
-    assert argv[:4] == [sys.executable, "-P", "-m", "convo.hook_worker"]
+    # -X utf8: on Windows a detached run would otherwise write the log in the
+    # ANSI code page and fail on non-ASCII paths or transcript text.
+    assert argv[:6] == [sys.executable, "-P", "-X", "utf8", "-m", "convo.hook_worker"]
 
 
 def test_worker_runs_a_plain_scoped_index() -> None:

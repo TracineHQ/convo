@@ -3,8 +3,9 @@
 Claude Code gives SessionEnd hooks a 1.5 s budget by default (plugin hook
 `timeout` values do not raise it), and re-indexing a grown transcript takes
 longer than that. So the hook does no indexing itself. It reads the hook's
-JSON from stdin, starts a detached `convo index --session <id>` with its
-output appended to `<db>.hook.log`, and returns in milliseconds.
+JSON from stdin, starts a detached `convo index --session <id>` (through
+`convo.hook_worker`, which stamps each output line with the time and session
+id) with its output appended to `<db>.hook.log`, and returns in milliseconds.
 
 The background run indexes only that session's transcript. If another writer
 holds the lock, it waits its turn (it is detached, so waiting costs the hook
@@ -74,22 +75,12 @@ def session_id_from_payload(text: str) -> str | None:
 
 
 def child_argv(db_path: Path, session_id: str) -> list[str]:
-    """Build the background index command.
+    """Build the background index command (see `convo.hook_worker`).
 
     Runs this interpreter with `-P` so the working directory Claude Code
     hands the hook never lands on `sys.path`.
     """
-    return [
-        sys.executable,
-        "-P",
-        "-m",
-        "convo",
-        "--db",
-        str(db_path),
-        "index",
-        "--session",
-        session_id,
-    ]
+    return [sys.executable, "-P", "-m", "convo.hook_worker", str(db_path), session_id]
 
 
 def spawn_detached(argv: list[str], log_path: Path) -> int:

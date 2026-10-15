@@ -92,7 +92,8 @@ on top of the CLI:
 **Auto-index after every session.** A `SessionEnd` hook runs
 `convo hook session-end`, which starts a background index of the session
 that just ended and returns in milliseconds (Claude Code gives SessionEnd
-hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`.
+hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`,
+each line stamped with the time and the session id.
 If another convo writer is already running, the background run waits for it
 to finish, so every session still gets indexed. After an upgrade that adds a
 migration, the next background run applies it before indexing; read

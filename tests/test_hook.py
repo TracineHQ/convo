@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from convo import cli, hook
+from convo import cli, hook, hook_worker
 from convo.cli import main
 from convo.db import SCHEMA_VERSION, Database
 from convo.hook import child_argv, run_session_end, session_id_from_payload, spawn_detached
@@ -126,13 +127,7 @@ def test_hook_spawns_a_scoped_index(tmp_path: Path) -> None:
     assert len(spawn.calls) == 1
     argv, log_path = spawn.calls[0]
     assert argv == child_argv(db_path, _SID)
-    assert argv[argv.index("--db") + 1] == str(db_path)
-    assert argv[argv.index("--session") + 1] == _SID
-    # The child is detached, so it can wait for the writer lock for free.
-    assert "--no-wait" not in argv
-    # It migrates too: outside the hook's budget, under the lock, and readers
-    # keep working, so an upgrade never stalls indexing.
-    assert "--no-migrate" not in argv
+    assert argv[-2:] == [str(db_path), _SID]
     assert log_path == tmp_path / "convo.db.hook.log"
     # The hook itself never opens (and so never creates or migrates) the DB.
     assert not db_path.exists()
@@ -149,7 +144,7 @@ def test_hook_hands_the_child_an_absolute_db_path(
     run_session_end(_payload(), db_path=Path("sub") / "convo.db", spawn=spawn)
     argv, log_path = spawn.calls[0]
     expected = (tmp_path / "sub" / "convo.db").resolve()
-    assert argv[argv.index("--db") + 1] == str(expected)
+    assert argv[-2] == str(expected)
     assert log_path == expected.with_name("convo.db.hook.log")
 
 
@@ -171,7 +166,69 @@ def test_hook_skips_without_a_usable_session_id(tmp_path: Path, text: str) -> No
 
 def test_child_argv_runs_this_interpreter_without_cwd_on_path(tmp_path: Path) -> None:
     argv = child_argv(tmp_path / "convo.db", _SID)
-    assert argv[:4] == [sys.executable, "-P", "-m", "convo"]
+    assert argv[:4] == [sys.executable, "-P", "-m", "convo.hook_worker"]
+
+
+def test_worker_runs_a_plain_scoped_index() -> None:
+    # No --no-wait: the run is detached, so it waits for the writer lock for
+    # free. No --no-migrate: it migrates outside the hook's budget, under the
+    # lock, while readers keep working, so an upgrade never stalls indexing.
+    assert hook_worker.index_argv("/x/convo.db", _SID) == [
+        "--db",
+        "/x/convo.db",
+        "index",
+        "--session",
+        _SID,
+    ]
+
+
+_STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ (\S+) ")
+
+
+def test_worker_stamps_every_output_line_with_time_and_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root = _projects(tmp_path)
+    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(root))
+    db_path = tmp_path / "convo.db"
+
+    assert hook_worker.main([str(db_path), _SID]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert "Inserted: 8 messages" in out
+    assert lines
+    for line in lines:
+        match = _STAMP.match(line)
+        assert match is not None, line
+        assert match.group(1) == _SID
+
+
+def test_worker_stamps_stderr_too(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(_projects(tmp_path)))
+    db_path = tmp_path / "convo.db"
+    holder = WriterLock(db_path)
+    assert holder.acquire(blocking=False)
+    threading.Timer(0.3, holder.release).start()
+
+    assert hook_worker.main([str(db_path), _SID]) == 0
+    err = capsys.readouterr().err
+    assert "waiting for another convo writer" in err
+    for line in err.splitlines():
+        match = _STAMP.match(line)
+        assert match is not None, line
+        assert match.group(1) == _SID
+
+
+@pytest.mark.parametrize("argv", [[], ["only-db"], ["db", "../escape"], ["a", "b", "c"]])
+def test_worker_rejects_bad_arguments(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    assert hook_worker.main(argv) == 2
+    assert "usage" in capsys.readouterr().err
 
 
 def test_spawn_detached_redirects_stdio_and_detaches(
@@ -579,6 +636,10 @@ def test_hook_runs_queue_behind_a_writer_and_each_indexes_its_session(tmp_path: 
         assert db.conn is not None
         indexed = {r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()}
     assert indexed == set(sids)
+    # The runs share one log and interleave in it; every line says whose it is.
+    stamps = [_STAMP.match(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert all(stamps)
+    assert {m.group(1) for m in stamps if m} == set(sids)
 
 
 def test_hook_run_migrates_an_old_db_then_indexes(tmp_path: Path) -> None:

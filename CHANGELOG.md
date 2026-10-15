@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   detached `convo index --session <id>` for that one transcript, and returns
   in milliseconds. The background run waits its turn if another convo writer
   is running, applies pending migrations like any `convo index`, and appends
-  its output to `<CONVO_DB>.hook.log`.
+  its output to `<CONVO_DB>.hook.log`, each line stamped with the time and
+  the session id.
 - `convo index --session ID` indexes one session's transcript; `--no-wait`
   exits (status `busy`) instead of waiting for another convo writer;
   `--no-migrate` refuses to run while migrations are pending.

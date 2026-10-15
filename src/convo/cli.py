@@ -44,7 +44,7 @@ from convo.analytics import (
 from convo.cli_errors import precheck_argv
 from convo.db import Database, resolve_db_path, resolve_snapshot_dir
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
-from convo.intake.orchestrator import IndexReport, IndexResult, index_tree
+from convo.intake.orchestrator import IndexReport, IndexResult, discover_transcripts, index_tree
 from convo.read._db_access import open_ro as _open_ro
 from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
 from convo.read.info import InfoReport, ProjectCount, gather_info
@@ -321,14 +321,16 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help="Index Claude Code session JSONLs into the convo DB.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Walks <projects-dir>/<slug>/*.jsonl. Skips files whose sha256 is\n"
-            "already recorded in source_files. With --full, every file is\n"
-            "re-indexed. CLAUDE_PROJECTS_DIR overrides the default projects dir.\n"
+            "Walks <projects-dir>/<slug>/*.jsonl, most recently modified first.\n"
+            "Skips files whose sha256 is already recorded in source_files. With\n"
+            "--full, every file is re-indexed. CLAUDE_PROJECTS_DIR overrides the\n"
+            "default projects dir.\n"
             "\n"
             "Examples:\n"
             "  convo index\n"
             "  convo index --full --json\n"
             "  convo index --projects-dir /path/to/projects --dry-run\n"
+            "  convo index --session <session-id>\n"
         ),
     )
     index_p.add_argument(
@@ -336,6 +338,12 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         type=Path,
         default=None,
         help="Projects dir (default: $CLAUDE_PROJECTS_DIR or ~/.claude/projects/).",
+    )
+    index_p.add_argument(
+        "--session",
+        default=None,
+        metavar="ID",
+        help="Index only <projects-dir>/<slug>/<ID>.jsonl (a full session id, not a prefix).",
     )
     index_p.add_argument(
         "--full",
@@ -860,9 +868,8 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
         msg = f"projects dir is not a directory: {projects_dir}"
         raise RuntimeError(msg)
 
-    from convo.intake.orchestrator import _discover_jsonl  # noqa: PLC0415
-
-    total = len(_discover_jsonl(projects_dir))
+    files = discover_transcripts(projects_dir, session_id=args.session)
+    total = len(files)
     i = 0
 
     def progress(result: IndexResult) -> None:
@@ -878,6 +885,7 @@ def _index_command(args: argparse.Namespace, db_path: Path) -> int:
             full=args.full,
             dry_run=args.dry_run,
             on_file=progress,
+            files=files,
         )
 
     if args.as_json:

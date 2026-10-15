@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -21,6 +22,10 @@ if TYPE_CHECKING:
     from convo.intake.records import IntakeRecord
 
 _ERR_DB_NOT_OPEN = "Database is not open"
+_ERR_BAD_SESSION_ID = "invalid session id {session_id!r}: expected letters, digits, '.', '_', '-'"
+# Session ids are file stems (UUIDs in practice). The allow-list keeps them
+# free of path separators and glob metacharacters.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 _SKIP_UNCHANGED = "unchanged"
 _SKIP_EMPTY = "empty"
@@ -386,8 +391,34 @@ def _classify_dry_run(
     return IndexResult(path=path, source_file_id=existing[0], skipped_reason=_SKIP_DRY_RUN_NEW)
 
 
-def _discover_jsonl(projects_dir: Path) -> list[Path]:
-    return sorted(projects_dir.glob("*/*.jsonl"))
+def _mtime_ns(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def discover_transcripts(projects_dir: Path, *, session_id: str | None = None) -> list[Path]:
+    """Return `<projects_dir>/<slug>/*.jsonl`, most recently modified first.
+
+    Newest-first means fresh sessions are indexed before a backlog, so a run
+    that is cut short still covers recent activity. Ties sort by path. With
+    `session_id`, only `<slug>/<session_id>.jsonl` files are returned. Files
+    that vanish between the walk and the stat are dropped.
+    """
+    if session_id is None:
+        pattern = "*/*.jsonl"
+    elif _SESSION_ID_RE.fullmatch(session_id):
+        pattern = f"*/{session_id}.jsonl"
+    else:
+        raise ValueError(_ERR_BAD_SESSION_ID.format(session_id=session_id))
+    stamped: list[tuple[int, Path]] = []
+    for path in projects_dir.glob(pattern):
+        mtime = _mtime_ns(path)
+        if mtime is not None:
+            stamped.append((mtime, path))
+    stamped.sort(key=lambda item: (-item[0], str(item[1])))
+    return [path for _, path in stamped]
 
 
 @dataclass(slots=True)
@@ -426,27 +457,31 @@ def _accumulate(acc: _TreeAccumulator, result: IndexResult) -> None:
         acc.unknown_types[type_name] = acc.unknown_types.get(type_name, 0) + count
 
 
-def index_tree(
+def index_tree(  # noqa: PLR0913
     db: Database,
     projects_dir: Path,
     *,
     full: bool = False,
     dry_run: bool = False,
     on_file: Callable[[IndexResult], None] | None = None,
+    files: list[Path] | None = None,
 ) -> IndexReport:
-    """Walk `<projects_dir>/<slug>/*.jsonl` and index each file.
+    """Walk `<projects_dir>/<slug>/*.jsonl` and index each file, newest first.
 
     With `full=True`, every file is force-reindexed regardless of sha256.
     With `dry_run=True`, the tree is classified (`new` / `unchanged` /
     `force_reindex` / `empty`) without writing.
 
     `on_file` receives each per-file `IndexResult` immediately for progress
-    reporting.
+    reporting. `files` replaces the walk with an already-discovered list (see
+    `discover_transcripts`), so a caller that needs the total up front walks
+    the tree only once.
     """
     if db.conn is None:
         raise RuntimeError(_ERR_DB_NOT_OPEN)
 
-    files = _discover_jsonl(projects_dir)
+    if files is None:
+        files = discover_transcripts(projects_dir)
     acc = _TreeAccumulator()
 
     start_ns = time.monotonic_ns()

@@ -243,6 +243,8 @@ def test_spawn_detached_redirects_stdio_and_detaches(
         def __init__(self, argv: list[str], **kwargs: Any) -> None:
             seen["argv"] = argv
             seen.update(kwargs)
+            # Write the way the child does: straight to the descriptor it inherits.
+            os.write(kwargs["stdout"], b"this run\n")
 
     monkeypatch.setattr(subprocess, "Popen", FakePopen)
     log_path = tmp_path / "logs" / "convo.db.hook.log"
@@ -252,8 +254,11 @@ def test_spawn_detached_redirects_stdio_and_detaches(
     assert seen["argv"] == ["prog", "arg"]
     assert seen["stdin"] is subprocess.DEVNULL
     assert seen["stderr"] is subprocess.STDOUT
-    assert seen["stdout"].name == str(log_path)
     assert seen["close_fds"] is True
+    assert log_path.read_bytes() == b"this run\n"
+    # A later run appends after it.
+    spawn_detached(["prog"], log_path)
+    assert log_path.read_bytes() == b"this run\nthis run\n"
     if sys.platform != "win32":
         assert seen["start_new_session"] is True
     assert log_path.exists()
@@ -287,6 +292,8 @@ def test_spawn_detached_on_windows_hides_the_console_window(
         raising=False,
     )
     monkeypatch.setattr(subprocess, "DETACHED_PROCESS", _DETACHED_PROCESS, raising=False)
+    # The real Windows log opener needs _winapi; this test is about the flags.
+    monkeypatch.setattr(hook, "_open_for_append", lambda path: os.open(path, os.O_WRONLY))
     monkeypatch.setattr(sys, "platform", "win32")
     spawn_detached(["prog"], tmp_path / "convo.db.hook.log")
 

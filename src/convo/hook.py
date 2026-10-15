@@ -95,7 +95,8 @@ def spawn_detached(argv: list[str], log_path: Path) -> int:
     if not log_path.exists():
         # Create owner-only up front: the log can quote paths and errors.
         os.close(os.open(log_path, os.O_WRONLY | os.O_CREAT, 0o600))
-    mode = "wb" if log_path.stat().st_size > LOG_MAX_BYTES else "ab"
+    if log_path.stat().st_size > LOG_MAX_BYTES:
+        os.truncate(log_path, 0)
     detach: dict[str, Any]
     if sys.platform == "win32":
         # A hidden console, not DETACHED_PROCESS (which overrides
@@ -106,17 +107,48 @@ def spawn_detached(argv: list[str], log_path: Path) -> int:
         }
     else:
         detach = {"start_new_session": True}
-    with log_path.open(mode) as log:
+    log_fd = _open_for_append(log_path)
+    try:
         proc = subprocess.Popen(  # noqa: S603 - argv is built by child_argv, no shell
             argv,
             stdin=subprocess.DEVNULL,
-            stdout=log,
+            stdout=log_fd,
             stderr=subprocess.STDOUT,
             close_fds=True,
             cwd=log_path.parent,
             **detach,
         )
+    finally:
+        os.close(log_fd)
     return proc.pid
+
+
+def _open_for_append(path: Path) -> int:
+    """Open an existing `path` so every write, from any process, lands at its end.
+
+    Queued runs share the log. POSIX `O_APPEND` belongs to the open file, so
+    the child inherits it. On Windows append is a C runtime flag on the fd,
+    which a child doesn't inherit: it gets the bare handle and its own file
+    position, and the runs overwrite each other. A handle opened with append
+    data access but no write data access makes the OS append every write.
+    """
+    if sys.platform == "win32":  # pragma: no cover - exercised by the Windows CI job
+        import _winapi  # noqa: PLC0415 - Windows only
+        import msvcrt  # noqa: PLC0415 - Windows only
+
+        file_generic_write, file_write_data = 0x00120116, 0x00000002
+        share_all = 0x00000001 | 0x00000002 | 0x00000004  # read, write, delete
+        handle = _winapi.CreateFile(
+            str(path),
+            file_generic_write & ~file_write_data,
+            share_all,
+            _winapi.NULL,
+            _winapi.OPEN_EXISTING,
+            0,
+            _winapi.NULL,
+        )
+        return msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_APPEND)
+    return os.open(path, os.O_WRONLY | os.O_APPEND)
 
 
 def run_session_end(

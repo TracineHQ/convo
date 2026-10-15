@@ -1,7 +1,7 @@
 """Argparse CLI for convo.
 
-Subcommands: backup, restore, index, info, search, inspect, snapshots,
-stats, projects, tools, sessions.
+Subcommands: backup, restore, index, index-guard, migrate, info, search,
+inspect, snapshots, stats, summary, diff, projects, tools, sessions.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, override
@@ -42,7 +43,13 @@ from convo.analytics import (
     stats_tools,
 )
 from convo.cli_errors import precheck_argv
-from convo.db import Database, resolve_db_path, resolve_snapshot_dir
+from convo.db import (
+    READ_MIN_SCHEMA_VERSION,
+    AppliedMigration,
+    Database,
+    resolve_db_path,
+    resolve_snapshot_dir,
+)
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import IndexReport, IndexResult, discover_transcripts, index_tree
 from convo.read._db_access import open_ro as _open_ro
@@ -78,7 +85,7 @@ from convo.read.suggestions import Suggestion, generate_suggestions
 from convo.read.tools import ToolRow, list_tools
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
 # referenced below in _projects_command, _tools_command, _sessions_command
 _DISCOVERY_REFS = (ProjectRow, list_projects, SessionRow, list_sessions, ToolRow, list_tools)
@@ -96,6 +103,7 @@ ERROR_ENVELOPE_VERSION: int = 2
 PROJECTS_ENVELOPE_VERSION: int = 2
 TOOLS_ENVELOPE_VERSION: int = 2
 SESSIONS_ENVELOPE_VERSION: int = 2
+MIGRATE_ENVELOPE_VERSION: int = 2
 _STATS_FAMILIES: tuple[str, ...] = ("tools", "commands", "sessions", "files", "model", "hooks")
 _INSPECT_PREVIEW_CHARS: int = 200
 _TIMELINE_PREVIEW_CHARS: int = 80
@@ -115,6 +123,20 @@ def _resolve_projects_dir(explicit: Path | str | None = None) -> Path:
     if env:
         return Path(env).expanduser()
     return DEFAULT_PROJECTS_DIR
+
+
+@contextmanager
+def _read_db(db_path: Path) -> Iterator[Database]:
+    """Open the DB for a read command: never migrate, refuse a too-old schema.
+
+    Pending migrations the read path does not need are left for `convo
+    migrate` (or the next `convo index`), so a read never waits on a slow
+    one. A DB older than `READ_MIN_SCHEMA_VERSION` raises
+    `MigrationRequiredError`, which `main` reports as the error envelope.
+    """
+    with Database(db_path, migrate=False) as db:
+        db.require_schema(READ_MIN_SCHEMA_VERSION)
+        yield db
 
 
 def _positive_int(s: str) -> int:
@@ -244,6 +266,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_restore_parser(sub)
     _add_index_parser(sub)
     _add_index_guard_parser(sub)
+    _add_migrate_parser(sub)
     _add_info_parser(sub)
     _add_search_parser(sub)
     _add_inspect_parser(sub)
@@ -387,6 +410,31 @@ def _add_index_guard_parser(sub: argparse._SubParsersAction[argparse.ArgumentPar
         help="Re-index regardless of recorded sha256.",
     )
     guard_p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _add_migrate_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    migrate_p = sub.add_parser(
+        "migrate",
+        help="Apply pending schema migrations to the convo DB.",
+        epilog=(
+            "Read commands and the SessionEnd hook never migrate; `convo index` and this "
+            "command do. On a large DB a migration can take minutes; it holds the write "
+            "lock, and reads keep working. --backup first writes a snapshot to the "
+            "snapshot directory ($CONVO_BACKUP_DIR, default <CONVO_DB>'s parent / "
+            "convo-backups), which `convo restore --latest` restores."
+        ),
+    )
+    migrate_p.add_argument(
+        "--backup",
+        action="store_true",
+        help="Snapshot the DB before applying migrations (skipped when none are pending).",
+    )
+    migrate_p.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
@@ -637,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(args)
     except (RuntimeError, ValueError, FileExistsError, OSError, sqlite3.DatabaseError) as exc:
-        if getattr(args, "as_json", False):
+        if getattr(args, "as_json", False) or getattr(args, "format", None) == "json":
             envelope = {
                 "schema_version": ERROR_ENVELOPE_VERSION,
                 "error": {"message": str(exc)},
@@ -656,6 +704,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         "restore": _restore_command,
         "index": _index_command,
         "index-guard": _index_guard_command,
+        "migrate": _migrate_command,
         "info": _info_command,
         "search": _search_command,
         "inspect": _inspect_command,
@@ -675,7 +724,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 
 def _backup_command(args: argparse.Namespace, db_path: Path) -> int:
-    with Database(db_path) as db:
+    with Database(db_path, migrate=False) as db:
         if args.auto:
             written = db.backup_snapshot()
             snapshot_path = written
@@ -939,8 +988,63 @@ def _index_guard_command(args: argparse.Namespace, db_path: Path) -> int:
     return 0
 
 
+def _migrate_command(args: argparse.Namespace, db_path: Path) -> int:
+    def announce(_version: int, filename: str) -> None:
+        if not args.as_json:
+            print(f"applying {filename} (can take minutes on a large DB) ...", flush=True)
+
+    with Database(db_path, migrate=False) as db:
+        assert db.conn is not None
+        from_version = db.schema_version()
+        backup_path: Path | None = None
+        if args.backup and db.pending_migrations():
+            if db.conn.execute("SELECT EXISTS(SELECT 1 FROM source_files)").fetchone()[0]:
+                backup_path = db.backup_snapshot()
+                if not args.as_json:
+                    print(f"snapshot written: {backup_path}")
+            elif not args.as_json:
+                print("no snapshot written: the DB has no indexed rows")
+        applied = db.apply_migrations(on_start=announce)
+        if applied:
+            # Fold the migration's WAL pages back into the DB file. Best effort:
+            # an active reader can leave it incomplete, which is harmless.
+            db.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        to_version = db.schema_version()
+
+    if args.as_json:
+        print(json.dumps(_build_migrate_envelope(from_version, to_version, applied, backup_path)))
+    elif applied:
+        total_s = sum(m.duration_ms for m in applied) / 1000.0
+        plural = "" if len(applied) == 1 else "s"
+        print(
+            f"migrated schema {from_version} -> {to_version} "
+            f"({len(applied)} migration{plural}, {total_s:.1f}s)",
+        )
+    else:
+        print(f"schema {to_version} is up to date; nothing to migrate")
+    return 0
+
+
+def _build_migrate_envelope(
+    from_version: int,
+    to_version: int,
+    applied: list[AppliedMigration],
+    backup_path: Path | None,
+) -> dict[str, object]:
+    return {
+        "schema_version": MIGRATE_ENVELOPE_VERSION,
+        "migrate": {
+            "status": "migrated" if applied else "up_to_date",
+            "from_version": from_version,
+            "to_version": to_version,
+            "applied": [dataclasses.asdict(m) for m in applied],
+            "backup_path": None if backup_path is None else str(backup_path),
+        },
+    }
+
+
 def _info_command(args: argparse.Namespace, db_path: Path) -> int:
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = gather_info(db)
     if args.as_json:
         print(json.dumps(_build_info_envelope(report)))
@@ -960,6 +1064,7 @@ def _build_info_envelope(report: InfoReport) -> dict[str, object]:
         "schema_version": INFO_ENVELOPE_VERSION,
         "info": {
             "db_schema_version": report.schema_version,
+            "pending_migrations": report.pending_migrations,
             "row_counts": dict(report.row_counts),
             "last_indexed_at": report.last_indexed_at,
             "top_projects": [
@@ -988,8 +1093,12 @@ def _format_bytes(n: int) -> str:
 
 
 def _print_info(report: InfoReport) -> None:
+    schema = str(report.schema_version)
+    if report.pending_migrations:
+        plural = "" if report.pending_migrations == 1 else "s"
+        schema += f" ({report.pending_migrations} pending migration{plural}; run: convo migrate)"
     rows: list[tuple[str, str]] = [
-        ("schema_version", str(report.schema_version)),
+        ("schema_version", schema),
         ("db_size", _format_bytes(report.db_size_bytes)),
         ("last_indexed_at", report.last_indexed_at or "(never)"),
     ]
@@ -1025,7 +1134,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
     project_resolved: str | None = args.project
 
     if args.project:
-        with Database(db_path) as _db_proj:
+        with _read_db(db_path) as _db_proj:
             assert _db_proj.conn is not None
             try:
                 project_resolved = resolve_project_path(_db_proj.conn, args.project)
@@ -1043,7 +1152,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
                     print(f"convo: {exc}", file=sys.stderr)
                 return 1
 
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         hits = list(
             search(
                 db,
@@ -1174,7 +1283,7 @@ def _render_excerpt_for_tty(excerpt: str) -> str:
 
 
 def _inspect_command(args: argparse.Namespace, db_path: Path) -> int:
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         if args.latest:
             resolved = resolve_latest_session(db)
         else:
@@ -1434,7 +1543,7 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = func(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_stats_envelope(family, report)))
@@ -1700,7 +1809,7 @@ def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = gather_summary(db, since=args.since, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_summary_envelope(report)))
@@ -1878,7 +1987,7 @@ def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
-    with Database(db_path) as db:
+    with _read_db(db_path) as db:
         report = compute_diff(db, span=span, project=project_resolved)
     if args.as_json:
         print(json.dumps(_build_diff_envelope(report)))

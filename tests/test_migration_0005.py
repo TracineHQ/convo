@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import sqlite3
-from datetime import UTC, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from convo.db import Database
-from tests._seed import seed_full_chain, seed_guard_decision, seed_source_file
-
-_MIGRATIONS = Path(__file__).resolve().parent.parent / "src" / "convo" / "migrations"
-_V4_CHAIN = (
-    "0001_init.sql",
-    "0002_guard_decisions.sql",
-    "0003_guard_decisions_repair.sql",
-    "0004_guard_decisions_lockdown.sql",
+from tests._seed import (
+    build_db_at_version,
+    seed_full_chain,
+    seed_guard_decision,
+    seed_source_file,
 )
+
+if TYPE_CHECKING:
+    import sqlite3
+    from pathlib import Path
 
 
 def _index_columns(conn: sqlite3.Connection, table: str) -> dict[str, list[str]]:
@@ -150,22 +149,6 @@ def test_fts_column_update_still_reindexes(
     assert hits(old) == 0
 
 
-def _build_v4(path: Path) -> sqlite3.Connection:
-    """Apply 0001-0004 with `open()`'s pragmas, leaving a v4 DB like a 2.1.0 install."""
-    raw = sqlite3.connect(path)
-    raw.executescript("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
-    now = datetime.now(tz=UTC).isoformat()
-    for version, name in enumerate(_V4_CHAIN, start=1):
-        raw.executescript("BEGIN EXCLUSIVE;\n" + (_MIGRATIONS / name).read_text(encoding="utf-8"))
-        raw.execute(
-            "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
-            (version, name, now),
-        )
-        raw.execute(f"PRAGMA user_version = {version}")
-        raw.execute("COMMIT")
-    return raw
-
-
 def _seed_v4(raw: sqlite3.Connection, *, sessions: int = 3, per_session: int = 40) -> None:
     ts = "2026-09-01T00:00:00Z"
     for s in range(sessions):
@@ -226,7 +209,7 @@ def _counts(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def test_0005_replays_on_populated_v4_db(db_path: Path) -> None:
-    raw = _build_v4(db_path)
+    raw = build_db_at_version(db_path, 4)
     _seed_v4(raw)
     before = _counts(raw)
     raw.close()

@@ -6,17 +6,24 @@ import os
 import re
 import shutil
 import sqlite3 as _sql
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import TracebackType
 
 DEFAULT_DB_PATH: Path = Path.home() / ".claude" / "convo.db"
 SNAPSHOT_DIR_NAME: str = "convo-backups"
 SCHEMA_VERSION: int = 5
+# Oldest schema the read commands can query. Migrations past it (0005 only
+# adds indexes and narrows triggers) are left to writers and `convo migrate`,
+# so a read never sits through an index build.
+READ_MIN_SCHEMA_VERSION: int = 4
 _MIN_SQLITE: tuple[int, int, int] = (3, 37, 0)
 _MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -26,6 +33,10 @@ _ERR_SQLITE_TOO_OLD = (
 _ERR_DB_FROM_FUTURE = (
     "DB at {path} is at user_version {found}, "
     "but this convo only knows up to version {known}; refusing to downgrade"
+)
+_ERR_MIGRATION_REQUIRED = (
+    "DB at {path} is at schema version {found}; this needs version {needed} or newer. "
+    "Run: convo migrate (add --backup to snapshot it first)"
 )
 _ERR_MIGRATION_GAP = "Non-contiguous migration versions discovered: {versions}"
 _ERR_MIGRATION_DUP = "Duplicate migration version {version} ({first}, {second})"
@@ -43,6 +54,19 @@ _ERR_RESTORE_FROM_FUTURE = (
     "Snapshot at {src} is from a newer schema version "
     "(snapshot {snapshot_v} > current {current_v}); refusing to restore"
 )
+
+
+class MigrationRequiredError(RuntimeError):
+    """The DB's schema is older than the operation needs; `convo migrate` fixes it."""
+
+
+@dataclass(frozen=True, slots=True)
+class AppliedMigration:
+    """One migration script applied by `Database.apply_migrations`."""
+
+    version: int
+    filename: str
+    duration_ms: int
 
 
 def resolve_snapshot_dir(explicit: Path | str | None, db_path: Path) -> Path:
@@ -112,12 +136,20 @@ class Database:
     path: Path
     conn: _sql.Connection | None
 
-    def __init__(self, path: Path | str | None = None) -> None:
+    def __init__(self, path: Path | str | None = None, *, migrate: bool = True) -> None:
+        """Bind to `path` (see `resolve_db_path`); nothing is opened yet.
+
+        `migrate=False` is for readers and the hook: `open()` then leaves
+        pending migrations alone (a brand-new, empty DB is still initialized,
+        since there is nothing to migrate) and callers check the version with
+        `require_schema` or `pending_migrations`.
+        """
         self.path = resolve_db_path(path)
         self.conn = None
+        self._migrate_on_open = migrate
 
     def open(self) -> Self:
-        """Open the connection, apply pragmas, run pending migrations."""
+        """Open the connection, apply pragmas, run pending migrations (see `__init__`)."""
         if _sql.sqlite_version_info < _MIN_SQLITE:
             raise RuntimeError(
                 _ERR_SQLITE_TOO_OLD.format(found=_sql.sqlite_version),
@@ -150,7 +182,10 @@ class Database:
         # to 0o600 since they hold uncommitted prompt/response data.
         _chmod_sidecars(self.path)
         self.conn.row_factory = _sql.Row
-        self.migrate()
+        if self._migrate_on_open or self.schema_version() == 0:
+            self.migrate()
+        else:
+            self._refuse_future_version(self.schema_version())
         return self
 
     def close(self) -> None:
@@ -158,10 +193,27 @@ class Database:
             self.conn.close()
             self.conn = None
 
-    def migrate(self) -> int:
+    def schema_version(self) -> int:
+        """Return the DB's `PRAGMA user_version` (the last applied migration)."""
         if self.conn is None:
             raise RuntimeError(_ERR_NOT_OPEN)
-        current = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        version: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        return version
+
+    def pending_migrations(self) -> list[tuple[int, str]]:
+        """Return `(version, filename)` for each migration not yet applied."""
+        current = self.schema_version()
+        return [(v, name) for v, name, _ in _discover_migrations() if v > current]
+
+    def require_schema(self, minimum: int) -> None:
+        """Raise `MigrationRequiredError` if the DB is older than `minimum`."""
+        current = self.schema_version()
+        if current < minimum:
+            raise MigrationRequiredError(
+                _ERR_MIGRATION_REQUIRED.format(path=self.path, found=current, needed=minimum),
+            )
+
+    def _refuse_future_version(self, current: int) -> None:
         if current > SCHEMA_VERSION:
             raise RuntimeError(
                 _ERR_DB_FROM_FUTURE.format(
@@ -170,9 +222,26 @@ class Database:
                     known=SCHEMA_VERSION,
                 ),
             )
+
+    def apply_migrations(
+        self,
+        on_start: Callable[[int, str], None] | None = None,
+    ) -> list[AppliedMigration]:
+        """Apply each pending migration in its own exclusive transaction.
+
+        `on_start(version, filename)` is called before each script runs, so a
+        caller can report progress on slow ones.
+        """
+        current = self.schema_version()
+        self._refuse_future_version(current)
+        assert self.conn is not None
+        applied: list[AppliedMigration] = []
         for version, filename, sql in _discover_migrations():
             if version <= current:
                 continue
+            if on_start is not None:
+                on_start(version, filename)
+            started = time.monotonic()
             applied_at = datetime.now(UTC).isoformat()
             self.conn.executescript("BEGIN EXCLUSIVE;\n" + sql)
             self.conn.execute(
@@ -181,8 +250,14 @@ class Database:
             )
             self.conn.execute(f"PRAGMA user_version = {int(version)}")
             self.conn.execute("COMMIT")
-        result: int = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        return result
+            duration_ms = int((time.monotonic() - started) * 1000)
+            applied.append(AppliedMigration(version, filename, duration_ms))
+        return applied
+
+    def migrate(self) -> int:
+        """Apply pending migrations and return the resulting schema version."""
+        self.apply_migrations()
+        return self.schema_version()
 
     def backup(self, dest: Path | str) -> None:
         if self.conn is None:

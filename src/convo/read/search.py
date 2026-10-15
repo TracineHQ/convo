@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
 from convo.read.filters import since_iso as _filters_since_iso
+from convo.read.inspect import MESSAGE_ORDER_BY
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -28,6 +29,9 @@ SNIPPET_PRE: str = "\x02HIT\x02"
 SNIPPET_POST: str = "\x03HIT\x03"
 SNIPPET_ELLIPSIS: str = "..."
 _SNIPPET_TOKENS: int = 12
+# FTS5 caps snippet() at 64 tokens (newer SQLite clamps silently). The FTS
+# tables use the trigram tokenizer, so one token spans about one character.
+SNIPPET_MAX_TOKENS: int = 64
 
 _KIND_MESSAGE: str = "message"
 _KIND_TOOL_CALL: str = "tool_call"
@@ -58,6 +62,11 @@ class SearchHit:
     tool_origin: str | None = None
     """For tool_call hits: the tool name. For tool_result hits: the name of
     the tool whose result this is. None for message hits."""
+
+    position: int | None = None
+    """1-indexed message number in the session, as ``convo inspect`` numbers it
+    (``--from-message/--to-message``). For tool_call hits, the message that made
+    the call. None for tool_result hits: the output is not shown by inspect."""
 
 
 def build_fts_query(raw: str) -> str:
@@ -180,7 +189,7 @@ def search(  # noqa: PLR0913
     tool: str | None = None,
     session: str | None = None,
     tool_exact: bool = False,
-    excerpt_chars: int = 600,
+    excerpt_chars: int = SNIPPET_MAX_TOKENS,
     limit: int = 10,
 ) -> Iterator[SearchHit]:
     """Search across messages / tool_calls / tool_results FTS tables.
@@ -197,7 +206,7 @@ def search(  # noqa: PLR0913
         tool=tool,
         session=session,
         tool_exact=tool_exact,
-        snippet_tokens=max(1, min(64, excerpt_chars // 6)),
+        snippet_tokens=max(1, min(SNIPPET_MAX_TOKENS, excerpt_chars)),
     )
     ro = open_ro(db.path)
     try:
@@ -227,7 +236,19 @@ def _run_search(
     params: list[object] = []
     for _, p in parts:
         params.extend(p)
-    full_sql = f"SELECT * FROM ({union_sql}) ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?"  # noqa: S608
+    # `position` is computed in the same statement, only for the sessions of
+    # the returned hits, under the ordering `convo inspect` numbers messages by.
+    full_sql = (
+        # MATERIALIZED: without it SQLite re-runs the FTS union for the IN subquery.
+        f"WITH hits AS MATERIALIZED (SELECT * FROM ({union_sql}) "  # noqa: S608
+        "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?), "
+        "ranked AS (SELECT id, session_id, ROW_NUMBER() OVER "
+        f"(PARTITION BY session_id ORDER BY {MESSAGE_ORDER_BY}) AS position "
+        "FROM messages WHERE session_id IN (SELECT session_id FROM hits)) "
+        "SELECT hits.*, ranked.position FROM hits "
+        "LEFT JOIN ranked ON ranked.id = hits.msg_id AND ranked.session_id = hits.session_id "
+        "ORDER BY (hits.timestamp IS NULL), hits.timestamp DESC"
+    )
     params.append(int(limit))
 
     return [
@@ -240,6 +261,7 @@ def _run_search(
             project=None if row["project"] is None else str(row["project"]),
             role=None if row["role"] is None else str(row["role"]),
             tool_origin=None if row["tool_origin"] is None else str(row["tool_origin"]),
+            position=None if row["position"] is None else int(row["position"]),
         )
         for row in conn.execute(full_sql, params)
     ]
@@ -268,7 +290,8 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
         f"m.timestamp AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project, m.role AS role, NULL AS tool_origin"
+        f"s.project_path AS project, m.role AS role, NULL AS tool_origin, "
+        f"m.id AS msg_id"
     )
     sql = (
         f"{select_clause} "
@@ -303,7 +326,8 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
         f"tc.started_at AS timestamp, {snip} AS excerpt, "
-        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin"
+        f"s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
+        f"tc.message_id AS msg_id"
     )
     sql = (
         f"{select_clause} "
@@ -338,7 +362,8 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
-        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin"
+        f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
+        f"NULL AS msg_id"
     )
     sql = (
         f"{select_clause} "

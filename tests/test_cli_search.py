@@ -287,6 +287,68 @@ def test_search_no_hits_prose(
     assert "0 hits" in out  # v2: prose output reworded from "(no hits)" to "0 hits."
 
 
+_NEEDLE_CONTENT = "lorem ipsum " * 300 + "zebracorn" + " dolor sit" * 300
+
+
+def _populate_long(path: Path) -> None:
+    with Database(path) as db:
+        assert db.conn is not None
+        ts_now = _ts(timedelta(seconds=0))
+        db.conn.execute(
+            "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+            "VALUES (1, '/data/long', 0, 0, ?)",
+            (ts_now,),
+        )
+        db.conn.execute("INSERT INTO sessions(id, source_file_id) VALUES ('long-1', 1)")
+        db.conn.execute(
+            "INSERT INTO messages(id, session_id, role, seq, timestamp, content, raw_json) "
+            "VALUES ('ml', 'long-1', 'user', 0, ?, ?, '{}')",
+            (ts_now, _NEEDLE_CONTENT),
+        )
+        db.conn.commit()
+
+
+def _excerpt_body(excerpt: str) -> str:
+    """Excerpt text without the `[match]` brackets and `...` ellipses."""
+    return excerpt.replace("[", "").replace("]", "").removeprefix("...").removesuffix("...")
+
+
+@pytest.mark.parametrize(
+    ("argv", "width"),
+    [
+        ([], 64),  # default: the FTS5 snippet() maximum
+        (["--excerpt-chars", "40"], 40),
+        # FTS5 caps snippet() at 64 tokens; wider requests get the cap.
+        (["--excerpt-chars", "65"], 64),
+        (["--excerpt-chars", "2000"], 64),
+    ],
+)
+def test_search_excerpt_chars_width(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    width: int,
+) -> None:
+    live = tmp_path / "convo.db"
+    monkeypatch.setenv("CONVO_DB", str(live))
+    _populate_long(live)
+    assert main(["search", "zebracorn", "--json", *argv]) == 0
+    (hit,) = json.loads(capsys.readouterr().out)["search"]["hits"]
+    body = _excerpt_body(hit["excerpt"])
+    assert "[zebracorn]" in hit["excerpt"]
+    assert body in _NEEDLE_CONTENT
+    # One trigram token spans about one character; snippet() adds up to 2.
+    assert width - 2 <= len(body) <= width + 2
+
+
+def test_search_excerpt_chars_negative_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["search", "foo", "--excerpt-chars", "-1"])
+    assert excinfo.value.code == 2
+    assert "--excerpt-chars must be 0 or a positive integer" in capsys.readouterr().err
+
+
 def test_search_limit_negative_rejected(capsys: pytest.CaptureFixture[str]) -> None:
     """`--limit -5` exits 2 with a clear argparse error.
 

@@ -83,7 +83,7 @@ def test_open_refuses_db_from_future_version(db_path: Path) -> None:
 def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
         rows = db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -95,14 +95,20 @@ def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) ->
         migrations = db.conn.execute(
             "SELECT version, filename, applied_at FROM schema_migrations ORDER BY version",
         ).fetchall()
-        assert len(migrations) == 2
+        assert len(migrations) == 4
         assert migrations[0][0] == 1
         assert migrations[0][1] == "0001_init.sql"
         assert migrations[1][0] == 2
         assert migrations[1][1] == "0002_guard_decisions.sql"
+        assert migrations[2][0] == 3
+        assert migrations[2][1] == "0003_guard_decisions_repair.sql"
+        assert migrations[3][0] == 4
+        assert migrations[3][1] == "0004_guard_decisions_lockdown.sql"
         # Parses as ISO-8601:
         datetime.fromisoformat(migrations[0][2])
         datetime.fromisoformat(migrations[1][2])
+        datetime.fromisoformat(migrations[2][2])
+        datetime.fromisoformat(migrations[3][2])
 
 
 def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
@@ -132,10 +138,10 @@ def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
     raw.commit()
     raw.close()
 
-    # Now open via Database — that triggers migrate() and applies 0002.
+    # Now open via Database — that triggers migrate() and applies 0002 through 0004.
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 4
 
         # 0002 added the guard_decisions tables.
         rows = db.conn.execute(
@@ -160,7 +166,12 @@ def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
                 "SELECT version, filename FROM schema_migrations ORDER BY version",
             )
         ]
-        assert migrations == [(1, "0001_init.sql"), (2, "0002_guard_decisions.sql")]
+        assert migrations == [
+            (1, "0001_init.sql"),
+            (2, "0002_guard_decisions.sql"),
+            (3, "0003_guard_decisions_repair.sql"),
+            (4, "0004_guard_decisions_lockdown.sql"),
+        ]
 
 
 def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
@@ -173,8 +184,106 @@ def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
         rows = db.conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
-        assert rows[0] == 2
+        assert rows[0] == 4
         second = db.conn.execute(
             "SELECT applied_at FROM schema_migrations WHERE version = 1",
         ).fetchone()[0]
         assert first == second
+
+
+def test_repair_heals_v2_db_missing_guard_decisions(db_path: Path) -> None:
+    """Repro of the production drift fixed by 0003.
+
+    A DB reached user_version=2 with 0001 + 0002 recorded as applied, but
+    guard_decisions never got created (an early widen-only 0002 was applied,
+    then the file was edited to add the table). ``migrate()`` skips
+    already-recorded versions, so the table stayed missing and
+    ``convo index-guard`` failed with "no such table: guard_decisions". The
+    0003 forward repair must create the table on next open.
+    """
+    raw = sqlite3.connect(db_path)
+    init_sql = (
+        Path(__file__).resolve().parent.parent / "src/convo/migrations/0001_init.sql"
+    ).read_text(encoding="utf-8")
+    raw.executescript("BEGIN EXCLUSIVE;\n" + init_sql)
+    now = datetime.now(tz=UTC).isoformat()
+    # Record 0001 and 0002 as applied and bump to v2, but never create the
+    # guard_decisions table -- exactly the stuck state on disk.
+    raw.execute(
+        "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
+        (1, "0001_init.sql", now),
+    )
+    raw.execute(
+        "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
+        (2, "0002_guard_decisions.sql", now),
+    )
+    raw.execute("PRAGMA user_version = 2")
+    raw.execute("COMMIT")
+    stuck_tables = {r[0] for r in raw.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "guard_decisions" not in stuck_tables  # precondition: genuinely stuck
+    raw.close()
+
+    with Database(db_path) as db:
+        assert db.conn is not None
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        names = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "guard_decisions" in names
+        assert "guard_decisions_fts" in names
+        versions = [
+            r[0] for r in db.conn.execute("SELECT version FROM schema_migrations ORDER BY version")
+        ]
+        assert versions == [1, 2, 3, 4]
+
+
+def test_upgrade_v3_to_v4_accepts_lockdown_and_keeps_rows(db_path: Path) -> None:
+    """0004 widens guard_decisions.mode for guard's lockdown mode.
+
+    Builds a v3 DB from the real 0001-0003 files with one decision row, then
+    opens it so migrate() applies 0004. The old row and its FTS entry survive,
+    and a ``mode='lockdown'`` row (rejected by the v2/v3 CHECK) now inserts.
+    """
+    migrations_dir = Path(__file__).resolve().parent.parent / "src/convo/migrations"
+    raw = sqlite3.connect(db_path)
+    now = datetime.now(tz=UTC).isoformat()
+    for version, name in enumerate(
+        ("0001_init.sql", "0002_guard_decisions.sql", "0003_guard_decisions_repair.sql"),
+        start=1,
+    ):
+        sql = (migrations_dir / name).read_text(encoding="utf-8")
+        raw.executescript("BEGIN EXCLUSIVE;\n" + sql)
+        raw.execute(
+            "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
+            (version, name, now),
+        )
+        raw.execute(f"PRAGMA user_version = {version}")
+        raw.execute("COMMIT")
+    raw.execute(
+        "INSERT INTO source_files(id, path, kind, size, mtime_ns, last_indexed_at) "
+        "VALUES (1, '/tmp/guard.jsonl', 'guard_decisions', 1, 1, ?)",
+        (now,),
+    )
+    decision = (
+        "INSERT INTO guard_decisions(source_file_id, line_no, schema_version, mode, timestamp, "
+        "hook_id, event, decision, reason, session_id, raw_json) "
+        "VALUES (1, ?, 1, ?, ?, 'guard.bash_command_validator', 'PreToolUse', 'deny', ?, "
+        "'s1', '{}')"
+    )
+    raw.execute(decision, (1, "enforce", now, "pre-upgrade decision"))
+    with pytest.raises(sqlite3.IntegrityError):
+        raw.execute(decision, (2, "lockdown", now, "rejected before 0004"))
+    raw.commit()
+    raw.close()
+
+    with Database(db_path) as db:
+        assert db.conn is not None
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        db.conn.execute(decision, (2, "lockdown", now, "lockdown decision"))
+        db.conn.commit()
+        modes = [r[0] for r in db.conn.execute("SELECT mode FROM guard_decisions ORDER BY line_no")]
+        assert modes == ["enforce", "lockdown"]
+        for term in ("upgrade", "lockdown"):
+            hits = db.conn.execute(
+                "SELECT count(*) FROM guard_decisions_fts WHERE guard_decisions_fts MATCH ?",
+                (term,),
+            ).fetchone()[0]
+            assert hits == 1, term

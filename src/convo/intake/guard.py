@@ -48,7 +48,7 @@ _REQUIRED_FIELDS = (
     "session_id",
 )
 _VALID_DECISIONS = frozenset({"allow", "deny", "ask", "defer", "pass"})
-_VALID_MODES = frozenset({"enforce", "shadow", "off"})
+_VALID_MODES = frozenset({"enforce", "shadow", "off", "lockdown"})
 
 _INSERT_SOURCE_FILE = (
     "INSERT INTO source_files(path, kind, size, mtime_ns, sha256, last_indexed_at, message_count) "

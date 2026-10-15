@@ -23,8 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   source files for one session) are now ordered by id instead of insertion
   order, so numbering is deterministic.
 
+### Changed
+
+- The plugin's SessionEnd hook also runs `convo index-guard`, and writes hook
+  errors to `~/.claude/convo-hook-errors.log` instead of discarding them.
+
 ### Fixed
 
+- `convo index-guard` indexes decisions logged under `guard mode lockdown`.
+  They were quarantined as `unknown_mode`; schema v4 adds `lockdown` to
+  `guard_decisions.mode`.
+- Databases that reached schema v2 without a `guard_decisions` table (from an
+  early form of migration 0002) are repaired on open (schema v3). Before,
+  `convo index-guard` failed with "no such table: guard_decisions".
 - `convo inspect --from-message/--to-message` now apply without `--timeline`
   and reject 0, negative, and reversed ranges, or a start past the last
   message, with an error; an end past the last message is clamped (JSON echoes

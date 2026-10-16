@@ -1,8 +1,7 @@
-"""`convo stats tools` — tool-call frequency, duration, and error-rate report."""
+"""`convo stats tools` — tool-call frequency and error-rate report."""
 
 from __future__ import annotations
 
-import statistics
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -17,8 +16,6 @@ if TYPE_CHECKING:
 
 
 _TOP_FREQ_LIMIT: int = 20
-_TOP_DURATION_LIMIT: int = 10
-_MIN_DURATION_SAMPLES: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +28,7 @@ class ToolFreq:
 
 @dataclass(frozen=True, slots=True)
 class ToolDurationStat:
-    """Median duration_ms for one tool (only tools with a recorded duration)."""
+    """Median duration_ms for one tool. Never produced: intake records no durations."""
 
     name: str
     median_ms: float
@@ -55,6 +52,9 @@ class ToolsReport:
     total: int
     top_by_frequency: tuple[ToolFreq, ...]
     top_by_median_duration: tuple[ToolDurationStat, ...]
+    """Always empty. The JSONL mapper stores no tool durations (duration_ms is
+    NULL), so there is nothing to rank. Kept so v2 JSON consumers don't break;
+    drop at the next envelope schema_version bump."""
     error_rates: tuple[ToolErrorRate, ...]
 
 
@@ -64,20 +64,19 @@ def stats_tools(
     since: timedelta | None = None,
     project: str | None = None,
 ) -> ToolsReport:
-    """Compute tool-call frequencies, median durations, and per-tool error rates."""
+    """Compute tool-call frequencies and per-tool error rates."""
     cutoff = since_iso(since)
     ro = open_ro(db.path)
     try:
         total = _total_calls(ro, cutoff=cutoff, project=project)
         top_freq = _top_by_frequency(ro, cutoff=cutoff, project=project)
-        top_dur = _top_by_median_duration(ro, cutoff=cutoff, project=project)
         errors = _error_rates(ro, cutoff=cutoff, project=project)
     finally:
         ro.close()
     return ToolsReport(
         total=total,
         top_by_frequency=top_freq,
-        top_by_median_duration=top_dur,
+        top_by_median_duration=(),
         error_rates=errors,
     )
 
@@ -129,41 +128,6 @@ def _top_by_frequency(
     params.append(_TOP_FREQ_LIMIT)
     rows = conn.execute(sql, params).fetchall()
     return tuple(ToolFreq(name=str(r["name"]), count=int(r["n"])) for r in rows)
-
-
-def _top_by_median_duration(
-    conn: sqlite3.Connection, *, cutoff: str | None, project: str | None
-) -> tuple[ToolDurationStat, ...]:
-    """Fetch durations grouped by tool name, compute median per tool in Python.
-
-    SQLite has no native median; the tool-name cardinality is small (<<100), so
-    pulling per-name durations into Python is cheap and gives an exact median.
-    """
-    base_where, params, needs_join = _where_and_params(cutoff=cutoff, project=project)
-    duration_filter = "tc.duration_ms IS NOT NULL"
-    if base_where:
-        where_sql = base_where + f" AND {duration_filter}"
-    else:
-        where_sql = f" WHERE {duration_filter}"
-    sql = (
-        f"SELECT tc.name AS name, tc.duration_ms AS d "
-        f"{_from_clause(needs_session_join=needs_join)}"
-        f"{where_sql}"
-    )
-    rows = conn.execute(sql, params).fetchall()
-    by_name: dict[str, list[int]] = {}
-    for r in rows:
-        by_name.setdefault(str(r["name"]), []).append(int(r["d"]))
-
-    stats: list[ToolDurationStat] = []
-    for name, durations in by_name.items():
-        if len(durations) < _MIN_DURATION_SAMPLES:
-            continue
-        median = float(statistics.median(durations))
-        stats.append(ToolDurationStat(name=name, median_ms=median, sample_count=len(durations)))
-    # Sort descending by median; tie-break by name for stability.
-    stats.sort(key=lambda s: (-s.median_ms, s.name))
-    return tuple(stats[:_TOP_DURATION_LIMIT])
 
 
 def _error_rates(

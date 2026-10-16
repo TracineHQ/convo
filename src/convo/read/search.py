@@ -11,9 +11,9 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from convo.db import STORED_POSITIONS_SCHEMA_VERSION
 from convo.read._db_access import open_ro
 from convo.read.filters import since_iso as _filters_since_iso
-from convo.read.inspect import MESSAGE_ORDER_BY
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -44,6 +44,31 @@ _ERR_SHORT_QUERY_TERM = (
 )
 _MIN_TERM_LEN = 3
 
+# A hit's `position` is read from message_positions, which intake fills at
+# index time (convo.intake.positions). This replaced a ROW_NUMBER() over every
+# message of each hit's session, which cost ~0.1 s per search when a hit sat in
+# a 32k-message session. A message with no stored row (written outside intake)
+# falls back to the counted position: 1 + the number of session messages that
+# sort before it under MESSAGE_ORDER_BY (seq, timestamp, id; NULL timestamps
+# first). COALESCE only evaluates the count when the stored position is NULL.
+_COUNTED_POSITION = (
+    "1"
+    " + (SELECT COUNT(*) FROM messages b"
+    " WHERE b.session_id = hm.session_id AND b.seq < hm.seq)"
+    " + (SELECT COUNT(*) FROM messages b"
+    " WHERE b.session_id = hm.session_id AND b.seq = hm.seq"
+    " AND ((b.timestamp IS NULL AND hm.timestamp IS NOT NULL)"
+    " OR b.timestamp < hm.timestamp"
+    " OR (b.timestamp IS hm.timestamp AND b.id < hm.id)))"
+)
+_POSITION_SQL = (
+    f"CASE WHEN hm.id IS NULL THEN NULL ELSE COALESCE(p.position, {_COUNTED_POSITION}) END"
+)
+_POSITIONS_JOIN = "LEFT JOIN message_positions p ON p.message_id = hm.id "
+# Reads accept schema 4 and 5 (READ_MIN_SCHEMA_VERSION), which predate
+# message_positions: there every hit takes the counted position.
+_COUNTED_POSITION_SQL = f"CASE WHEN hm.id IS NULL THEN NULL ELSE {_COUNTED_POSITION} END"
+
 
 @dataclass(frozen=True, slots=True)
 class SearchHit:
@@ -65,8 +90,13 @@ class SearchHit:
 
     position: int | None = None
     """1-indexed message number in the session, as ``convo inspect`` numbers it
-    (``--from-message/--to-message``). For tool_call hits, the message that made
-    the call. None for tool_result hits: the output is not shown by inspect."""
+    (``--from-message/--to-message``). For tool_call and tool_result hits, the
+    message that made the call (inspect lists the call there; it does not show
+    tool output). Message hits always have one. A tool_call or tool_result hit
+    gets None when the call's message is stored under another session: when
+    two transcripts share message ids (a resumed or copied session), each shared
+    message stays in the session indexed first, while a call with its own id is
+    stored under the transcript that made it."""
 
 
 def build_fts_query(raw: str) -> str:
@@ -211,7 +241,12 @@ def search(  # noqa: PLR0913
     ro = open_ro(db.path)
     try:
         try:
-            rows = _run_search(ro, filters, limit=limit)
+            rows = _run_search(
+                ro,
+                filters,
+                limit=limit,
+                stored_positions=_has_stored_positions(ro),
+            )
         except sqlite3.OperationalError as exc:
             raise ValueError(_ERR_INVALID_QUERY.format(reason=exc)) from exc
     finally:
@@ -219,34 +254,78 @@ def search(  # noqa: PLR0913
     yield from rows
 
 
+def count_matches(  # noqa: PLR0913
+    db: Database,
+    query: str,
+    *,
+    since: timedelta | None = None,
+    project: str | None = None,
+    tool: str | None = None,
+    session: str | None = None,
+    tool_exact: bool = False,
+) -> int:
+    """Count every hit ``search()`` would return with the same filters and no limit."""
+    filters = _Filters(
+        fts_match=build_fts_query(query),
+        since_iso=_filters_since_iso(since),
+        project=project,
+        tool=tool,
+        session=session,
+        tool_exact=tool_exact,
+        snippet_tokens=1,
+    )
+    parts = _branches(filters, count_only=True)
+    sql = "SELECT " + " + ".join(f"({branch})" for branch, _ in parts)
+    params = [p for _, branch_params in parts for p in branch_params]
+    ro = open_ro(db.path)
+    try:
+        try:
+            row = ro.execute(sql, params).fetchone()
+        except sqlite3.OperationalError as exc:
+            raise ValueError(_ERR_INVALID_QUERY.format(reason=exc)) from exc
+    finally:
+        ro.close()
+    return int(row[0])
+
+
+def _branches(filters: _Filters, *, count_only: bool = False) -> list[tuple[str, list[object]]]:
+    parts: list[tuple[str, list[object]]] = []
+    if filters.tool is None:
+        parts.append(_message_branch(filters, count_only=count_only))
+    parts.append(_tool_call_branch(filters, count_only=count_only))
+    parts.append(_tool_result_branch(filters, count_only=count_only))
+    return parts
+
+
+def _has_stored_positions(conn: sqlite3.Connection) -> bool:
+    """True if the DB's schema has `message_positions` (migration 0006)."""
+    version: int = conn.execute("PRAGMA user_version").fetchone()[0]
+    return version >= STORED_POSITIONS_SCHEMA_VERSION
+
+
 def _run_search(
     conn: sqlite3.Connection,
     filters: _Filters,
     *,
     limit: int,
+    stored_positions: bool = True,
 ) -> list[SearchHit]:
-    parts: list[tuple[str, list[object]]] = []
-
-    if filters.tool is None:
-        parts.append(_message_branch(filters))
-    parts.append(_tool_call_branch(filters))
-    parts.append(_tool_result_branch(filters))
+    parts = _branches(filters)
 
     union_sql = "\nUNION ALL\n".join(sql for sql, _ in parts)
     params: list[object] = []
     for _, p in parts:
         params.extend(p)
-    # `position` is computed in the same statement, only for the sessions of
-    # the returned hits, under the ordering `convo inspect` numbers messages by.
+    position_sql = _POSITION_SQL if stored_positions else _COUNTED_POSITION_SQL
+    positions_join = _POSITIONS_JOIN if stored_positions else ""
+    # MATERIALIZED: the FTS union runs once; `position` is then computed only for
+    # the returned hits (see `_POSITION_SQL`), never for whole sessions.
     full_sql = (
-        # MATERIALIZED: without it SQLite re-runs the FTS union for the IN subquery.
         f"WITH hits AS MATERIALIZED (SELECT * FROM ({union_sql}) "  # noqa: S608
-        "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?), "
-        "ranked AS (SELECT id, session_id, ROW_NUMBER() OVER "
-        f"(PARTITION BY session_id ORDER BY {MESSAGE_ORDER_BY}) AS position "
-        "FROM messages WHERE session_id IN (SELECT session_id FROM hits)) "
-        "SELECT hits.*, ranked.position FROM hits "
-        "LEFT JOIN ranked ON ranked.id = hits.msg_id AND ranked.session_id = hits.session_id "
+        "ORDER BY (timestamp IS NULL), timestamp DESC LIMIT ?) "
+        f"SELECT hits.*, {position_sql} AS position FROM hits "
+        "LEFT JOIN messages hm ON hm.id = hits.msg_id AND hm.session_id = hits.session_id "
+        f"{positions_join}"
         "ORDER BY (hits.timestamp IS NULL), hits.timestamp DESC"
     )
     params.append(int(limit))
@@ -267,6 +346,9 @@ def _run_search(
     ]
 
 
+_COUNT_SELECT = "SELECT COUNT(*)"
+
+
 def _snippet(table: str, col: int, tokens: int) -> str:
     return (
         f"snippet({table}, {col}, "
@@ -274,7 +356,7 @@ def _snippet(table: str, col: int, tokens: int) -> str:
     )
 
 
-def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
+def _message_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str, list[object]]:
     where: list[str] = ["messages_fts MATCH ?"]
     params: list[object] = [filters.fts_match]
     if filters.since_iso is not None:
@@ -293,6 +375,8 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"s.project_path AS project, m.role AS role, NULL AS tool_origin, "
         f"m.id AS msg_id"
     )
+    if count_only:
+        select_clause = _COUNT_SELECT
     sql = (
         f"{select_clause} "
         f"FROM messages_fts "
@@ -303,7 +387,7 @@ def _message_branch(filters: _Filters) -> tuple[str, list[object]]:
     return sql, params
 
 
-def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
+def _tool_call_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str, list[object]]:
     where: list[str] = ["tool_calls_fts MATCH ?"]
     params: list[object] = [filters.fts_match]
     if filters.since_iso is not None:
@@ -329,6 +413,8 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
         f"tc.message_id AS msg_id"
     )
+    if count_only:
+        select_clause = _COUNT_SELECT
     sql = (
         f"{select_clause} "
         f"FROM tool_calls_fts "
@@ -339,7 +425,7 @@ def _tool_call_branch(filters: _Filters) -> tuple[str, list[object]]:
     return sql, params
 
 
-def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
+def _tool_result_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str, list[object]]:
     where: list[str] = ["tool_results_fts MATCH ?"]
     params: list[object] = [filters.fts_match]
     if filters.since_iso is not None:
@@ -363,8 +449,10 @@ def _tool_result_branch(filters: _Filters) -> tuple[str, list[object]]:
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "
         f"tc.session_id AS session_id, m.timestamp AS timestamp, "
         f"{snip} AS excerpt, s.project_path AS project, NULL AS role, tc.name AS tool_origin, "
-        f"NULL AS msg_id"
+        f"tc.message_id AS msg_id"
     )
+    if count_only:
+        select_clause = _COUNT_SELECT
     sql = (
         f"{select_clause} "
         f"FROM tool_results_fts "

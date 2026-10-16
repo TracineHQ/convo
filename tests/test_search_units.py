@@ -206,6 +206,15 @@ class TestRunSearchComposition:
         assert params == ['"foo"', '"foo"', '"foo"', 50]
         # The hit LIMIT binds last; `position` is joined on after it.
         assert "timestamp DESC LIMIT ?)" in sql
+        assert "LEFT JOIN message_positions p" in sql
+
+    def test_schema_without_stored_positions_counts_them(self, mocker: MockerFixture) -> None:
+        conn, mock = _stub_conn(mocker)
+        _run_search(conn, _make_filters(), limit=50, stored_positions=False)
+        sql, _ = mock.execute.call_args.args
+        assert "message_positions" not in sql
+        assert "p.position" not in sql
+        assert "AS position FROM hits" in sql
 
     def test_with_tool_filter_two_branches(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)

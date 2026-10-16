@@ -85,15 +85,16 @@ def test_stats_tools_error_rate(db: Database) -> None:
     assert rates["Edit"].errors == 0
 
 
-def test_stats_tools_median_duration(db: Database) -> None:
+def test_stats_tools_reports_no_median_durations(db: Database) -> None:
+    """Intake never writes duration_ms, so the duration ranking is always empty.
+
+    The seed sets duration_ms by hand; even then nothing is ranked, because the
+    section was dropped rather than reporting numbers real data never has.
+    """
     _seed_calls(db)
     report = stats_tools(db)
-    medians = {s.name: s for s in report.top_by_median_duration}
-    # Edit has no duration data → not present
-    assert "Edit" not in medians
-    assert medians["Bash"].median_ms == 100.0
-    assert medians["Bash"].sample_count == 6
-    assert medians["Read"].median_ms == 50.0
+    assert report.total > 0
+    assert report.top_by_median_duration == ()
 
 
 def test_stats_tools_since_filter(db: Database) -> None:

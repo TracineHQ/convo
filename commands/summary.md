@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # /convo:summary
 
-Wraps `convo summary`, which emits a v2 envelope when `--format=json` is
+Wraps `convo summary`, which emits a v2 envelope when `--json` is
 passed. Parses at `summary.*`. See `JSON-ENVELOPE.md` at the repo root
 for the contract.
 

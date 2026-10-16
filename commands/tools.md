@@ -1,6 +1,5 @@
 ---
 description: List all tool names seen in indexed sessions, sorted by call frequency.
-argument-hint: "[--limit N]"
 allowed-tools: "Bash(convo tools *)"
 disable-model-invocation: true
 ---

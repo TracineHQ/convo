@@ -84,6 +84,12 @@ CREATE VIRTUAL TABLE guard_decisions_fts USING fts5(
     tokenize='trigram'
 );
 
+-- table message_positions
+CREATE TABLE message_positions (
+    message_id  TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL
+) STRICT, WITHOUT ROWID;
+
 -- table messages
 CREATE TABLE messages (
     id              TEXT PRIMARY KEY,

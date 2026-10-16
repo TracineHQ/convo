@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 rem convo plugin wrapper for native Windows (PowerShell / cmd.exe).
 rem Requires the `convo` CLI installed via:
-rem   uv tool install git+https://github.com/TracineHQ/convo
+rem   pipx install tracine-convo   (or: uv tool install tracine-convo)
 rem
 rem Prefer a globally-installed `convo` binary on PATH (excluding self);
 rem fall back to `python -m convo` if the package is importable.
@@ -22,5 +22,5 @@ if %errorlevel% equ 0 (
     exit /b %errorlevel%
 )
 
-echo convo: not installed. Run: uv tool install git+https://github.com/TracineHQ/convo 1>&2
+echo convo: not installed. Run: pipx install tracine-convo (or: uv tool install tracine-convo) 1>&2
 exit /b 1

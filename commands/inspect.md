@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # /convo:inspect
 
-Wraps `convo inspect`, which emits a v2 envelope when `--format=json` is
+Wraps `convo inspect`, which emits a v2 envelope when `--json` is
 passed. Parses at `inspect.messages[*]`. See `JSON-ENVELOPE.md` at the
 repo root for the contract.
 

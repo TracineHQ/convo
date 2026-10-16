@@ -18,12 +18,15 @@ from convo import cli, hook, hook_worker
 from convo.cli import main
 from convo.db import SCHEMA_VERSION, Database
 from convo.hook import child_argv, run_session_end, session_id_from_payload, spawn_detached
+from convo.intake import orchestrator
+from convo.intake.positions import assign_positions
 from convo.lock import WaiterLock, WriterLock
+from convo.read.inspect import MESSAGE_ORDER_BY
 from tests._seed import build_db_at_version
 from tests.perf._synth import write_transcript
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
 _SID = "5e551011-0000-4000-8000-0000000000aa"
 _HOOKS_JSON = Path(__file__).resolve().parent.parent / "hooks" / "hooks.json"
@@ -652,6 +655,69 @@ def test_hook_run_gives_up_waiting_after_the_cap(
     assert _indexed_sessions(held_lock) == set()
     # The slot is free for the next run.
     _assert_waiter_slot_free(held_lock)
+
+
+def _positions(db_path: Path) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    """Return (stored, expected) positions: message_positions vs inspect's numbering."""
+    expected_sql = (
+        "SELECT id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY "  # noqa: S608
+        + MESSAGE_ORDER_BY
+        + ") FROM messages ORDER BY id"
+    )
+    with Database(db_path, migrate=False) as db:
+        assert db.conn is not None
+        stored = db.conn.execute(
+            "SELECT message_id, position FROM message_positions ORDER BY message_id",
+        ).fetchall()
+        expected = db.conn.execute(expected_sql).fetchall()
+    return [(r[0], r[1]) for r in stored], [(r[0], r[1]) for r in expected]
+
+
+def test_every_index_path_stores_positions_under_the_writer_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A plain index, a hook run granted the lock at once and one that waited.
+
+    Each numbers the sessions it writes exactly once, while it holds the
+    writer lock. The waiter indexes every transcript, so it must not renumber
+    a session whose file it finds unchanged.
+    """
+    db_path = tmp_path / "convo.db"
+    root = _projects(tmp_path)
+    transcript = root / "slug" / f"{_SID}.jsonl"
+    calls: list[tuple[set[str], bool]] = []
+
+    def watching(conn: Any, batch: Mapping[str, tuple[int, int]]) -> None:
+        probe = WriterLock(db_path)
+        held = not probe.acquire(blocking=False)
+        probe.release()
+        calls.append((set(batch), held))
+        assign_positions(conn, batch)
+
+    monkeypatch.setattr(orchestrator, "assign_positions", watching)
+
+    argv = ["--db", str(db_path), "index", "--projects-dir", str(root), "--session", _SID]
+    assert main(argv) == 0
+    # Lock free: the hook run takes it at once and re-indexes the grown transcript.
+    write_transcript(transcript, _SID, start=8, count=4)
+    assert _hook_run(db_path, root) == 0
+    # Lock held: the hook run waits, then indexes every transcript.
+    write_transcript(root / "slug" / f"{_OTHER_SID}.jsonl", _OTHER_SID, start=0, count=4)
+    holder = WriterLock(db_path)
+    assert holder.acquire(blocking=False)
+    threading.Timer(0.5, holder.release).start()
+    assert _hook_run(db_path, root) == 0
+    assert "every transcript" in capsys.readouterr().out
+
+    assert calls == [({_SID}, True), ({_SID}, True), ({_OTHER_SID}, True)]
+    stored, expected = _positions(db_path)
+    assert len(stored) == 12 + 4
+    assert stored == expected
+    # Every run let go of the lock.
+    assert holder.acquire(blocking=False)
+    holder.release()
 
 
 def test_index_dry_run_neither_waits_for_the_lock_nor_migrates(

@@ -170,6 +170,68 @@ def test_resolve_basename(tmp_path) -> None:
     assert resolve_project_path(conn, "site-deploy") == "/Users/dev/develop/site-deploy"
 
 
+def test_resolve_basename_beats_nested_subfolder(tmp_path) -> None:
+    """`eval-kit` names /x/eval-kit even when /x/eval-kit/python also exists."""
+    conn = _make_projects_db(tmp_path)
+    conn.executemany(
+        "INSERT INTO sessions VALUES (?, ?)",
+        [
+            ("s5", "/Users/dev/develop/eval-kit"),
+            ("s6", "/Users/dev/develop/eval-kit/python"),
+            ("s7", "/Users/dev/develop/emulator"),
+            ("s8", "/Users/dev/develop/emulator/android"),
+            ("s9", "/Users/dev/develop/emulator/ios"),
+        ],
+    )
+    assert resolve_project_path(conn, "eval-kit") == "/Users/dev/develop/eval-kit"
+    assert resolve_project_path(conn, "python") == "/Users/dev/develop/eval-kit/python"
+    assert resolve_project_path(conn, "emulator") == "/Users/dev/develop/emulator"
+    # Substring-only values stay ambiguous.
+    with pytest.raises(ProjectResolveError, match="ambiguous"):
+        resolve_project_path(conn, "eval-")
+
+
+def test_resolve_ignores_trailing_separators(tmp_path) -> None:
+    """Tab completion's trailing slash names the folder, not its only subfolder match."""
+    conn = _make_projects_db(tmp_path)
+    conn.executemany(
+        "INSERT INTO sessions VALUES (?, ?)",
+        [
+            ("s5", "/Users/dev/develop/eval-kit"),
+            ("s6", "/Users/dev/develop/eval-kit/python"),
+            ("w1", "C:\\work\\emulator"),
+            ("w2", "C:\\work\\emulator\\android"),
+        ],
+    )
+    for value in (
+        "/Users/dev/develop/eval-kit/",
+        "/Users/dev/develop/eval-kit//",
+        "eval-kit/",
+        "eval-kit\\",
+    ):
+        assert resolve_project_path(conn, value) == "/Users/dev/develop/eval-kit", value
+    assert resolve_project_path(conn, "C:\\work\\emulator\\") == "C:\\work\\emulator"
+
+
+def test_resolve_bare_root_is_not_stripped(tmp_path) -> None:
+    """A root path ("/", "C:\\") still matches as typed rather than collapsing to ""."""
+    conn = _make_projects_db(tmp_path)
+    with pytest.raises(ProjectResolveError, match="--project '/' is ambiguous"):
+        resolve_project_path(conn, "/")
+    conn.executemany("INSERT INTO sessions VALUES (?, ?)", [("r1", "/"), ("r2", "C:\\")])
+    assert resolve_project_path(conn, "/") == "/"
+    assert resolve_project_path(conn, "C:\\") == "C:\\"
+
+
+def test_resolve_basename_shared_by_two_paths_is_ambiguous(tmp_path) -> None:
+    conn = _make_projects_db(tmp_path)
+    conn.execute("INSERT INTO sessions VALUES ('s5', '/Users/dev/work/convo')")
+    with pytest.raises(ProjectResolveError, match="ambiguous") as exc_info:
+        resolve_project_path(conn, "convo")
+    assert "/Users/dev/develop/convo" in str(exc_info.value)
+    assert "/Users/dev/work/convo" in str(exc_info.value)
+
+
 def test_resolve_substring_unambiguous(tmp_path) -> None:
     conn = _make_projects_db(tmp_path)
     assert resolve_project_path(conn, "api-client") == "/Users/dev/develop/api-client"

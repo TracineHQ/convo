@@ -19,11 +19,14 @@ if TYPE_CHECKING:
 
 DEFAULT_DB_PATH: Path = Path.home() / ".claude" / "convo.db"
 SNAPSHOT_DIR_NAME: str = "convo-backups"
-SCHEMA_VERSION: int = 5
-# Oldest schema the read commands can query. Migrations past it (0005 only
-# adds indexes and narrows triggers) are left to writers and `convo migrate`,
-# so a read never sits through an index build.
+SCHEMA_VERSION: int = 6
+# Oldest schema the read commands can query. Migrations past it are left to
+# writers and `convo migrate`, so a read never sits through an index build or
+# backfill: 0005 only adds indexes and narrows triggers, and 0006 stores
+# message positions, which search counts at query time on an older DB.
 READ_MIN_SCHEMA_VERSION: int = 4
+# First schema with the `message_positions` table (migration 0006).
+STORED_POSITIONS_SCHEMA_VERSION: int = 6
 _MIN_SQLITE: tuple[int, int, int] = (3, 37, 0)
 _MIGRATION_RE = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 
@@ -89,12 +92,16 @@ def resolve_snapshot_dir(explicit: Path | str | None, db_path: Path) -> Path:
 
 
 def resolve_db_path(explicit: Path | str | None = None) -> Path:
-    """Resolve DB path with precedence: explicit arg > $CONVO_DB > DEFAULT_DB_PATH."""
+    """Resolve DB path with precedence: explicit arg > $CONVO_DB > DEFAULT_DB_PATH.
+
+    Relative paths are made absolute against the current directory: read
+    commands open the DB through a `file:` URI, which needs an absolute path.
+    """
     if explicit is not None:
-        return Path(explicit).expanduser()
+        return Path(explicit).expanduser().absolute()
     env = os.environ.get("CONVO_DB")
     if env:
-        return Path(env).expanduser()
+        return Path(env).expanduser().absolute()
     return DEFAULT_DB_PATH
 
 

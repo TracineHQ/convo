@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Schema v6 (migration `0006_message_positions.sql`) stores each message's
+  `position` in a new `message_positions` table. `convo index` fills it as it
+  writes messages. Existing messages are numbered when the DB migrates
+  (`convo migrate`, `convo index` or the hook's background run), without
+  rewriting `messages` or its FTS index: about 3 s for 665k messages on a
+  3.7 GB test DB with a warm page cache, up to about 15 s cold. Until then,
+  `convo search` on a schema 4 or 5 DB counts each hit's position at query
+  time, as before.
+
+  **Upgrading from 2.1.1:** take a snapshot first (`convo backup --auto`).
+  The first `convo index` or session end after the upgrade migrates the DB
+  from schema 5 to 6, and 2.1.1 refuses a v6 DB (its `restore` included). To
+  go back, make sure no convo process is running (including a hook's
+  background run), downgrade, then copy the snapshot over `<CONVO_DB>` by
+  hand and delete the `-wal` and `-shm` files beside it.
+
+### Fixed
+
+- `convo search` reads each hit's `position` from `message_positions` instead
+  of numbering every message in each hit's session on every query. A search
+  with hits in a 32k-message session drops from about 120 ms to 7 to 10 ms
+  (`--limit` 10 to 500). `tool_result` hits now carry the position of the
+  message that made the call instead of `null`.
+- A relative `--db` or `CONVO_DB` path is resolved against the current
+  directory. Before, every read command failed with "relative path can't be
+  expressed as a file URI".
+- `--project <name>` picks the project whose last path component is `<name>`
+  even when a nested folder also contains it (`eval-kit` vs
+  `eval-kit/python`). The basename match never fired, so these fell through to
+  the substring match and errored as ambiguous.
+- `--project` ignores a trailing `/` or `\`, which tab completion adds. Before,
+  `--project /work/eval-kit/` skipped `/work/eval-kit` and picked
+  `/work/eval-kit/python`, the only path containing the slash.
+- `convo search` JSON `total` is the number of matches before `--limit`, not
+  the size of the returned page. Prose output reports both
+  (`-- 120 hits, showing 10`) and numbers hits `hit N of <total>`.
+- Search prose says "1 hit", "1 session" and "1 project" instead of "1 hits",
+  "1 sessions" and "1 projects".
+- `convo search --fields` rejects unknown field names (exit 2) and lists the
+  valid ones in the error and in `--help`. Before, an unknown name printed an
+  empty column.
+- `convo index --dry-run` ends with "Would index N files ... Dry run: nothing
+  was written." instead of "Indexed N files" and an all-zero "Inserted" line.
+- The README, plugin descriptions and the plugin shim's "not installed" hint
+  say the plugin needs the CLI and give `pipx install tracine-convo` (the shim
+  pointed at a git URL). The README lists all nine slash commands, documents
+  `index-guard`, `--db`, `--session`, `--tool-exact` and `--fields`, and shows
+  `--format json` instead of the deprecated `search --json`.
+- Slash-command docs for `diff`, `info`, `inspect`, `stats` and `summary` said
+  `--format=json`, which those commands reject; they take `--json`.
+  `/convo:projects` and `/convo:tools` no longer hint a `--limit` they don't
+  accept.
+- `convo search --help` says `--since` also takes an ISO date, and its
+  example uses `--format json`.
+- `LICENSE` is the official Apache 2.0 text again. Sections 6 and 9 had been
+  reworded.
+
+### Removed
+
+- The "top by median duration" section of `convo stats tools` and its help
+  text. Intake never records tool-call durations, so it always printed
+  "(none)". The JSON key `top_by_median_duration` stays, always `[]`, until the
+  next envelope `schema_version` bump.
+
 ## [2.1.1] - 2026-10-16
 
 ### Added

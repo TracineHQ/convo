@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from convo.db import Database, _discover_migrations
+from convo.intake.positions import assign_positions
+from convo.read.inspect import _MSG_SELECT
 
 _BASE_TABLES = {
     "messages",
@@ -83,7 +85,7 @@ def test_open_refuses_db_from_future_version(db_path: Path) -> None:
 def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
         rows = db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -95,7 +97,7 @@ def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) ->
         migrations = db.conn.execute(
             "SELECT version, filename, applied_at FROM schema_migrations ORDER BY version",
         ).fetchall()
-        assert len(migrations) == 5
+        assert len(migrations) == 6
         assert migrations[0][0] == 1
         assert migrations[0][1] == "0001_init.sql"
         assert migrations[1][0] == 2
@@ -106,12 +108,11 @@ def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) ->
         assert migrations[3][1] == "0004_guard_decisions_lockdown.sql"
         assert migrations[4][0] == 5
         assert migrations[4][1] == "0005_fk_child_indexes.sql"
+        assert migrations[5][0] == 6
+        assert migrations[5][1] == "0006_message_positions.sql"
         # Parses as ISO-8601:
-        datetime.fromisoformat(migrations[0][2])
-        datetime.fromisoformat(migrations[1][2])
-        datetime.fromisoformat(migrations[2][2])
-        datetime.fromisoformat(migrations[3][2])
-        datetime.fromisoformat(migrations[4][2])
+        for migration in migrations:
+            datetime.fromisoformat(migration[2])
 
 
 def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
@@ -141,10 +142,10 @@ def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
     raw.commit()
     raw.close()
 
-    # Now open via Database — that triggers migrate() and applies 0002 through 0004.
+    # Now open via Database — that triggers migrate() and applies 0002 through 0006.
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
 
         # 0002 added the guard_decisions tables.
         rows = db.conn.execute(
@@ -175,6 +176,7 @@ def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
             (3, "0003_guard_decisions_repair.sql"),
             (4, "0004_guard_decisions_lockdown.sql"),
             (5, "0005_fk_child_indexes.sql"),
+            (6, "0006_message_positions.sql"),
         ]
 
 
@@ -188,7 +190,7 @@ def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
         rows = db.conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
-        assert rows[0] == 5
+        assert rows[0] == 6
         second = db.conn.execute(
             "SELECT applied_at FROM schema_migrations WHERE version = 1",
         ).fetchone()[0]
@@ -229,14 +231,14 @@ def test_repair_heals_v2_db_missing_guard_decisions(db_path: Path) -> None:
 
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
         names = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "guard_decisions" in names
         assert "guard_decisions_fts" in names
         versions = [
             r[0] for r in db.conn.execute("SELECT version FROM schema_migrations ORDER BY version")
         ]
-        assert versions == [1, 2, 3, 4, 5]
+        assert versions == [1, 2, 3, 4, 5, 6]
 
 
 def test_upgrade_v3_to_v4_accepts_lockdown_and_keeps_rows(db_path: Path) -> None:
@@ -280,7 +282,7 @@ def test_upgrade_v3_to_v4_accepts_lockdown_and_keeps_rows(db_path: Path) -> None
 
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
         db.conn.execute(decision, (2, "lockdown", now, "lockdown decision"))
         db.conn.commit()
         modes = [r[0] for r in db.conn.execute("SELECT mode FROM guard_decisions ORDER BY line_no")]
@@ -291,3 +293,82 @@ def test_upgrade_v3_to_v4_accepts_lockdown_and_keeps_rows(db_path: Path) -> None
                 (term,),
             ).fetchone()[0]
             assert hits == 1, term
+
+
+def test_upgrade_v5_to_v6_backfills_positions_without_touching_messages(db_path: Path) -> None:
+    """0006 numbers every existing message per session without writing `messages`.
+
+    Builds a v5 DB from the real 0001-0005 files. A column backfill would
+    UPDATE (rewrite) every message row; a logging trigger proves no message
+    row is updated, and the FTS index still answers.
+    """
+    migrations_dir = Path(__file__).resolve().parent.parent / "src/convo/migrations"
+    raw = sqlite3.connect(db_path)
+    now = datetime.now(tz=UTC).isoformat()
+    names = (
+        "0001_init.sql",
+        "0002_guard_decisions.sql",
+        "0003_guard_decisions_repair.sql",
+        "0004_guard_decisions_lockdown.sql",
+        "0005_fk_child_indexes.sql",
+    )
+    for version, name in enumerate(names, start=1):
+        raw.executescript("BEGIN EXCLUSIVE;\n" + (migrations_dir / name).read_text("utf-8"))
+        raw.execute(
+            "INSERT INTO schema_migrations(version, filename, applied_at) VALUES (?, ?, ?)",
+            (version, name, now),
+        )
+        raw.execute(f"PRAGMA user_version = {version}")
+        raw.execute("COMMIT")
+    raw.execute(
+        "INSERT INTO source_files(id, path, size, mtime_ns, last_indexed_at) "
+        "VALUES (1, '/tmp/s.jsonl', 1, 1, ?)",
+        (now,),
+    )
+    rows = [
+        # (id, session, seq, timestamp): s1 has a NULL timestamp, a seq tie,
+        # and a seq tie between a NULL and a non-NULL timestamp. The NULL one
+        # (a9) sorts first, so NULLS LAST or an id-only order would misnumber it.
+        ("a2", "s1", 0, "2026-10-01T10:00:00Z"),
+        ("a1", "s1", 1, None),
+        ("a4", "s1", 2, "2026-10-01T10:00:02Z"),
+        ("a3", "s1", 2, "2026-10-01T10:00:02Z"),
+        ("a5", "s1", 3, "2026-10-01T10:00:03Z"),
+        ("a9", "s1", 3, None),
+        ("b1", "s2", 5, "2026-10-01T11:00:00Z"),
+        ("b2", "s2", 7, "2026-10-01T11:00:01Z"),
+    ]
+    for sid in ("s1", "s2"):
+        raw.execute("INSERT INTO sessions(id, source_file_id) VALUES (?, 1)", (sid,))
+    raw.executemany(
+        "INSERT INTO messages(id, session_id, role, seq, timestamp, content, raw_json) "
+        "VALUES (?, ?, 'user', ?, ?, 'wombat ' || ?, '{}')",
+        [(*r, r[0]) for r in rows],
+    )
+    raw.execute("CREATE TABLE touched(id TEXT)")
+    raw.execute(
+        "CREATE TRIGGER log_update AFTER UPDATE ON messages "
+        "BEGIN INSERT INTO touched VALUES (new.id); END"
+    )
+    raw.commit()
+    raw.close()
+
+    with Database(db_path) as db:
+        assert db.conn is not None
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        positions = "SELECT message_id, position FROM message_positions"
+        stored = dict(db.conn.execute(positions))
+        assert stored == {"a2": 1, "a1": 2, "a3": 3, "a4": 4, "a9": 5, "a5": 6, "b1": 1, "b2": 2}
+        # The backfill numbers each session in the order inspect lists it...
+        for sid in ("s1", "s2"):
+            listed = [r[0] for r in db.conn.execute(_MSG_SELECT, (sid,))]
+            assert [stored[mid] for mid in listed] == list(range(1, len(listed) + 1)), sid
+        # ...and exactly as intake numbers the same rows.
+        db.conn.execute("DELETE FROM message_positions")
+        assign_positions(db.conn, {"s1": (0, 2), "s2": (5, 2)})
+        assert dict(db.conn.execute(positions)) == stored
+        assert db.conn.execute("SELECT count(*) FROM touched").fetchone()[0] == 0
+        fts = "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'wombat'"
+        assert db.conn.execute(fts).fetchone()[0] == len(rows)
+        db.conn.execute("DELETE FROM sessions WHERE id = 's2'")
+        assert db.conn.execute("SELECT count(*) FROM message_positions").fetchone()[0] == 6

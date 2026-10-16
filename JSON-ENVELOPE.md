@@ -48,7 +48,7 @@ shape.
 {
   "schema_version": 2,
   "info": {
-    "db_schema_version": 5,
+    "db_schema_version": 6,
     "pending_migrations": 0,
     "row_counts": {
       "source_files": 12,
@@ -113,12 +113,15 @@ applied; read commands never apply them (`convo migrate` does).
         "indices": [[8, 11]],
         "project": "/workspace/myapp",
         "tool_origin": "Bash",
-        "position": null
+        "position": 13
       }
     ]
   }
 }
 ```
+
+`total` is the number of matches for the query and filters before `--limit`;
+`hits` holds at most `filters.limit` of them, newest first.
 
 `hits[].kind` is one of `"message"`, `"tool_call"`, or `"tool_result"`.
 
@@ -135,9 +138,18 @@ present for `kind="tool_result"`.
 the same number `inspect` reports as `messages[].position` and accepts in
 `--from-message/--to-message`. So
 `convo inspect <session_id> --from-message P --to-message P --max-chars 0`
-returns the hit's full message. For `kind="tool_call"` it is the message that
-made the call; for `kind="tool_result"` it is `null` (inspect does not show
-tool output).
+returns the hit's full message. For `kind="tool_call"` and `kind="tool_result"`
+it is the message that made the call: inspect lists the call's input there but
+not its output.
+
+`hits[].position` is always set for `kind="message"`. For `kind="tool_call"`
+and `kind="tool_result"` it is `null` when the call's message is stored under
+a different session than the hit. That happens when two transcripts share
+message ids (a resumed or copied session): `convo index` keeps each shared
+message in the session it indexed first, while a call with its own id is
+stored under the transcript that made it. `convo inspect` on the hit's
+`session_id` does not list such a call; inspecting the session that kept the
+message lists it under that message.
 
 When `total=0` a `"suggestions"` key may appear:
 
@@ -336,11 +348,15 @@ Example (`tools`):
     "family": "tools",
     "total": 840,
     "top_by_frequency": [{"name": "Bash", "count": 420}],
-    "top_by_median_duration": [{"name": "Bash", "median_ms": 312.5, "sample_count": 420}],
+    "top_by_median_duration": [],
     "error_rates": [{"name": "Bash", "total": 420, "errors": 12, "error_rate": 0.0286}]
   }
 }
 ```
+
+`top_by_median_duration` is always `[]`: intake does not record tool-call
+durations. The key stays so v2 consumers don't break and goes away at the next
+`schema_version` bump.
 
 `hour_of_day` (sessions family) is always a 24-element array; index `h` is
 the count of sessions that started at hour `h` UTC. `null_count` (model family)
@@ -521,9 +537,10 @@ Guard-log variant (`convo index-guard --json`):
   "migrate": {
     "status": "migrated",
     "from_version": 4,
-    "to_version": 5,
+    "to_version": 6,
     "applied": [
-      {"version": 5, "filename": "0005_fk_child_indexes.sql", "duration_ms": 412}
+      {"version": 5, "filename": "0005_fk_child_indexes.sql", "duration_ms": 412},
+      {"version": 6, "filename": "0006_message_positions.sql", "duration_ms": 2950}
     ],
     "backup_path": "/home/user/.claude/convo-backups/convo-20261015-120000-000000.db",
     "backup_status": "written"

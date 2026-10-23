@@ -259,23 +259,23 @@ own:
   The meta file is kept whole in that message's `raw_json`. A subagent with no
   usable meta file just has no such message.
 - Its messages and tool calls are searched like any other, and what it did is
-  in the work totals: `stats tools`, `stats files`, `convo tools` and the
-  tool-call and file lines of `summary` and `diff` include subagent work,
-  because that is why they are indexed. convo keeps no token counts, so there
-  is nothing to leave out there.
-- Counts of sessions leave subagents out, so a session that spawned forty
-  helpers is still one session. That covers `convo sessions`, `convo projects`,
-  `convo info`'s top projects, `convo inspect --latest`, and the session-based
-  parts of `stats` (`sessions`, `commands`, `model`), `summary` and `diff`
-  (session counts and durations, first messages, models). Pass
+  in the tool-call totals: `stats tools`, `convo tools` and the tool-call lines
+  of `summary` and `diff` include subagent work, because that is why they are
+  indexed. convo keeps no token counts, so there is nothing to leave out there.
+- Counts of sessions and transcript files leave subagents out, so a session
+  that spawned forty helpers is still one session and one file. That covers
+  `convo sessions`, `convo projects`, `convo info`'s top projects,
+  `convo inspect --latest`, and the session- and file-based parts of `stats`
+  (`sessions`, `commands`, `model`, `files`), `summary` and `diff` (session
+  counts and durations, first messages, models, files). Pass
   `--include-subagents` to `sessions`, `projects`, `stats`, `summary` or `diff`
   to count them too. A subagent id is the one containing a dot.
 - `--project` resolves among top-level sessions, since a subagent can run in a
   worktree of its own and its path would make a substring like `repo`
   ambiguous. `--include-subagents` widens that too, so a worktree path that only
   subagents used can be named.
-- `convo info`'s `row_counts.sessions` is the table's row count, so it includes
-  subagent sessions.
+- `convo info`'s `row_counts` are table row counts, so they include subagent
+  sessions and transcript files.
 
 The JSON envelope shape for every command is documented in
 [JSON-ENVELOPE.md](JSON-ENVELOPE.md).

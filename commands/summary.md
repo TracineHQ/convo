@@ -12,12 +12,12 @@ passed. Parses at `summary.*`. See `JSON-ENVELOPE.md` at the repo root
 for the contract.
 
 Print convo's activity rollup. Defaults to the last 7 days; pass
-`--since 30d` (or any `<N><unit>` span) to widen the window. Session counts
-leave subagent sessions out unless you pass `--include-subagents`; tool-call
-and file totals always include subagent work.
+`--since 30d` (or any `<N><unit>` span) to widen the window. Session and file
+counts leave subagents out unless you pass `--include-subagents`; tool-call
+totals always include subagent work.
 
 ```!
-convo summary ${ARGUMENTS:---since 7d}
+convo summary --since 7d ${ARGUMENTS}
 ```
 
 Display the output above to the user verbatim.

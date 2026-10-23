@@ -18,7 +18,7 @@ to limit the time window. Subagent sessions are left out unless you pass
 `/convo:inspect` to drill into a specific session.
 
 ```!
-convo sessions ${ARGUMENTS:---since 7d --limit 20}
+convo sessions --since 7d --limit 20 ${ARGUMENTS}
 ```
 
 Display the output above to the user verbatim.

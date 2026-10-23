@@ -16,8 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<agent-id>.<parent-session-id>`, so no schema change or migration is
   needed. The agent type and description from the `agent-<id>.meta.json`
   beside it become a leading `system` message, so `convo search` finds a
-  subagent by what it was asked to do. The next `convo index` picks up every
-  existing subagent transcript.
+  subagent by what it was asked to do. The first `convo index` after upgrading
+  indexes every existing subagent transcript. On a history with many subagents
+  that takes minutes and grows the database a lot (it nearly doubled on one
+  large history), so run it when you can wait for it. Later runs skip
+  unchanged files as before.
 - `convo hook pre-compact` and a `PreCompact` entry in the plugin's hooks. A
   session that runs for days never reaches `SessionEnd`, so its transcript
   went stale. Now the session is indexed in the background just before Claude
@@ -45,22 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand and delete the `-wal` and `-shm` files beside it.
 - `convo index --session ID` also indexes `ID`'s subagent transcripts, and so
   do the `SessionEnd` and `PreCompact` hooks.
-- Subagent sessions are left out of session counts by default, so a session
-  that spawned forty helpers is still one session. `convo inspect --latest`
-  skips them (the latest session is the one you started), as do `convo
-  sessions`, `convo projects`, the top projects in `convo info`, and the
-  session-based parts of `stats` (`sessions`, `commands`, `model`), `summary`
-  and `diff` (session counts and durations, first messages, models). A
-  subagent session id is the one containing a dot. `--project` resolves among
-  top-level sessions, since a subagent in its own worktree would make a
-  substring like `repo` ambiguous.
+- Subagent sessions and their transcript files are left out of counts by
+  default, so a session that spawned forty helpers is still one session and one
+  file. `convo inspect --latest` skips them (the latest session is the one you
+  started), as do `convo sessions`, `convo projects`, the top projects in
+  `convo info`, and the session- and file-based parts of `stats` (`sessions`,
+  `commands`, `model`, `files`), `summary` and `diff` (session counts and
+  durations, first messages, models, files). A subagent session id is the one
+  containing a dot. `--project` resolves among top-level sessions, since a
+  subagent in its own worktree would make a substring like `repo` ambiguous.
 - `--include-subagents` on `sessions`, `projects`, `stats`, `summary` and
-  `diff` counts subagent sessions too (and lets `--project` name a worktree
-  only subagents used). Work totals ignore it and always include subagent
-  work: tool calls and files (`stats tools`, `stats files`, `convo tools`, and
-  those lines of `summary` and `diff`). `stats hooks` reads the guard log, not
-  sessions, so the flag does nothing there. `convo info` `row_counts.sessions`
-  stays the raw table count.
+  `diff` counts them too (and lets `--project` name a worktree only subagents
+  used). Tool-call totals ignore it and always include subagent work
+  (`stats tools`, `convo tools`, and those lines of `summary` and `diff`).
+  `stats hooks` reads the guard log, not sessions, so the flag does nothing
+  there. `convo info` `row_counts` stay the raw table counts.
 
 ### Fixed
 

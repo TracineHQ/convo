@@ -9,6 +9,16 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v convo >/dev/null 2>&1 && convo hook pre-compact >/dev/null 2>>\"$HOME/.claude/convo-hook-errors.log\"; true"
+          }
+        ]
+      }
     ]
   }
 }

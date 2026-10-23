@@ -50,7 +50,7 @@ from convo.db import (
     resolve_db_path,
     resolve_snapshot_dir,
 )
-from convo.hook import HookOutcome, run_session_end
+from convo.hook import HookOutcome, run_pre_compact, run_session_end
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import (
     IndexReport,
@@ -599,10 +599,18 @@ def _add_hook_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
             "SessionEnd budget. That run's output is appended to <CONVO_DB>.hook.log. If "
             "another convo writer is running, one background run waits for it (up to an "
             "hour) and then indexes every transcript; later ones leave their sessions to "
-            "it. Like any `convo index`, it applies pending migrations first."
+            "it. Like any `convo index`, it applies pending migrations first. "
+            "pre-compact does the same for a session that is still running, just before "
+            "Claude Code compacts it, so a session that lasts days stays searchable. Its "
+            "background run uses `convo index --session <id> --no-wait`: if another convo "
+            "writer is running it logs that and exits."
         ),
     )
-    hook_p.add_argument("event", choices=["session-end"], help="The hook event to handle.")
+    hook_p.add_argument(
+        "event",
+        choices=["session-end", "pre-compact"],
+        help="The hook event to handle.",
+    )
     hook_p.add_argument(
         "--json",
         dest="as_json",
@@ -1326,7 +1334,8 @@ def _hook_command(args: argparse.Namespace, db_path: Path) -> int:
     # A terminal on stdin means a person typed the command: don't block on read().
     stdin = sys.stdin
     text = "" if stdin is None or stdin.isatty() else stdin.read()
-    outcome = run_session_end(text, db_path=db_path)
+    run = run_pre_compact if args.event == "pre-compact" else run_session_end
+    outcome = run(text, db_path=db_path)
     if args.as_json:
         print(json.dumps(_build_hook_envelope(args.event, outcome)))
     elif outcome.status == "spawned":

@@ -1,4 +1,4 @@
-"""`convo hook session-end`: hand the session's indexing to a background process.
+"""`convo hook session-end` / `pre-compact`: index a session in a background process.
 
 Claude Code gives SessionEnd hooks a 1.5 s budget by default (plugin hook
 `timeout` values do not raise it), and re-indexing a grown transcript takes
@@ -7,13 +7,22 @@ JSON from stdin, starts a detached `convo index --session <id>` (through
 `convo.hook_worker`, which stamps each output line with the time and session
 id) with its output appended to `<db>.hook.log`, and returns in milliseconds.
 
-The background run indexes only that session's transcript. If another writer
-holds the lock, one background run waits for it (it is detached, so waiting
-costs the hook nothing) and then indexes every transcript; the rest leave
-their sessions to it and exit, so sessions that end mid-index still get
-indexed without a pile of waiting processes. Like any
+The background run indexes only that session's transcript and its subagents'.
+If another writer holds the lock, one background run waits for it (it is
+detached, so waiting costs the hook nothing) and then indexes every
+transcript; the rest leave their sessions to it and exit, so sessions that end
+mid-index still get indexed without a pile of waiting processes. Like any
 `convo index`, it applies pending migrations first, so an upgrade never
 stalls indexing; readers keep working meanwhile.
+
+`pre-compact` is the same hand-off for a session that is still running. A
+session that runs for days never reaches SessionEnd, so its transcript would
+stay as stale as the last time it ended; Claude Code compacts a long session
+every so often, and the hook indexes it then. The compaction waits for the
+hook, so the hook stays as quick as `session-end`. Its background run does not
+queue (`convo index --no-wait`): when another writer holds the lock it logs
+that and exits, since the next compaction or the session's end indexes
+everything that has accrued.
 """
 
 from __future__ import annotations
@@ -34,14 +43,18 @@ if TYPE_CHECKING:
 # The log keeps one or two lines per run; start over once it passes this.
 LOG_MAX_BYTES: int = 1024 * 1024
 
+# Third argument of `convo.hook_worker`: skip the run, rather than queue, when
+# another writer holds the lock (`convo index --no-wait`).
+NO_WAIT_ARG: str = "--no-wait"
+
 
 @dataclass(frozen=True, slots=True)
 class HookOutcome:
-    """What `convo hook session-end` did.
+    """What `convo hook session-end` / `pre-compact` did.
 
-    `status` is `spawned` (a background index run started; it waits for the
-    writer lock if another writer holds it) or `skipped` (no usable session
-    id in the hook input).
+    `status` is `spawned` (a background index run started; for session-end it
+    waits for the writer lock if another writer holds it, for pre-compact it
+    gives up) or `skipped` (no usable session id in the hook input).
     """
 
     status: str
@@ -76,14 +89,15 @@ def session_id_from_payload(text: str) -> str | None:
     return None
 
 
-def child_argv(db_path: Path, session_id: str) -> list[str]:
+def child_argv(db_path: Path, session_id: str, *, no_wait: bool = False) -> list[str]:
     """Build the background index command (see `convo.hook_worker`).
 
     Runs this interpreter with `-P` so the working directory Claude Code
     hands the hook never lands on `sys.path`, and `-X utf8` so the log is
     UTF-8 on Windows too (a detached run there would use the ANSI code page).
+    With `no_wait`, the run exits instead of waiting for a held writer lock.
     """
-    return [
+    argv = [
         sys.executable,
         "-P",
         "-X",
@@ -93,6 +107,9 @@ def child_argv(db_path: Path, session_id: str) -> list[str]:
         str(db_path),
         session_id,
     ]
+    if no_wait:
+        argv.append(NO_WAIT_ARG)
+    return argv
 
 
 def spawn_detached(argv: list[str], log_path: Path) -> int:
@@ -170,6 +187,26 @@ def run_session_end(
     spawn: Callable[[list[str], Path], int] = spawn_detached,
 ) -> HookOutcome:
     """Handle one SessionEnd event; see the module docstring."""
+    return _spawn_index(stdin_text, db_path=db_path, spawn=spawn, no_wait=False)
+
+
+def run_pre_compact(
+    stdin_text: str,
+    *,
+    db_path: Path,
+    spawn: Callable[[list[str], Path], int] = spawn_detached,
+) -> HookOutcome:
+    """Handle one PreCompact event; see the module docstring."""
+    return _spawn_index(stdin_text, db_path=db_path, spawn=spawn, no_wait=True)
+
+
+def _spawn_index(
+    stdin_text: str,
+    *,
+    db_path: Path,
+    spawn: Callable[[list[str], Path], int],
+    no_wait: bool,
+) -> HookOutcome:
     session_id = session_id_from_payload(stdin_text)
     if session_id is None or not is_valid_session_id(session_id):
         return HookOutcome(status="skipped", session_id=None)
@@ -178,5 +215,5 @@ def run_session_end(
     # `<path>.ingest.lock` just as a manual `convo index` on that path does.
     db_path = Path(os.path.abspath(db_path))  # noqa: PTH100 - see above
     log_path = log_path_for(db_path)
-    pid = spawn(child_argv(db_path, session_id), log_path)
+    pid = spawn(child_argv(db_path, session_id, no_wait=no_wait), log_path)
     return HookOutcome(status="spawned", session_id=session_id, pid=pid, log_path=log_path)

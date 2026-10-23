@@ -45,10 +45,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand and delete the `-wal` and `-shm` files beside it.
 - `convo index --session ID` also indexes `ID`'s subagent transcripts, and so
   do the `SessionEnd` and `PreCompact` hooks.
-- `convo inspect --latest` skips subagent sessions: the latest session is the
-  one you started, not one of its helpers. `convo sessions`, `convo projects`
-  and the session-based parts of `stats`, `summary` and `diff` count subagent
-  sessions like any other; a subagent session id is the one containing a dot.
+- Subagent sessions are left out of session counts by default, so a session
+  that spawned forty helpers is still one session. `convo inspect --latest`
+  skips them (the latest session is the one you started), as do `convo
+  sessions`, `convo projects`, the top projects in `convo info`, and the
+  session-based parts of `stats` (`sessions`, `commands`, `model`), `summary`
+  and `diff` (session counts and durations, first messages, models). A
+  subagent session id is the one containing a dot. `--project` resolves among
+  top-level sessions, since a subagent in its own worktree would make a
+  substring like `repo` ambiguous.
+- `--include-subagents` on `sessions`, `projects`, `stats`, `summary` and
+  `diff` counts subagent sessions too (and lets `--project` name a worktree
+  only subagents used). Work totals ignore it and always include subagent
+  work: tool calls and files (`stats tools`, `stats files`, `convo tools`, and
+  those lines of `summary` and `diff`). `stats hooks` reads the guard log, not
+  sessions, so the flag does nothing there. `convo info` `row_counts.sessions`
+  stays the raw table count.
 
 ### Fixed
 

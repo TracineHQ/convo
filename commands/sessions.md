@@ -1,6 +1,6 @@
 ---
 description: List recent sessions, optionally filtered by project or time span.
-argument-hint: "[--project <prefix>] [--since <span>] [--limit N]"
+argument-hint: "[--project <prefix>] [--since <span>] [--limit N] [--include-subagents]"
 allowed-tools: "Bash(convo sessions *)"
 disable-model-invocation: true
 ---
@@ -13,7 +13,8 @@ repo root for the contract.
 
 List sessions ordered by start time descending. Accepts `--project <prefix>`
 to scope to a single project and `--since <span>` (e.g. `7d`, `2w`, `1y`)
-to limit the time window. Use session IDs from this output with
+to limit the time window. Subagent sessions are left out unless you pass
+`--include-subagents`. Use session IDs from this output with
 `/convo:inspect` to drill into a specific session.
 
 ```!

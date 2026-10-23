@@ -1,6 +1,6 @@
 ---
 description: Compare the current activity window against the previous window of the same length.
-argument-hint: "[--since SPAN]"
+argument-hint: "[--since SPAN] [--include-subagents]"
 allowed-tools: "Bash(convo diff *)"
 disable-model-invocation: true
 ---
@@ -12,6 +12,8 @@ Parses at `diff.deltas.*`. See `JSON-ENVELOPE.md` at the repo root for
 the contract.
 
 Print convo's window-over-window diff. Defaults to 7d (current 7d vs previous 7d).
+Session counts leave subagent sessions out unless you pass `--include-subagents`;
+tool-call and file totals always include subagent work.
 
 ```!
 convo diff ${ARGUMENTS:---since 7d}

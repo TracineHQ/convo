@@ -222,19 +222,22 @@ against the current directory.
 - `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
 - `convo restore --latest` -- shorthand for restoring the newest snapshot in
   `$CONVO_BACKUP_DIR`.
-- `convo stats <family> [--since SPAN] [--project P] [--json]` -- analytics
-  families: `tools`, `commands`, `sessions`, `files`, `model`, `hooks`.
-- `convo summary [--since SPAN] [--project P] [--json]` -- composite of the
-  `tools`, `commands`, `sessions`, `files` and `model` families in one report.
-  `hooks` is not included; run `convo stats hooks` for it.
-- `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
-  window comparison with deltas. Default span 7d.
-- `convo projects [--format prose|json]` -- list indexed projects with session
-  counts and last-seen timestamps.
+- `convo stats <family> [--since SPAN] [--project P] [--include-subagents] [--json]`
+  -- analytics families: `tools`, `commands`, `sessions`, `files`, `model`,
+  `hooks`.
+- `convo summary [--since SPAN] [--project P] [--include-subagents] [--json]`
+  -- composite of the `tools`, `commands`, `sessions`, `files` and `model`
+  families in one report. `hooks` is not included; run `convo stats hooks` for
+  it.
+- `convo diff [--since SPAN] [--project P] [--include-subagents] [--json]` --
+  current vs previous window comparison with deltas. Default span 7d.
+- `convo projects [--include-subagents] [--format prose|json]` -- list indexed
+  projects with session counts and last-seen timestamps.
 - `convo tools [--format prose|json]` -- list tool names with total call
   counts and last-seen timestamps.
-- `convo sessions [--since SPAN] [--project P] [--limit N] [--format prose|json]`
-  -- list recent sessions with project, message count, and timestamps.
+- `convo sessions [--since SPAN] [--project P] [--limit N] [--include-subagents]
+  [--format prose|json]` -- list recent sessions with project, message count,
+  and timestamps.
 
 `projects`, `tools` and `sessions` also accept `--json` as an alias for
 `--format json`.
@@ -255,12 +258,24 @@ own:
   rules`), so `convo search` can find a subagent by what it was asked to do.
   The meta file is kept whole in that message's `raw_json`. A subagent with no
   usable meta file just has no such message.
-- Its messages and tool calls are searched and counted like any other, so
-  `stats tools` and `stats files` include what subagents did.
-- `convo inspect --latest` skips subagent sessions. `convo sessions`,
-  `convo projects` and the session-based parts of `stats`, `summary` and
-  `diff` (session counts and durations, first messages, models) count them as
-  sessions; a subagent id is the one containing a dot.
+- Its messages and tool calls are searched like any other, and what it did is
+  in the work totals: `stats tools`, `stats files`, `convo tools` and the
+  tool-call and file lines of `summary` and `diff` include subagent work,
+  because that is why they are indexed. convo keeps no token counts, so there
+  is nothing to leave out there.
+- Counts of sessions leave subagents out, so a session that spawned forty
+  helpers is still one session. That covers `convo sessions`, `convo projects`,
+  `convo info`'s top projects, `convo inspect --latest`, and the session-based
+  parts of `stats` (`sessions`, `commands`, `model`), `summary` and `diff`
+  (session counts and durations, first messages, models). Pass
+  `--include-subagents` to `sessions`, `projects`, `stats`, `summary` or `diff`
+  to count them too. A subagent id is the one containing a dot.
+- `--project` resolves among top-level sessions, since a subagent can run in a
+  worktree of its own and its path would make a substring like `repo`
+  ambiguous. `--include-subagents` widens that too, so a worktree path that only
+  subagents used can be named.
+- `convo info`'s `row_counts.sessions` is the table's row count, so it includes
+  subagent sessions.
 
 The JSON envelope shape for every command is documented in
 [JSON-ENVELOPE.md](JSON-ENVELOPE.md).

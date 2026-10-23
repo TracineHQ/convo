@@ -1,5 +1,6 @@
 ---
 description: List all indexed projects sorted by session count.
+argument-hint: "[--include-subagents]"
 allowed-tools: "Bash(convo projects *)"
 disable-model-invocation: true
 ---
@@ -12,7 +13,8 @@ repo root for the contract.
 
 List all projects in the convo DB, ordered by session count descending.
 Useful for discovering which project prefixes to pass to `--project` filters
-in search and sessions commands.
+in search and sessions commands. Subagent sessions are not counted unless you
+pass `--include-subagents`.
 
 ```!
 convo projects ${ARGUMENTS}

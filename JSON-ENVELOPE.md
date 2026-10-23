@@ -70,8 +70,9 @@ shape.
 ```
 
 `last_indexed_at` is ISO 8601 or `null` when the DB has never been indexed.
-`top_projects` contains up to 5 entries ordered by `session_count` descending.
-`pending_migrations` counts migrations this convo knows that the DB has not
+`top_projects` contains up to 5 entries ordered by `session_count` descending,
+counting top-level sessions only; `row_counts.sessions` is the raw table count
+and includes subagent sessions. `pending_migrations` counts migrations this convo knows that the DB has not
 applied; read commands never apply them (`convo migrate` does).
 
 ---
@@ -284,6 +285,10 @@ parent message's position. `from_message` /
 shapes match `stats` exactly (see above). `since` is a span string or `null`
 for all-time. Note: `summary` does not include the `hooks` family.
 
+`commands`, `sessions` and `model` count top-level sessions only; `--include-subagents`
+counts subagent sessions too. `tools` and `files` always include subagent work.
+The envelope shape is the same either way.
+
 ---
 
 ### `diff`
@@ -322,6 +327,10 @@ for all-time. Note: `summary` does not include the `hooks` family.
 keys; each value is `{"absolute": <float>, "pct": <float|null>}`. `pct` is
 `null` when the previous-window value was 0. `span_seconds` is the window
 length in seconds.
+
+`commands_*`, `sessions_*` and `model_histogram` count top-level sessions only;
+`--include-subagents` counts subagent sessions too. `tool_calls_*` and
+`files_count` always include subagent work. The shape is the same either way.
 
 ---
 
@@ -362,6 +371,12 @@ durations. The key stays so v2 consumers don't break and goes away at the next
 the count of sessions that started at hour `h` UTC. `null_count` (model family)
 counts sessions whose model field was not recorded.
 
+The `commands`, `sessions` and `model` families count top-level sessions only.
+`--include-subagents` adds subagent sessions (ids shaped
+`<agent-id>.<parent-session-id>`) to them; `tools` and `files` always include
+subagent work, and `hooks` (the guard log) is unaffected. The shape is the same
+either way.
+
 ---
 
 ### `projects`
@@ -382,7 +397,9 @@ counts sessions whose model field was not recorded.
 ```
 
 `last_seen` is the `started_at` of the most recent session for that project,
-or `null` if unavailable.
+or `null` if unavailable. `sessions` counts top-level sessions;
+`--include-subagents` counts subagent sessions too, which can add projects
+(a subagent's worktree) that no top-level session used.
 
 ---
 
@@ -428,7 +445,8 @@ recent tool call, or `null` if unavailable.
 ```
 
 Ordered by `started_at` descending. Accepts `--since`, `--project`, and
-`--limit`.
+`--limit`. Subagent sessions (ids shaped `<agent-id>.<parent-session-id>`) are
+listed only with `--include-subagents`.
 
 ---
 

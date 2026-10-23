@@ -17,6 +17,8 @@ Mapping rules:
 * `LastPrompt` / `SystemRecord`       -> dropped
 * `FileHistorySnapshot`               -> dropped
 * `UnknownRecord`                     -> dropped
+* a subagent's `agent-<id>.meta.json` -> 1 leading `system` messages row
+                                         (`map_subagent_meta`)
 
 `tool_results` carries `(tool_call_id PK, message_id, is_error, output_text)`;
 list/dict payloads are JSON-encoded into `output_text`.
@@ -205,6 +207,50 @@ def _map_assistant(
                 _has_nl(input_json),
             ),
         )
+
+
+def _meta_text(meta: dict[str, Any], key: str) -> str:
+    value = meta.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def map_subagent_meta(
+    meta: dict[str, Any],
+    *,
+    session_id: str,
+    parent_session_id: str,
+    timestamp: str | None,
+) -> tuple[Any, ...] | None:
+    """Build the `messages` row that records a subagent's `agent-<id>.meta.json`.
+
+    The sessions table has no column for the agent type or description, so
+    they go in as a leading `system` message: searchable, shown first by
+    `inspect`, with the whole meta file (plus the parent session id) in
+    `raw_json`. Returns None when the meta names neither.
+    """
+    agent_type = _meta_text(meta, "agentType")
+    description = _meta_text(meta, "description")
+    if not agent_type and not description:
+        return None
+    content = f"Subagent ({agent_type})" if agent_type else "Subagent"
+    if description:
+        content = f"{content}: {description}"
+    raw_json = json.dumps(
+        {"type": "subagent_meta", "parent_session_id": parent_session_id, **meta},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return (
+        _synth_id(session_id, "subagent_meta", 0),
+        session_id,
+        None,
+        "system",
+        0,
+        timestamp,
+        content,
+        _has_nl(content),
+        raw_json,
+    )
 
 
 def map_record(  # noqa: PLR0913 — context bag is the FK contract; see docstring

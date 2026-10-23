@@ -465,7 +465,10 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help="Index Claude Code session JSONLs into the convo DB.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            "Walks <projects-dir>/<slug>/*.jsonl, most recently modified first.\n"
+            "Walks <projects-dir>/<slug>/*.jsonl, most recently modified first, plus\n"
+            "each session's subagent transcripts under <slug>/<session>/subagents/.\n"
+            "Each subagent is a session of its own, with the id\n"
+            "<agent-id>.<parent-session-id>.\n"
             "Skips files whose sha256 is already recorded in source_files. With\n"
             "--full, every file is re-indexed. CLAUDE_PROJECTS_DIR overrides the\n"
             "default projects dir.\n"
@@ -488,7 +491,10 @@ def _add_index_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         type=_session_id_arg,
         default=None,
         metavar="ID",
-        help="Index only <projects-dir>/<slug>/<ID>.jsonl (a full session id, not a prefix).",
+        help=(
+            "Index only <projects-dir>/<slug>/<ID>.jsonl and that session's subagent "
+            "transcripts (a full session id, not a prefix)."
+        ),
     )
     index_p.add_argument(
         "--no-wait",

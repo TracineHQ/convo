@@ -197,11 +197,34 @@ def test_stats_commands_skips_subagent_prompts_by_default(populated: Database) -
     }
 
 
-def test_stats_tools_and_files_always_include_subagent_work(populated: Database) -> None:
+def test_stats_tools_always_include_subagent_work(populated: Database) -> None:
     assert stats_tools(populated).total == 4
     assert stats_tools(populated, project=_REPO).total == 2  # top1 Bash + ag1 Read
-    assert stats_files(populated).total == 4
-    assert stats_files(populated, project=_REPO).total == 2
+
+
+def test_stats_files_leave_subagent_transcripts_out_by_default(populated: Database) -> None:
+    default = stats_files(populated)
+    assert default.total == 2
+    assert {f.path for f in default.top_files} == {"/data/top1.jsonl", "/data/top2.jsonl"}
+    assert stats_files(populated, project=_REPO).total == 1
+    assert stats_files(populated, since=timedelta(days=7)).total == 2
+
+
+def test_stats_files_count_subagent_transcripts_on_request(populated: Database) -> None:
+    assert stats_files(populated, include_subagents=True).total == 4
+    assert stats_files(populated, project=_REPO, include_subagents=True).total == 2
+    assert stats_files(populated, since=timedelta(days=7), include_subagents=True).total == 4
+
+
+def test_stats_files_keep_the_guard_log_either_way(populated: Database) -> None:
+    assert populated.conn is not None
+    populated.conn.execute(
+        "INSERT INTO source_files(path, size, mtime_ns, last_indexed_at, kind) "
+        "VALUES ('/data/guard.jsonl', 10, 0, '2026-04-29T00:00:00Z', 'guard_decisions')"
+    )
+    populated.conn.commit()
+    assert stats_files(populated).total == 3
+    assert stats_files(populated, include_subagents=True).total == 5
 
 
 # --------------------------------------------------------------------------- summary and diff
@@ -213,7 +236,7 @@ def test_summary_splits_session_counts_from_work_totals(populated: Database) -> 
     assert default.commands.total == 2
     assert sum(m.session_count for m in default.model.by_model) == 2
     assert default.tools.total == 4
-    assert default.files.total == 4
+    assert default.files.total == 2
 
     with_sub = gather_summary(populated, include_subagents=True)
     assert with_sub.sessions.total == 4
@@ -231,7 +254,7 @@ def test_diff_splits_session_counts_from_work_totals(populated: Database) -> Non
     assert default.sessions_median_seconds is not None
     assert abs(default.sessions_median_seconds - 90.0) < 0.01
     assert default.tool_calls_total == 4
-    assert default.files_count == 4
+    assert default.files_count == 2
 
     with_sub = compute_diff(populated, include_subagents=True).current
     assert with_sub.sessions_count == 4
@@ -287,7 +310,7 @@ def test_cli_sessions_project_ambiguity_follows_the_flag(
 
 @pytest.mark.parametrize(
     ("family", "default_total", "with_subagents_total"),
-    [("sessions", 2, 4), ("commands", 2, 4), ("model", 2, 4)],
+    [("sessions", 2, 4), ("commands", 2, 4), ("model", 2, 4), ("files", 2, 4)],
 )
 def test_cli_stats_flag_changes_session_counts(
     populated: Database,
@@ -303,15 +326,11 @@ def test_cli_stats_flag_changes_session_counts(
     assert with_sub["stats"]["total"] == with_subagents_total
 
 
-@pytest.mark.parametrize("family", ["tools", "files"])
-def test_cli_stats_work_families_ignore_the_flag(
-    populated: Database,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    family: str,
+def test_cli_stats_tools_ignores_the_flag(
+    populated: Database, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    default = _json(["stats", family], populated.path, monkeypatch, capsys)
-    with_sub = _json(["stats", family, "--include-subagents"], populated.path, monkeypatch, capsys)
+    default = _json(["stats", "tools"], populated.path, monkeypatch, capsys)
+    with_sub = _json(["stats", "tools", "--include-subagents"], populated.path, monkeypatch, capsys)
     assert default["stats"]["total"] == with_sub["stats"]["total"] == 4
 
 
@@ -329,9 +348,11 @@ def test_cli_summary_flag(
 ) -> None:
     default = _json(["summary"], populated.path, monkeypatch, capsys)["summary"]
     assert default["sessions"]["total"] == 2
+    assert default["files"]["total"] == 2
     assert default["tools"]["total"] == 4
     with_sub = _json(["summary", "--include-subagents"], populated.path, monkeypatch, capsys)
     assert with_sub["summary"]["sessions"]["total"] == 4
+    assert with_sub["summary"]["files"]["total"] == 4
     assert with_sub["summary"]["tools"]["total"] == 4
 
 
@@ -340,9 +361,11 @@ def test_cli_diff_flag(
 ) -> None:
     default = _json(["diff"], populated.path, monkeypatch, capsys)["diff"]["current"]
     assert default["sessions_count"] == 2
+    assert default["files_count"] == 2
     assert default["tool_calls_total"] == 4
     with_sub = _json(["diff", "--include-subagents"], populated.path, monkeypatch, capsys)
     assert with_sub["diff"]["current"]["sessions_count"] == 4
+    assert with_sub["diff"]["current"]["files_count"] == 4
     assert with_sub["diff"]["current"]["tool_calls_total"] == 4
 
 

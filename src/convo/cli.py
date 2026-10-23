@@ -827,10 +827,10 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             "  model     sessions per model\n"
             "  hooks     guard decision counts by hook_id and decision\n"
             "\n"
-            "commands, sessions and model count top-level sessions only; add\n"
-            "--include-subagents to count subagent sessions too. tools and files\n"
-            "always include subagent work, and hooks (the guard log) has no\n"
-            "sessions to include.\n"
+            "commands, sessions, model and files count top-level sessions and\n"
+            "transcript files only; add --include-subagents to count subagents\n"
+            "too. tools always includes subagent work, and hooks (the guard log)\n"
+            "has no sessions to include.\n"
             "\n"
             "Examples:\n"
             "  convo stats tools\n"
@@ -856,8 +856,9 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
     _add_include_subagents_arg(
         stats_p,
-        "Count subagent sessions in the commands, sessions and model families "
-        "(tools and files always include subagent work; hooks is unaffected).",
+        "Count subagent sessions and transcript files in the commands, sessions, "
+        "model and files families (tools always includes subagent work; hooks is "
+        "unaffected).",
     )
     stats_p.add_argument(
         "--json",
@@ -1865,8 +1866,8 @@ _STATS_FAMILY_FUNCS: dict[
     "model": stats_model,
     "hooks": stats_hooks,
 }
-# Families that count sessions and so take `include_subagents`; the rest total work.
-_SESSION_COUNT_FAMILIES = frozenset({"commands", "sessions", "model"})
+# Families that count sessions or transcript files and so take `include_subagents`.
+_SESSION_COUNT_FAMILIES = frozenset({"commands", "sessions", "model", "files"})
 
 
 def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -2103,8 +2104,8 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         epilog=(
             "Runs each of the five stats families (tools, commands, sessions, "
             "files, model) over the same (since, project) window and prints a "
-            "summary section per family. Session counts are top-level sessions "
-            "only; tool-call and file totals include subagent work."
+            "summary section per family. Session and transcript file counts "
+            "are top-level only; tool-call totals include subagent work."
         ),
     )
     summary_p.add_argument(
@@ -2119,7 +2120,9 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
     _add_include_subagents_arg(
-        summary_p, "Count subagent sessions in the commands, sessions and model sections."
+        summary_p,
+        "Count subagent sessions and transcript files in the commands, sessions, "
+        "files and model sections.",
     )
     summary_p.add_argument(
         "--json",
@@ -2291,8 +2294,8 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
             "Default span is 7d. The current window is [now-span, now); the "
             "previous window is [now-2*span, now-span). Per-bucket deltas are "
             "shown alongside both windows. ANSI colour on TTY: green for "
-            "increases, red for decreases. Session counts are top-level sessions "
-            "only; tool-call and file totals include subagent work."
+            "increases, red for decreases. Session and transcript file counts "
+            "are top-level only; tool-call totals include subagent work."
         ),
     )
     diff_p.add_argument(
@@ -2308,7 +2311,8 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     )
     _add_include_subagents_arg(
         diff_p,
-        "Count subagent sessions in the session, command and model metrics.",
+        "Count subagent sessions and transcript files in the session, command, "
+        "file and model metrics.",
     )
     diff_p.add_argument(
         "--json",

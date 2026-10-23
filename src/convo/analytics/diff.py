@@ -101,8 +101,8 @@ def compute_diff(
     """Run the stats aggregations over [now-span, now) and [now-2*span, now-span).
 
     Session-level metrics (session count and durations, first-message commands,
-    model histogram) leave subagent sessions out unless `include_subagents`.
-    Tool-call and file totals always include subagent work.
+    model histogram) and the transcript file count leave subagents out unless
+    `include_subagents`. Tool-call totals always include subagent work.
     """
     if span.total_seconds() <= 0:
         msg = f"diff span must be positive, got {span!r}"
@@ -160,7 +160,7 @@ def _window(
             conn, *bounds, include_subagents=include_subagents
         ),
         sessions_p95_seconds=_sessions_p95(conn, *bounds, include_subagents=include_subagents),
-        files_count=_files_count(conn, *bounds),
+        files_count=_files_count(conn, *bounds, include_subagents=include_subagents),
         model_histogram=_model_histogram(conn, *bounds, include_subagents=include_subagents),
     )
 
@@ -364,10 +364,19 @@ def _sessions_p95(
 # --------------------------------------------------------------------------- files
 
 
-def _files_count(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
+def _files_count(
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
+) -> int:
     """Count distinct source_files whose owning sessions started in the window."""
     where = ["s.started_at IS NOT NULL", "s.started_at >= ?", "s.started_at < ?"]
     params: list[object] = [lower, upper]
+    if not include_subagents:
+        where.append(top_level_sessions("s.id"))
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)

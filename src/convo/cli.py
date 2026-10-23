@@ -2740,11 +2740,13 @@ def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
         print(f"convo sessions -- {len(items)} session{'s' if len(items) != 1 else ''}")
         if not items:
             return 0
+        # A session UUID is 36 characters; a subagent's `<agent-id>.<uuid>` is longer.
+        id_w = max(36, *(len(r.id) for r in items))
         proj_w = max(len("project"), *(len(r.project_path or "") for r in items))
-        print(f"{'id'.ljust(36)}  {'project'.ljust(proj_w)}  {'msgs':>5}  started_at")
-        print(f"{'-' * 36}  {'-' * proj_w}  {'-' * 5}  {'-' * 24}")
+        print(f"{'id'.ljust(id_w)}  {'project'.ljust(proj_w)}  {'msgs':>5}  started_at")
+        print(f"{'-' * id_w}  {'-' * proj_w}  {'-' * 5}  {'-' * 24}")
         for r in items:
             proj = r.project_path or ""
             started = r.started_at or ""
-            print(f"{r.id.ljust(36)}  {proj.ljust(proj_w)}  {r.message_count:>5}  {started}")
+            print(f"{r.id.ljust(id_w)}  {proj.ljust(proj_w)}  {r.message_count:>5}  {started}")
     return 0

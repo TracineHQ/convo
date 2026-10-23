@@ -357,6 +357,26 @@ def test_cli_sessions_flag(
     assert {s["id"] for s in with_sub["sessions"]["items"]} == _ALL
 
 
+def test_cli_sessions_prose_keeps_columns_aligned_for_long_subagent_ids(
+    populated: Database, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    parent = "aaaaaaaa-0000-4000-8000-000000000001"
+    long_id = f"a1b2c3d4e5f6a7b8c.{parent}"
+    _add_sessions(
+        populated,
+        [(long_id, _REPO, "haiku-4", 5, "scout", "Read")],
+        started_ago=timedelta(days=1),
+    )
+    rc, out = _run(["sessions", "--include-subagents"], populated.path, monkeypatch, capsys)
+    assert rc == 0
+    lines = out.splitlines()
+    assert long_id in out
+    column = lines[1].index("project")
+    rows = lines[3:]
+    assert len(rows) == len(_ALL) + 1
+    assert all(row[column : column + len("/work/")] == "/work/" for row in rows)
+
+
 def test_cli_projects_flag(
     populated: Database, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

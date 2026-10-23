@@ -17,7 +17,7 @@ Mapping rules:
 * `LastPrompt` / `SystemRecord`       -> dropped
 * `FileHistorySnapshot`               -> dropped
 * `UnknownRecord`                     -> dropped
-* a subagent's `agent-<id>.meta.json` -> 1 leading `system` messages row
+* a subagent's `agent-<id>.meta.json` -> 1 leading `system` message row
                                          (`map_subagent_meta`)
 
 `tool_results` carries `(tool_call_id PK, message_id, is_error, output_text)`;

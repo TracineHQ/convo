@@ -509,6 +509,11 @@ Standard case (transcript ingest):
 `--no-wait`, `status` is `"busy"` (counts all zero, exit code 0) when another
 convo writer holds the lock.
 
+`files_*` count transcript files, and a session's subagent transcripts
+(`<slug>/<session>/subagents/**/agent-*.jsonl`) are files like any other: each
+is indexed as a session named `<agent-id>.<parent-session-id>`. `--session ID`
+covers `ID`'s transcript and its subagents'.
+
 Guard-log variant (`convo index-guard --json`):
 
 ```json
@@ -572,11 +577,16 @@ SessionEnd hook's background run has usually migrated already), `"empty_db"`
 }
 ```
 
-`status` is `"spawned"` (a background `convo index --session` run started;
-if another convo writer holds the lock, it waits for it, or leaves the
-session to a run that is already waiting) or
-`"skipped"` (no usable session id on stdin). `pid` and `log_path` are `null`
-unless `spawned`. Exit code is 0 in every case.
+`event` is `"session-end"` or `"pre-compact"`. `status` is `"spawned"` (a
+background `convo index --session` run started, which also covers that
+session's subagent transcripts) or `"skipped"` (no usable session id on
+stdin). `pid` and `log_path` are `null` unless `spawned`. Exit code is 0 in
+every case.
+
+If another convo writer holds the lock, a `session-end` run waits for it, or
+leaves the session to a run that is already waiting. A `pre-compact` run does
+not wait: it logs that it found a writer and exits, because the session is
+still running and a later compaction or its end indexes what accrued.
 
 ---
 

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Subagent transcripts are indexed. Claude Code writes them to
+  `<slug>/<session-id>/subagents/agent-<id>.jsonl` (and under
+  `subagents/workflows/<workflow>/`), where the `*/*.jsonl` walk never looked.
+  Each becomes a session of its own, linked to its parent by its id,
+  `<agent-id>.<parent-session-id>`, so no schema change or migration is
+  needed. The agent type and description from the `agent-<id>.meta.json`
+  beside it become a leading `system` message, so `convo search` finds a
+  subagent by what it was asked to do. The next `convo index` picks up every
+  existing subagent transcript.
+- `convo hook pre-compact` and a `PreCompact` entry in the plugin's hooks. A
+  session that runs for days never reaches `SessionEnd`, so its transcript
+  went stale. Now the session is indexed in the background just before Claude
+  Code compacts it. Unlike the `SessionEnd` run it does not queue behind
+  another convo writer (`convo index --session <id> --no-wait`): it logs that
+  it found one and exits, and a later compaction or the session's end covers
+  what accrued. With a CLI that predates the command the hook does nothing.
+
 ### Changed
 
 - Schema v6 (migration `0006_message_positions.sql`) stores each message's
@@ -24,6 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go back, make sure no convo process is running (including a hook's
   background run), downgrade, then copy the snapshot over `<CONVO_DB>` by
   hand and delete the `-wal` and `-shm` files beside it.
+- `convo index --session ID` also indexes `ID`'s subagent transcripts, and so
+  do the `SessionEnd` and `PreCompact` hooks.
+- `convo inspect --latest` skips subagent sessions: the latest session is the
+  one you started, not one of its helpers. `convo sessions`, `convo projects`
+  and the session-based parts of `stats`, `summary` and `diff` count subagent
+  sessions like any other; a subagent session id is the one containing a dot.
 
 ### Fixed
 

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from convo.analytics._constants import SECONDS_PER_DAY
 from convo.read._db_access import open_ro
+from convo.read.filters import top_level_sessions
 
 if TYPE_CHECKING:
     import sqlite3
@@ -95,8 +96,14 @@ def compute_diff(
     *,
     span: timedelta = _DEFAULT_SPAN,
     project: str | None = None,
+    include_subagents: bool = False,
 ) -> DiffReport:
-    """Run the stats aggregations over [now-span, now) and [now-2*span, now-span)."""
+    """Run the stats aggregations over [now-span, now) and [now-2*span, now-span).
+
+    Session-level metrics (session count and durations, first-message commands,
+    model histogram) leave subagent sessions out unless `include_subagents`.
+    Tool-call and file totals always include subagent work.
+    """
     if span.total_seconds() <= 0:
         msg = f"diff span must be positive, got {span!r}"
         raise ValueError(msg)
@@ -105,8 +112,16 @@ def compute_diff(
     prev_lower = now - 2 * span
     ro = open_ro(db.path)
     try:
-        current = _window(ro, lower=cur_lower, upper=now, project=project)
-        previous = _window(ro, lower=prev_lower, upper=cur_lower, project=project)
+        current = _window(
+            ro, lower=cur_lower, upper=now, project=project, include_subagents=include_subagents
+        )
+        previous = _window(
+            ro,
+            lower=prev_lower,
+            upper=cur_lower,
+            project=project,
+            include_subagents=include_subagents,
+        )
     finally:
         ro.close()
     deltas = _compute_deltas(current=current, previous=previous)
@@ -128,21 +143,25 @@ def _window(
     lower: datetime,
     upper: datetime,
     project: str | None,
+    include_subagents: bool,
 ) -> WindowSnapshot:
     lower_iso = _format_iso(lower)
     upper_iso = _format_iso(upper)
+    bounds = (lower_iso, upper_iso, project)
     return WindowSnapshot(
         lower=lower_iso,
         upper=upper_iso,
-        tool_calls_total=_tool_calls_total(conn, lower_iso, upper_iso, project),
-        tool_calls_by_name=_tool_calls_by_name(conn, lower_iso, upper_iso, project),
-        commands_total=_commands_total(conn, lower_iso, upper_iso, project),
-        commands_top=_commands_top(conn, lower_iso, upper_iso, project),
-        sessions_count=_sessions_count(conn, lower_iso, upper_iso, project),
-        sessions_median_seconds=_sessions_median(conn, lower_iso, upper_iso, project),
-        sessions_p95_seconds=_sessions_p95(conn, lower_iso, upper_iso, project),
-        files_count=_files_count(conn, lower_iso, upper_iso, project),
-        model_histogram=_model_histogram(conn, lower_iso, upper_iso, project),
+        tool_calls_total=_tool_calls_total(conn, *bounds),
+        tool_calls_by_name=_tool_calls_by_name(conn, *bounds),
+        commands_total=_commands_total(conn, *bounds, include_subagents=include_subagents),
+        commands_top=_commands_top(conn, *bounds, include_subagents=include_subagents),
+        sessions_count=_sessions_count(conn, *bounds, include_subagents=include_subagents),
+        sessions_median_seconds=_sessions_median(
+            conn, *bounds, include_subagents=include_subagents
+        ),
+        sessions_p95_seconds=_sessions_p95(conn, *bounds, include_subagents=include_subagents),
+        files_count=_files_count(conn, *bounds),
+        model_histogram=_model_histogram(conn, *bounds, include_subagents=include_subagents),
     )
 
 
@@ -189,7 +208,12 @@ def _tool_calls_by_name(
 
 
 def _commands_query(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
 ) -> list[str]:
     where = [
         "m.role = 'user'",
@@ -198,6 +222,8 @@ def _commands_query(
         "m.timestamp < ?",
     ]
     params: list[object] = [lower, upper]
+    if not include_subagents:
+        where.append(top_level_sessions("s.id"))
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
@@ -226,15 +252,27 @@ def _normalize_command(content: str) -> str:
     return collapsed
 
 
-def _commands_total(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
-    return len(_commands_query(conn, lower, upper, project))
+def _commands_total(
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
+) -> int:
+    return len(_commands_query(conn, lower, upper, project, include_subagents=include_subagents))
 
 
 def _commands_top(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for cmd in _commands_query(conn, lower, upper, project):
+    for cmd in _commands_query(conn, lower, upper, project, include_subagents=include_subagents):
         counts[cmd] = counts.get(cmd, 0) + 1
     items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     return dict(items[:_COMMANDS_TOP_LIMIT])
@@ -244,10 +282,17 @@ def _commands_top(
 
 
 def _sessions_durations(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
 ) -> list[float]:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
+    if not include_subagents:
+        where.append(top_level_sessions())
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
@@ -262,9 +307,18 @@ def _sessions_durations(
     return [float(r["duration_s"]) for r in rows if r["duration_s"] is not None]
 
 
-def _sessions_count(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
+def _sessions_count(
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
+) -> int:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
+    if not include_subagents:
+        where.append(top_level_sessions())
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
@@ -275,18 +329,32 @@ def _sessions_count(conn: sqlite3.Connection, lower: str, upper: str, project: s
 
 
 def _sessions_median(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
 ) -> float | None:
-    durations = _sessions_durations(conn, lower, upper, project)
+    durations = _sessions_durations(
+        conn, lower, upper, project, include_subagents=include_subagents
+    )
     if not durations:
         return None
     return float(statistics.median(durations))
 
 
 def _sessions_p95(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
 ) -> float | None:
-    durations = _sessions_durations(conn, lower, upper, project)
+    durations = _sessions_durations(
+        conn, lower, upper, project, include_subagents=include_subagents
+    )
     if len(durations) < _MIN_QUANTILE_SAMPLES:
         return None
     cuts = statistics.quantiles(durations, n=_QUANTILE_BUCKETS, method="exclusive")
@@ -317,10 +385,17 @@ def _files_count(conn: sqlite3.Connection, lower: str, upper: str, project: str 
 
 
 def _model_histogram(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection,
+    lower: str,
+    upper: str,
+    project: str | None,
+    *,
+    include_subagents: bool,
 ) -> dict[str, int]:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
+    if not include_subagents:
+        where.append(top_level_sessions())
     if project is not None:
         where.append("project_path = ?")
         params.append(project)

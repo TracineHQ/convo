@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso
+from convo.read.filters import since_iso, top_level_sessions
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -46,11 +46,18 @@ def stats_commands(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_subagents: bool = False,
 ) -> CommandsReport:
-    """Return the top-N first-user-message commands."""
+    """Return the top-N first-user-message commands.
+
+    A subagent session's first user message is the prompt its parent handed
+    it, not a command, so those sessions are left out unless `include_subagents`.
+    """
     cutoff = since_iso(since)
     where: list[str] = ["m.role = 'user'"]
     params: list[object] = []
+    if not include_subagents:
+        where.append(top_level_sessions("s.id"))
     if cutoff is not None:
         where.append("m.timestamp IS NOT NULL AND m.timestamp >= ?")
         params.append(cutoff)

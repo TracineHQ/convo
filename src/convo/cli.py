@@ -827,6 +827,11 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             "  model     sessions per model\n"
             "  hooks     guard decision counts by hook_id and decision\n"
             "\n"
+            "commands, sessions and model count top-level sessions only; add\n"
+            "--include-subagents to count subagent sessions too. tools and files\n"
+            "always include subagent work, and hooks (the guard log) has no\n"
+            "sessions to include.\n"
+            "\n"
             "Examples:\n"
             "  convo stats tools\n"
             "  convo stats sessions --since 7d\n"
@@ -849,11 +854,25 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         default=None,
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
+    _add_include_subagents_arg(
+        stats_p,
+        "Count subagent sessions in the commands, sessions and model families "
+        "(tools and files always include subagent work; hooks is unaffected).",
+    )
     stats_p.add_argument(
         "--json",
         dest="as_json",
         action="store_true",
         help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _add_include_subagents_arg(parser: argparse.ArgumentParser, help_text: str) -> None:
+    parser.add_argument(
+        "--include-subagents",
+        dest="include_subagents",
+        action="store_true",
+        help=help_text,
     )
 
 
@@ -1846,6 +1865,8 @@ _STATS_FAMILY_FUNCS: dict[
     "model": stats_model,
     "hooks": stats_hooks,
 }
+# Families that count sessions and so take `include_subagents`; the rest total work.
+_SESSION_COUNT_FAMILIES = frozenset({"commands", "sessions", "model"})
 
 
 def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
@@ -1856,7 +1877,9 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
         ro = _open_ro(str(db_path))
         try:
             try:
-                project_resolved = resolve_project_path(ro, args.project)
+                project_resolved = resolve_project_path(
+                    ro, args.project, include_subagents=args.include_subagents
+                )
             except ProjectResolveError as exc:
                 if args.as_json:
                     print(
@@ -1872,8 +1895,11 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
         finally:
             ro.close()
+    extra: dict[str, bool] = (
+        {"include_subagents": args.include_subagents} if family in _SESSION_COUNT_FAMILIES else {}
+    )
     with _read_db(db_path) as db:
-        report = func(db, since=args.since, project=project_resolved)
+        report = func(db, since=args.since, project=project_resolved, **extra)
     if args.as_json:
         print(json.dumps(_build_stats_envelope(family, report)))
     else:
@@ -2077,7 +2103,8 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         epilog=(
             "Runs each of the five stats families (tools, commands, sessions, "
             "files, model) over the same (since, project) window and prints a "
-            "summary section per family."
+            "summary section per family. Session counts are top-level sessions "
+            "only; tool-call and file totals include subagent work."
         ),
     )
     summary_p.add_argument(
@@ -2090,6 +2117,9 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         "--project",
         default=None,
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
+    )
+    _add_include_subagents_arg(
+        summary_p, "Count subagent sessions in the commands, sessions and model sections."
     )
     summary_p.add_argument(
         "--json",
@@ -2105,7 +2135,9 @@ def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
         ro = _open_ro(str(db_path))
         try:
             try:
-                project_resolved = resolve_project_path(ro, args.project)
+                project_resolved = resolve_project_path(
+                    ro, args.project, include_subagents=args.include_subagents
+                )
             except ProjectResolveError as exc:
                 if args.as_json:
                     print(
@@ -2122,7 +2154,12 @@ def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
         finally:
             ro.close()
     with _read_db(db_path) as db:
-        report = gather_summary(db, since=args.since, project=project_resolved)
+        report = gather_summary(
+            db,
+            since=args.since,
+            project=project_resolved,
+            include_subagents=args.include_subagents,
+        )
     if args.as_json:
         print(json.dumps(_build_summary_envelope(report)))
     else:
@@ -2254,7 +2291,8 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
             "Default span is 7d. The current window is [now-span, now); the "
             "previous window is [now-2*span, now-span). Per-bucket deltas are "
             "shown alongside both windows. ANSI colour on TTY: green for "
-            "increases, red for decreases."
+            "increases, red for decreases. Session counts are top-level sessions "
+            "only; tool-call and file totals include subagent work."
         ),
     )
     diff_p.add_argument(
@@ -2267,6 +2305,10 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         "--project",
         default=None,
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
+    )
+    _add_include_subagents_arg(
+        diff_p,
+        "Count subagent sessions in the session, command and model metrics.",
     )
     diff_p.add_argument(
         "--json",
@@ -2283,7 +2325,9 @@ def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
         ro = _open_ro(str(db_path))
         try:
             try:
-                project_resolved = resolve_project_path(ro, args.project)
+                project_resolved = resolve_project_path(
+                    ro, args.project, include_subagents=args.include_subagents
+                )
             except ProjectResolveError as exc:
                 if args.as_json:
                     print(
@@ -2300,7 +2344,12 @@ def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
         finally:
             ro.close()
     with _read_db(db_path) as db:
-        report = compute_diff(db, span=span, project=project_resolved)
+        report = compute_diff(
+            db,
+            span=span,
+            project=project_resolved,
+            include_subagents=args.include_subagents,
+        )
     if args.as_json:
         print(json.dumps(_build_diff_envelope(report)))
     else:
@@ -2515,8 +2564,12 @@ def _add_projects_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     p = sub.add_parser(
         "projects",
         help="list indexed projects",
-        epilog="Lists all indexed projects with session count and last-seen timestamp.",
+        epilog=(
+            "Lists all indexed projects with session count and last-seen timestamp. "
+            "Subagent sessions are not counted unless --include-subagents is given."
+        ),
     )
+    _add_include_subagents_arg(p, "Count subagent sessions too.")
     p.add_argument(
         "--format",
         choices=["prose", "json"],
@@ -2545,8 +2598,13 @@ def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     p = sub.add_parser(
         "sessions",
         help="list sessions, optionally filtered",
-        epilog="Lists sessions with id, project path, start/end times, and message count.",
+        epilog=(
+            "Lists sessions with id, project path, start/end times, and message count. "
+            "Subagent sessions (ids shaped <agent-id>.<parent-session-id>) are listed "
+            "only with --include-subagents."
+        ),
     )
+    _add_include_subagents_arg(p, "List subagent sessions too.")
     p.add_argument(
         "--project",
         type=str,
@@ -2572,7 +2630,7 @@ def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
 
 
 def _projects_command(args: argparse.Namespace, db_path: Path) -> int:
-    items: list[ProjectRow] = list_projects(str(db_path))
+    items: list[ProjectRow] = list_projects(str(db_path), include_subagents=args.include_subagents)
     use_json = args.as_json or args.format == "json"
     if use_json:
         print(
@@ -2636,7 +2694,9 @@ def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
     if args.project is not None:
         ro = _open_ro(str(db_path))
         try:
-            resolved_project = resolve_project_path(ro, args.project)
+            resolved_project = resolve_project_path(
+                ro, args.project, include_subagents=args.include_subagents
+            )
         finally:
             ro.close()
 
@@ -2649,6 +2709,7 @@ def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
         project=resolved_project,
         since_iso=_since,
         limit=args.limit,
+        include_subagents=args.include_subagents,
     )
     use_json = args.as_json or args.format == "json"
     if use_json:

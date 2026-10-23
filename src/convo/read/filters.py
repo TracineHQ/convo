@@ -6,6 +6,8 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from convo.intake.subagents import SUBAGENT_SESSION_LIKE
+
 if TYPE_CHECKING:
     import sqlite3
 
@@ -85,11 +87,25 @@ def since_iso(since: timedelta | None) -> str | None:
     return cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def top_level_sessions(column: str = "id") -> str:
+    """SQL condition keeping top-level sessions, given the `sessions.id` column to test.
+
+    Subagent sessions (see `convo.intake.subagents`) have a dot in their id.
+    Commands that count sessions apply this unless asked to include subagents.
+    """
+    return f"{column} NOT LIKE '{SUBAGENT_SESSION_LIKE}'"
+
+
 class ProjectResolveError(ValueError):
     """Raised when --project cannot be resolved unambiguously."""
 
 
-def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
+def resolve_project_path(
+    conn: sqlite3.Connection,
+    value: str,
+    *,
+    include_subagents: bool = False,
+) -> str:
     """Resolve a --project value to an exact project_path.
 
     Tries in order:
@@ -100,9 +116,15 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     Trailing path separators are ignored, so ``/x/eval-kit/`` names
     /x/eval-kit.
 
+    Only top-level sessions name projects unless `include_subagents`: a
+    subagent can run in its own worktree, and that path would otherwise make
+    a substring like `repo` ambiguous.
+
     Raises :class:`ProjectResolveError` if ambiguous (multiple matches)
     or if no candidates exist.
     """
+    scope = "" if include_subagents else " AND " + top_level_sessions()
+
     # Shell tab completion appends a separator. Left on, `/x/eval-kit/` misses
     # the exact and basename matches and the substring match picks
     # /x/eval-kit/python. A bare root ("/", "C:\") is kept for the exact match:
@@ -110,11 +132,9 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     name = value.rstrip("/\\") or value
 
     # 1. Exact match, as typed or without the trailing separator
+    exact_sql = "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?"
     for exact in dict.fromkeys((value, name)):
-        row = conn.execute(
-            "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?",
-            (exact,),
-        ).fetchone()
+        row = conn.execute(exact_sql + scope, (exact,)).fetchone()
         if row is not None:
             return str(row[0])
 
@@ -122,16 +142,13 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     # beats substring matches, so `eval-kit` picks /x/eval-kit over
     # /x/eval-kit/python. substr() is 1-indexed: the last len(value) + 1
     # characters start at length(path) - length(value).
-    candidates_basename = [
-        str(r[0])
-        for r in conn.execute(
-            "SELECT DISTINCT project_path FROM sessions "
-            "WHERE project_path IS NOT NULL "
-            "AND substr(project_path, length(project_path) - length(?)) "
-            "= ('/' || ?)",
-            (name, name),
-        )
-    ]
+    basename_sql = (
+        "SELECT DISTINCT project_path FROM sessions "
+        "WHERE project_path IS NOT NULL "
+        "AND substr(project_path, length(project_path) - length(?)) "
+        "= ('/' || ?)"
+    )
+    candidates_basename = [str(r[0]) for r in conn.execute(basename_sql + scope, (name, name))]
     if len(candidates_basename) == 1:
         return candidates_basename[0]
     if len(candidates_basename) > 1:
@@ -140,13 +157,8 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
         raise ProjectResolveError(msg)
 
     # 3. Substring match anywhere
-    candidates_substring = [
-        str(r[0])
-        for r in conn.execute(
-            "SELECT DISTINCT project_path FROM sessions WHERE project_path LIKE ?",
-            (f"%{name}%",),
-        )
-    ]
+    substring_sql = "SELECT DISTINCT project_path FROM sessions WHERE project_path LIKE ?"
+    candidates_substring = [str(r[0]) for r in conn.execute(substring_sql + scope, (f"%{name}%",))]
     if len(candidates_substring) == 1:
         return candidates_substring[0]
     if len(candidates_substring) > 1:

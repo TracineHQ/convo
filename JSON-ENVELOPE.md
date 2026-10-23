@@ -70,9 +70,11 @@ shape.
 ```
 
 `last_indexed_at` is ISO 8601 or `null` when the DB has never been indexed.
-`top_projects` contains up to 5 entries ordered by `session_count` descending.
-`pending_migrations` counts migrations this convo knows that the DB has not
-applied; read commands never apply them (`convo migrate` does).
+`top_projects` contains up to 5 entries ordered by `session_count` descending,
+counting top-level sessions only; `row_counts` are raw table counts and
+include subagent sessions and transcript files. `pending_migrations` counts
+migrations this convo knows that the DB has not applied; read commands never
+apply them (`convo migrate` does).
 
 ---
 
@@ -284,6 +286,10 @@ parent message's position. `from_message` /
 shapes match `stats` exactly (see above). `since` is a span string or `null`
 for all-time. Note: `summary` does not include the `hooks` family.
 
+`commands`, `sessions`, `model` and `files` count top-level sessions and
+transcript files only; `--include-subagents` counts subagents too. `tools`
+always includes subagent work. The envelope shape is the same either way.
+
 ---
 
 ### `diff`
@@ -322,6 +328,11 @@ for all-time. Note: `summary` does not include the `hooks` family.
 keys; each value is `{"absolute": <float>, "pct": <float|null>}`. `pct` is
 `null` when the previous-window value was 0. `span_seconds` is the window
 length in seconds.
+
+`commands_*`, `sessions_*`, `model_histogram` and `files_count` count
+top-level sessions and transcript files only; `--include-subagents` counts
+subagents too. `tool_calls_*` always include subagent work. The shape is the
+same either way.
 
 ---
 
@@ -362,6 +373,12 @@ durations. The key stays so v2 consumers don't break and goes away at the next
 the count of sessions that started at hour `h` UTC. `null_count` (model family)
 counts sessions whose model field was not recorded.
 
+The `commands`, `sessions`, `model` and `files` families count top-level
+sessions and transcript files only. `--include-subagents` adds subagent
+sessions (ids shaped `<agent-id>.<parent-session-id>`) and their transcript
+files to them; `tools` always includes subagent work, and `hooks` (the guard
+log) is unaffected. The shape is the same either way.
+
 ---
 
 ### `projects`
@@ -382,7 +399,9 @@ counts sessions whose model field was not recorded.
 ```
 
 `last_seen` is the `started_at` of the most recent session for that project,
-or `null` if unavailable.
+or `null` if unavailable. `sessions` counts top-level sessions;
+`--include-subagents` counts subagent sessions too, which can add projects
+(a subagent's worktree) that no top-level session used.
 
 ---
 
@@ -428,7 +447,8 @@ recent tool call, or `null` if unavailable.
 ```
 
 Ordered by `started_at` descending. Accepts `--since`, `--project`, and
-`--limit`.
+`--limit`. Subagent sessions (ids shaped `<agent-id>.<parent-session-id>`) are
+listed only with `--include-subagents`.
 
 ---
 
@@ -509,6 +529,11 @@ Standard case (transcript ingest):
 `--no-wait`, `status` is `"busy"` (counts all zero, exit code 0) when another
 convo writer holds the lock.
 
+`files_*` count transcript files, and a session's subagent transcripts
+(`<slug>/<session>/subagents/**/agent-*.jsonl`) are files like any other: each
+is indexed as a session named `<agent-id>.<parent-session-id>`. `--session ID`
+covers `ID`'s transcript and its subagents'.
+
 Guard-log variant (`convo index-guard --json`):
 
 ```json
@@ -572,11 +597,16 @@ SessionEnd hook's background run has usually migrated already), `"empty_db"`
 }
 ```
 
-`status` is `"spawned"` (a background `convo index --session` run started;
-if another convo writer holds the lock, it waits for it, or leaves the
-session to a run that is already waiting) or
-`"skipped"` (no usable session id on stdin). `pid` and `log_path` are `null`
-unless `spawned`. Exit code is 0 in every case.
+`event` is `"session-end"` or `"pre-compact"`. `status` is `"spawned"` (a
+background `convo index --session` run started, which also covers that
+session's subagent transcripts) or `"skipped"` (no usable session id on
+stdin). `pid` and `log_path` are `null` unless `spawned`. Exit code is 0 in
+every case.
+
+If another convo writer holds the lock, a `session-end` run waits for it, or
+leaves the session to a run that is already waiting. A `pre-compact` run does
+not wait: it logs that it found a writer and exits, because the session is
+still running and a later compaction or its end indexes what accrued.
 
 ---
 

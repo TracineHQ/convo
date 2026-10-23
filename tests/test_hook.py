@@ -1,4 +1,4 @@
-"""`convo hook session-end`, the writer lock, and the hook's scoped index run."""
+"""`convo hook session-end` / `pre-compact`, the writer lock, and the hook's scoped index run."""
 
 from __future__ import annotations
 
@@ -17,7 +17,13 @@ import pytest
 from convo import cli, hook, hook_worker
 from convo.cli import main
 from convo.db import SCHEMA_VERSION, Database
-from convo.hook import child_argv, run_session_end, session_id_from_payload, spawn_detached
+from convo.hook import (
+    child_argv,
+    run_pre_compact,
+    run_session_end,
+    session_id_from_payload,
+    spawn_detached,
+)
 from convo.intake import orchestrator
 from convo.intake.positions import assign_positions
 from convo.lock import WaiterLock, WriterLock
@@ -41,6 +47,19 @@ def _payload(**overrides: object) -> str:
         "cwd": "/work/x",
         "hook_event_name": "SessionEnd",
         "reason": "exit",
+    }
+    body.update(overrides)
+    return json.dumps(body)
+
+
+def _compact_payload(**overrides: object) -> str:
+    body: dict[str, object] = {
+        "session_id": _SID,
+        "transcript_path": f"/home/u/.claude/projects/-work-x/{_SID}.jsonl",
+        "cwd": "/work/x",
+        "hook_event_name": "PreCompact",
+        "trigger": "auto",
+        "custom_instructions": "",
     }
     body.update(overrides)
     return json.dumps(body)
@@ -270,7 +289,19 @@ def test_worker_stamps_stderr_too(
         assert match.group(1) == _SID
 
 
-@pytest.mark.parametrize("argv", [[], ["only-db"], ["db", "../escape"], ["a", "b", "c"]])
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["only-db"],
+        ["db", "../escape"],
+        ["a", "b", "c"],
+        ["db", _SID, "--wait"],
+        ["db", _SID, "--no-wait", "extra"],
+        ["--no-wait"],
+        ["db", "../escape", "--no-wait"],
+    ],
+)
 def test_worker_rejects_bad_arguments(argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
     assert hook_worker.main(argv) == 2
     assert "usage" in capsys.readouterr().err
@@ -424,12 +455,16 @@ class _StringStdin:
         return self._tty
 
 
-def _plugin_session_end_command() -> str:
+def _plugin_hook_command(event: str) -> str:
     config = json.loads(_HOOKS_JSON.read_text(encoding="utf-8"))
-    commands = [h["command"] for entry in config["hooks"]["SessionEnd"] for h in entry["hooks"]]
+    commands = [h["command"] for entry in config["hooks"][event] for h in entry["hooks"]]
     assert len(commands) == 1
     command: str = commands[0]
     return command
+
+
+def _plugin_session_end_command() -> str:
+    return _plugin_hook_command("SessionEnd")
 
 
 def test_plugin_session_end_hook_runs_the_hook_command() -> None:
@@ -445,8 +480,13 @@ exit 0
 """
 
 
-def _run_plugin_hook(tmp_path: Path, *, hook_rc: int | None) -> list[str]:
-    """Run the plugin's SessionEnd command under sh with a fake `convo` on PATH.
+def _run_plugin_hook(
+    tmp_path: Path,
+    *,
+    hook_rc: int | None,
+    event: str = "SessionEnd",
+) -> list[str]:
+    """Run the plugin's command for `event` under sh with a fake `convo` on PATH.
 
     `hook_rc` is what the fake returns for `convo hook ...` (2 is argparse's
     exit for an unknown subcommand, i.e. a CLI older than the plugin); None
@@ -459,7 +499,7 @@ def _run_plugin_hook(tmp_path: Path, *, hook_rc: int | None) -> list[str]:
         fake = bin_dir / "convo"
         fake.write_text(_FAKE_CONVO, encoding="utf-8")
         fake.chmod(0o755)
-    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude").mkdir(exist_ok=True)
     env = {
         "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
         "HOME": str(tmp_path),
@@ -467,7 +507,7 @@ def _run_plugin_hook(tmp_path: Path, *, hook_rc: int | None) -> list[str]:
         "FAKE_HOOK_RC": str(hook_rc),
     }
     proc = subprocess.run(  # noqa: S603 - fixed sh path, command from the repo's hooks.json
-        ["/bin/sh", "-c", _plugin_session_end_command()],
+        ["/bin/sh", "-c", _plugin_hook_command(event)],
         input=_payload(),
         capture_output=True,
         text=True,
@@ -822,10 +862,20 @@ def test_hook_returns_fast_and_indexes_in_the_background(tmp_path: Path) -> None
     lock.release()
 
 
-def _run_hook(db_path: Path, session_id: str, env: dict[str, str]) -> dict[str, Any]:
+def _run_hook(
+    db_path: Path,
+    session_id: str,
+    env: dict[str, str],
+    event: str = "session-end",
+) -> dict[str, Any]:
+    payload = (
+        _compact_payload(session_id=session_id)
+        if event == "pre-compact"
+        else _payload(session_id=session_id)
+    )
     proc = subprocess.run(  # noqa: S603 - sys.executable + literal args, no shell
-        [sys.executable, "-m", "convo", "--db", str(db_path), "hook", "session-end", "--json"],
-        input=_payload(session_id=session_id),
+        [sys.executable, "-m", "convo", "--db", str(db_path), "hook", event, "--json"],
+        input=payload,
         capture_output=True,
         text=True,
         env=env,
@@ -908,3 +958,194 @@ def test_hook_run_migrates_an_old_db_then_indexes(tmp_path: Path) -> None:
         assert [r[0] for r in db.conn.execute("SELECT id FROM sessions").fetchall()] == [_SID]
     # The log says the background run, not the user, did the upgrade.
     assert f"migrated schema 4 -> {SCHEMA_VERSION}" in log_path.read_text(encoding="utf-8")
+
+
+# --- pre-compact -------------------------------------------------------------
+#
+# A session that runs for days never reaches SessionEnd. The PreCompact hook
+# indexes it as it goes: the same detached hand-off, but a run that finds the
+# writer lock held exits instead of queueing.
+
+
+def test_pre_compact_spawns_a_scoped_index_that_does_not_queue(tmp_path: Path) -> None:
+    db_path = tmp_path / "convo.db"
+    spawn = _FakeSpawn()
+    outcome = run_pre_compact(_compact_payload(), db_path=db_path, spawn=spawn)
+    assert outcome.status == "spawned"
+    assert outcome.session_id == _SID
+    assert outcome.pid == 4242
+    argv, log_path = spawn.calls[0]
+    assert argv == child_argv(db_path, _SID, no_wait=True)
+    assert argv[-3:] == [str(db_path), _SID, "--no-wait"]
+    assert log_path == tmp_path / "convo.db.hook.log"
+    assert not db_path.exists()
+
+
+def test_pre_compact_takes_the_session_from_the_transcript_path(tmp_path: Path) -> None:
+    spawn = _FakeSpawn()
+    text = json.dumps({"transcript_path": f"/x/projects/slug/{_SID}.jsonl"})
+    assert run_pre_compact(text, db_path=tmp_path / "convo.db", spawn=spawn).session_id == _SID
+
+
+@pytest.mark.parametrize("text", ["", "{}", _compact_payload(session_id="../../etc/x")])
+def test_pre_compact_skips_without_a_usable_session_id(tmp_path: Path, text: str) -> None:
+    spawn = _FakeSpawn()
+    outcome = run_pre_compact(text, db_path=tmp_path / "convo.db", spawn=spawn)
+    assert outcome.status == "skipped"
+    assert spawn.calls == []
+
+
+def test_session_end_run_still_queues(tmp_path: Path) -> None:
+    spawn = _FakeSpawn()
+    run_session_end(_payload(), db_path=tmp_path / "convo.db", spawn=spawn)
+    assert "--no-wait" not in spawn.calls[0][0]
+
+
+def test_worker_runs_a_scoped_index_in_no_wait_mode() -> None:
+    assert hook_worker.index_argv("/x/convo.db", _SID, no_wait=True) == [
+        "--db",
+        "/x/convo.db",
+        "index",
+        "--session",
+        _SID,
+        "--no-wait",
+    ]
+
+
+def test_worker_no_wait_run_indexes_when_the_lock_is_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(_two_sessions(tmp_path)))
+    db_path = tmp_path / "convo.db"
+
+    assert hook_worker.main([str(db_path), _SID, "--no-wait"]) == 0
+
+    assert "Inserted: 8 messages" in capsys.readouterr().out
+    assert _indexed_sessions(db_path) == {_SID}
+
+
+def test_worker_no_wait_run_gives_up_while_another_writer_holds_the_lock(
+    held_lock: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(_projects(tmp_path)))
+
+    start = time.monotonic()
+    assert hook_worker.main([str(held_lock), _SID, "--no-wait"]) == 0
+    assert time.monotonic() - start < 1.0
+
+    out = capsys.readouterr()
+    assert "another convo writer is running" in out.out
+    assert "waiting" not in out.err
+    assert not held_lock.exists()
+    for line in out.out.splitlines():
+        match = _STAMP.match(line)
+        assert match is not None, line
+        assert match.group(1) == _SID
+
+
+def test_hook_cli_pre_compact_json_reports_the_spawned_run(
+    held_lock: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spawn = _FakeSpawn()
+    real = hook.run_pre_compact
+
+    def with_fake_spawn(text: str, *, db_path: Path) -> hook.HookOutcome:
+        return real(text, db_path=db_path, spawn=spawn)
+
+    monkeypatch.setattr(cli, "run_pre_compact", with_fake_spawn)
+    monkeypatch.setattr(sys, "stdin", _StringStdin(_compact_payload()))
+    rc = main(["--db", str(held_lock), "hook", "pre-compact", "--json"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "schema_version": 2,
+        "hook": {
+            "event": "pre-compact",
+            "status": "spawned",
+            "session_id": _SID,
+            "pid": 4242,
+            "log_path": str(spawn.calls[0][1]),
+        },
+    }
+    assert spawn.calls[0][0][-1] == "--no-wait"
+
+
+def test_hook_cli_rejects_an_unknown_event(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--db", str(tmp_path / "convo.db"), "hook", "stop"])
+    assert excinfo.value.code == 2
+    assert "pre-compact" in capsys.readouterr().err
+
+
+def test_plugin_pre_compact_hook_runs_the_hook_command() -> None:
+    command = _plugin_hook_command("PreCompact")
+    assert "convo hook pre-compact" in command
+    assert "timeout" not in command
+
+
+@_POSIX_SHELL
+@pytest.mark.parametrize("hook_rc", [0, 1, 2])
+def test_plugin_pre_compact_hook_only_ever_calls_the_hook_command(
+    tmp_path: Path,
+    hook_rc: int,
+) -> None:
+    # rc 2 is a CLI older than the hook. SessionEnd falls back to an in-hook
+    # `convo index` there; compaction waits for its hooks, so this one must not.
+    calls = _run_plugin_hook(tmp_path, hook_rc=hook_rc, event="PreCompact")
+    assert calls == ["hook pre-compact"]
+
+
+@_POSIX_SHELL
+def test_plugin_pre_compact_hook_is_a_no_op_without_convo_on_path(tmp_path: Path) -> None:
+    assert _run_plugin_hook(tmp_path, hook_rc=None, event="PreCompact") == []
+
+
+@_POSIX_SHELL
+def test_plugin_pre_compact_hook_keeps_an_earlier_session_end_error(tmp_path: Path) -> None:
+    errors = tmp_path / ".claude" / "convo-hook-errors.log"
+    errors.parent.mkdir()
+    errors.write_text("convo: boom\n", encoding="utf-8")
+    _run_plugin_hook(tmp_path, hook_rc=0, event="PreCompact")
+    assert errors.read_text(encoding="utf-8") == "convo: boom\n"
+
+
+def test_pre_compact_hook_indexes_in_the_background_and_does_not_queue(tmp_path: Path) -> None:
+    root = _projects(tmp_path)
+    db_path = tmp_path / "convo.db"
+    log_path = tmp_path / "convo.db.hook.log"
+    env = {**os.environ, "CLAUDE_PROJECTS_DIR": str(root)}
+    env.pop("CONVO_DB", None)
+
+    def log_text() -> str:
+        return log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+
+    holder = WriterLock(db_path)
+    assert holder.acquire(blocking=False)
+    try:
+        start = time.monotonic()
+        body = _run_hook(db_path, _SID, env, event="pre-compact")
+        assert time.monotonic() - start < _SESSION_END_BUDGET_S
+        assert body["event"] == "pre-compact"
+        assert body["status"] == "spawned"
+        assert _wait_for(lambda: "nothing indexed" in log_text(), timeout=60), log_text()
+    finally:
+        holder.release()
+    # It did not queue behind the holder, so the lock freed with nothing indexed.
+    assert "Inserted:" not in log_text()
+    assert not db_path.exists()
+
+    # With the lock free, the next compaction indexes the session.
+    assert _run_hook(db_path, _SID, env, event="pre-compact")["status"] == "spawned"
+    assert _wait_for(lambda: "Inserted: 8 messages" in log_text(), timeout=120), log_text()
+    assert _wait_for(lambda: holder.acquire(blocking=False), timeout=30)
+    holder.release()
+    assert _indexed_sessions(db_path) == {_SID}

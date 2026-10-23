@@ -9,11 +9,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from convo.intake.mapper import INSERT_SQL, map_record
+from convo.intake.mapper import INSERT_SQL, map_record, map_subagent_meta
 from convo.intake.parser import IntakeParseError, parse_file
 from convo.intake.positions import assign_positions
 from convo.intake.records import AssistantMessage, ToolUseBlock, UnknownRecord, UserMessage
 from convo.intake.signature import compute_file_signature
+from convo.intake.subagents import (
+    ALL_SUBAGENTS_GLOB,
+    read_meta,
+    subagent_parent_id,
+    subagent_session_id,
+    subagents_glob,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -92,7 +99,7 @@ def _now_iso() -> str:
 
 
 def _session_id_from_path(path: Path) -> str:
-    return path.stem
+    return subagent_session_id(path) or path.stem
 
 
 def _lookup_existing(
@@ -198,11 +205,30 @@ def _collect_in_file_ids(
     return frozenset(message_ids), frozenset(tool_call_ids)
 
 
+def _subagent_meta_row(
+    path: Path,
+    session_id: str,
+    timestamp: str | None,
+) -> tuple[Any, ...] | None:
+    """The leading `messages` row for a subagent transcript's meta file, if it has one."""
+    parent = subagent_parent_id(path)
+    meta = None if parent is None else read_meta(path)
+    if parent is None or meta is None:
+        return None
+    return map_subagent_meta(
+        meta,
+        session_id=session_id,
+        parent_session_id=parent,
+        timestamp=timestamp,
+    )
+
+
 def _build_batches(
     records: list[IntakeRecord],
     *,
     session_id: str,
     source_file_id: int,
+    meta_row: tuple[Any, ...] | None = None,
 ) -> dict[str, list[tuple[Any, ...]]]:
     batches: dict[str, list[tuple[Any, ...]]] = {
         "messages": [],
@@ -210,6 +236,10 @@ def _build_batches(
         "tool_results": [],
     }
     seq_counter: dict[str, int] = {"messages": 0, "tool_calls": 0}
+    if meta_row is not None:
+        # Seq 0 is the meta row; the transcript's own messages follow it.
+        batches["messages"].append(meta_row)
+        seq_counter["messages"] = 1
     existing_message_ids, existing_tool_call_ids = _collect_in_file_ids(records)
     for rec in records:
         if not isinstance(rec, (UserMessage, AssistantMessage)):
@@ -228,6 +258,7 @@ def _build_batches(
 
 def _persist(
     conn: Any,
+    path: Path,
     sig: _FileSig,
     records: list[IntakeRecord],
 ) -> tuple[int, dict[str, int]]:
@@ -253,7 +284,12 @@ def _persist(
         ),
     )
 
-    batches = _build_batches(records, session_id=sig.session_id, source_file_id=source_file_id)
+    batches = _build_batches(
+        records,
+        session_id=sig.session_id,
+        source_file_id=source_file_id,
+        meta_row=_subagent_meta_row(path, sig.session_id, started_at),
+    )
     for table, rows in batches.items():
         if rows:
             conn.executemany(INSERT_SQL[table], rows)
@@ -373,7 +409,7 @@ def _persist_or_rollback(
 ) -> IndexResult:
     """Persist records; on per-file DB error, ROLLBACK and return an IndexResult."""
     try:
-        source_file_id, counts = _persist(conn, sig, records)
+        source_file_id, counts = _persist(conn, path, sig, records)
         conn.commit()
     except sqlite3.DatabaseError as exc:
         # Containment: a per-file DB error (FK / UNIQUE / etc.) must not abort
@@ -434,24 +470,29 @@ def _mtime_ns(path: Path) -> int | None:
 
 
 def discover_transcripts(projects_dir: Path, *, session_id: str | None = None) -> list[Path]:
-    """Return `<projects_dir>/<slug>/*.jsonl`, most recently modified first.
+    """Return `<projects_dir>/<slug>/*.jsonl` and subagent transcripts, newest first.
+
+    Subagent transcripts are the `agent-*.jsonl` files under
+    `<slug>/<session>/subagents/` (see `convo.intake.subagents`).
 
     Newest-first means fresh sessions are indexed before a backlog, so a run
     that is cut short still covers recent activity. Ties sort by path. With
-    `session_id`, only `<slug>/<session_id>.jsonl` files are returned. Files
-    that vanish between the walk and the stat are dropped.
+    `session_id`, only `<slug>/<session_id>.jsonl` and that session's subagent
+    transcripts are returned. Files that vanish between the walk and the stat
+    are dropped.
     """
     if session_id is None:
-        pattern = "*/*.jsonl"
+        patterns = ("*/*.jsonl", ALL_SUBAGENTS_GLOB)
     elif is_valid_session_id(session_id):
-        pattern = f"*/{session_id}.jsonl"
+        patterns = (f"*/{session_id}.jsonl", subagents_glob(session_id))
     else:
         raise ValueError(_ERR_BAD_SESSION_ID.format(session_id=session_id))
     stamped: list[tuple[int, Path]] = []
-    for path in projects_dir.glob(pattern):
-        mtime = _mtime_ns(path)
-        if mtime is not None:
-            stamped.append((mtime, path))
+    for pattern in patterns:
+        for path in projects_dir.glob(pattern):
+            mtime = _mtime_ns(path)
+            if mtime is not None:
+                stamped.append((mtime, path))
     stamped.sort(key=lambda item: (-item[0], str(item[1])))
     return [path for _, path in stamped]
 
@@ -501,7 +542,9 @@ def index_tree(  # noqa: PLR0913
     on_file: Callable[[IndexResult], None] | None = None,
     files: list[Path] | None = None,
 ) -> IndexReport:
-    """Walk `<projects_dir>/<slug>/*.jsonl` and index each file, newest first.
+    """Walk the transcripts under `projects_dir` and index each, newest first.
+
+    The walk is `discover_transcripts`: `<slug>/*.jsonl` plus subagent transcripts.
 
     With `full=True`, every file is force-reindexed regardless of sha256.
     With `dry_run=True`, the tree is classified (`new` / `unchanged` /

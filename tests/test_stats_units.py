@@ -163,9 +163,16 @@ class TestStatsSessions:
 class TestSessionsDurations:
     def test_seconds_per_day_first_param(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
-        diff._sessions_durations(conn, "2024-01-01T00:00:00.000Z", "2024-01-08T00:00:00.000Z", None)
+        diff._sessions_durations(
+            conn,
+            "2024-01-01T00:00:00.000Z",
+            "2024-01-08T00:00:00.000Z",
+            None,
+            include_subagents=True,
+        )
         sql, params = mock.execute.call_args.args
         assert "* ?" in sql
+        assert "NOT LIKE" not in sql
         assert params[0] == SECONDS_PER_DAY
         # Then lower, upper.
         assert params[1] == "2024-01-01T00:00:00.000Z"
@@ -174,11 +181,29 @@ class TestSessionsDurations:
     def test_with_project_appends_param(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
         diff._sessions_durations(
-            conn, "2024-01-01T00:00:00.000Z", "2024-01-08T00:00:00.000Z", "/proj/x"
+            conn,
+            "2024-01-01T00:00:00.000Z",
+            "2024-01-08T00:00:00.000Z",
+            "/proj/x",
+            include_subagents=True,
         )
         _, params = mock.execute.call_args.args
         assert params[0] == SECONDS_PER_DAY
         assert params[-1] == "/proj/x"
+
+    def test_leaves_subagent_sessions_out_unless_included(self, mocker: MockerFixture) -> None:
+        conn, mock = _stub_conn(mocker)
+        diff._sessions_durations(
+            conn,
+            "2024-01-01T00:00:00.000Z",
+            "2024-01-08T00:00:00.000Z",
+            None,
+            include_subagents=False,
+        )
+        sql, params = mock.execute.call_args.args
+        assert "id NOT LIKE '%.%'" in sql
+        # The exclusion is literal SQL, so it adds no bind parameter.
+        assert len(params) == 3
 
 
 # ---- diff._tool_calls_total

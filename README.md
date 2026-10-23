@@ -64,19 +64,33 @@ if that runs cleanly, you're good.
 
 The plugin wires up three things on top of the CLI:
 
-**Auto-index after every session.** A `SessionEnd` hook runs
-`convo hook session-end`, which starts a background index of the session
-that just ended and returns in milliseconds (Claude Code gives SessionEnd
-hooks 1.5 s). The background run's output goes to `<CONVO_DB>.hook.log`,
-each line stamped with the time and the session id.
+**Auto-index after every session, and before each compaction.** A `SessionEnd`
+hook runs `convo hook session-end`, which starts a background index of the
+session that just ended and returns in milliseconds (Claude Code gives
+SessionEnd hooks 1.5 s). The background run's output goes to
+`<CONVO_DB>.hook.log`, each line stamped with the time and the session id.
 If another convo writer is already running, one background run waits for it
 (up to an hour) and then indexes every transcript, so sessions that end in
 the meantime still get indexed; their own runs see it waiting and exit.
 After an upgrade that adds a migration, the next background run applies it
 before indexing; read commands never migrate, and on a DB too old to read
 they ask you to run `convo migrate`. Upgrade the CLI along with the plugin:
-with an older CLI the hook falls back to an in-hook `convo index`. No-ops
-gracefully if `convo` isn't on `PATH`.
+with an older CLI the `SessionEnd` hook falls back to an in-hook
+`convo index`. No-ops gracefully if `convo` isn't on `PATH`.
+
+A session that runs for days never reaches `SessionEnd`, so a `PreCompact`
+hook runs `convo hook pre-compact` as well. Just before Claude Code compacts
+a session (automatically or with `/compact`) it starts the same kind of
+background run, `convo index --session <id> --no-wait`, and returns at once;
+compaction does not wait on the index. If another convo writer is running,
+that run logs it and exits rather than queueing, since the next compaction or
+the session's end indexes whatever accrued. So a long session is as fresh as
+its last compaction: run `convo index` when you need it searchable sooner.
+With an older CLI the `PreCompact` hook does nothing (it writes an error line
+to `~/.claude/convo-hook-errors.log`).
+
+Both hooks cover the session's subagent transcripts too (see
+[Subagent sessions](#subagent-sessions)).
 
 **Nine slash commands** available inline in Claude Code:
 
@@ -148,12 +162,13 @@ Every command takes the global `--db PATH` before the command name
 against the current directory.
 
 - `convo index [--full] [--projects-dir PATH] [--session ID] [--dry-run]
-  [--json]` -- walk `~/.claude/projects/<slug>/*.jsonl`, most recently
-  modified first, and populate the database. Idempotent: skips files whose
-  sha256 hasn't changed. `--full` re-indexes everything; `--session` indexes
-  one session's transcript. Applies pending migrations, and waits for any
-  other convo writer to finish (`--no-wait` exits instead; `--no-migrate`
-  refuses to migrate). `--dry-run` does neither.
+  [--json]` -- walk `~/.claude/projects/<slug>/*.jsonl` and each session's
+  subagent transcripts, most recently modified first, and populate the
+  database. Idempotent: skips files whose sha256 hasn't changed. `--full`
+  re-indexes everything; `--session` indexes one session's transcript and its
+  subagents'. Applies pending migrations, and waits for any other convo writer
+  to finish (`--no-wait` exits instead; `--no-migrate` refuses to migrate).
+  `--dry-run` does neither.
 - `convo migrate [--backup] [--json]` -- apply pending schema migrations
   now. Read commands never migrate; `convo index` and the hook's background
   run do, so use this to migrate on your own schedule or when a read command
@@ -207,22 +222,62 @@ against the current directory.
 - `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
 - `convo restore --latest` -- shorthand for restoring the newest snapshot in
   `$CONVO_BACKUP_DIR`.
-- `convo stats <family> [--since SPAN] [--project P] [--json]` -- analytics
-  families: `tools`, `commands`, `sessions`, `files`, `model`, `hooks`.
-- `convo summary [--since SPAN] [--project P] [--json]` -- composite of the
-  `tools`, `commands`, `sessions`, `files` and `model` families in one report.
-  `hooks` is not included; run `convo stats hooks` for it.
-- `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
-  window comparison with deltas. Default span 7d.
-- `convo projects [--format prose|json]` -- list indexed projects with session
-  counts and last-seen timestamps.
+- `convo stats <family> [--since SPAN] [--project P] [--include-subagents] [--json]`
+  -- analytics families: `tools`, `commands`, `sessions`, `files`, `model`,
+  `hooks`.
+- `convo summary [--since SPAN] [--project P] [--include-subagents] [--json]`
+  -- composite of the `tools`, `commands`, `sessions`, `files` and `model`
+  families in one report. `hooks` is not included; run `convo stats hooks` for
+  it.
+- `convo diff [--since SPAN] [--project P] [--include-subagents] [--json]` --
+  current vs previous window comparison with deltas. Default span 7d.
+- `convo projects [--include-subagents] [--format prose|json]` -- list indexed
+  projects with session counts and last-seen timestamps.
 - `convo tools [--format prose|json]` -- list tool names with total call
   counts and last-seen timestamps.
-- `convo sessions [--since SPAN] [--project P] [--limit N] [--format prose|json]`
-  -- list recent sessions with project, message count, and timestamps.
+- `convo sessions [--since SPAN] [--project P] [--limit N] [--include-subagents]
+  [--format prose|json]` -- list recent sessions with project, message count,
+  and timestamps.
 
 `projects`, `tools` and `sessions` also accept `--json` as an alias for
-`--format json`. The JSON envelope shape for every command is documented in
+`--format json`.
+
+### Subagent sessions
+
+Claude Code writes each subagent's transcript beside its parent session, at
+`<slug>/<session-id>/subagents/agent-<id>.jsonl` (or under
+`subagents/workflows/<workflow>/` for workflow agents), with an
+`agent-<id>.meta.json` next to it. convo indexes each one as a session of its
+own:
+
+- Its id is `<agent-id>.<parent-session-id>` (a dot joins them), so the link to
+  the parent is in the `sessions` table with no extra column. The agent id is
+  the `agentId` Claude Code reports, so `convo inspect <agent-id>` finds it.
+- Its first message is a `system` message with the agent type and description
+  from the meta file (`Subagent (Explore): Trace the dispersed camping
+  rules`), so `convo search` can find a subagent by what it was asked to do.
+  The meta file is kept whole in that message's `raw_json`. A subagent with no
+  usable meta file just has no such message.
+- Its messages and tool calls are searched like any other, and what it did is
+  in the tool-call totals: `stats tools`, `convo tools` and the tool-call lines
+  of `summary` and `diff` include subagent work, because that is why they are
+  indexed. convo keeps no token counts, so there is nothing to leave out there.
+- Counts of sessions and transcript files leave subagents out, so a session
+  that spawned forty helpers is still one session and one file. That covers
+  `convo sessions`, `convo projects`, `convo info`'s top projects,
+  `convo inspect --latest`, and the session- and file-based parts of `stats`
+  (`sessions`, `commands`, `model`, `files`), `summary` and `diff` (session
+  counts and durations, first messages, models, files). Pass
+  `--include-subagents` to `sessions`, `projects`, `stats`, `summary` or `diff`
+  to count them too. A subagent id is the one containing a dot.
+- `--project` resolves among top-level sessions, since a subagent can run in a
+  worktree of its own and its path would make a substring like `repo`
+  ambiguous. `--include-subagents` widens that too, so a worktree path that only
+  subagents used can be named.
+- `convo info`'s `row_counts` are table row counts, so they include subagent
+  sessions and transcript files.
+
+The JSON envelope shape for every command is documented in
 [JSON-ENVELOPE.md](JSON-ENVELOPE.md).
 
 ## Storage

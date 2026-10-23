@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.db import resolve_snapshot_dir
+from convo.read.filters import top_level_sessions
 from convo.read.snapshots import SNAPSHOT_GLOB
 
 if TYPE_CHECKING:
@@ -71,14 +72,13 @@ def _last_indexed_at(db: Database) -> str | None:
 
 def _top_projects(db: Database, *, limit: int = 5) -> list[ProjectCount]:
     assert db.conn is not None
-    rows = db.conn.execute(
+    sql = (
         "SELECT project_path, COUNT(*) AS n "
-        "FROM sessions "
-        "GROUP BY project_path "
-        "ORDER BY n DESC, project_path "
-        "LIMIT ?",
-        (limit,),
-    ).fetchall()
+        "FROM sessions WHERE "
+        + top_level_sessions()
+        + " GROUP BY project_path ORDER BY n DESC, project_path LIMIT ?"
+    )
+    rows = db.conn.execute(sql, (limit,)).fetchall()
     out: list[ProjectCount] = []
     for row in rows:
         project = row["project_path"]

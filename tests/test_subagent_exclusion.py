@@ -1,11 +1,12 @@
-"""Subagent sessions stay out of session counts unless --include-subagents is given.
+"""Subagent sessions and transcript files stay out of counts unless --include-subagents is given.
 
-Tool-call and file totals are work totals and always include subagent work.
+Tool-call totals are work totals and always include subagent work.
 """
 
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -45,20 +46,16 @@ def _ts(offset: timedelta) -> str:
     return (datetime.now(UTC) - offset).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _populate(db: Database) -> None:
-    """Two top-level sessions plus two subagents of `top1`, one in its own worktree.
+_Row = tuple[str, str, str, int, str, str]  # id, project, model, seconds, prompt, tool
 
-    Durations: top1 60s, top2 120s, ag1 20s, ag2 10s. Each session owns a source file,
-    a first user message and one tool call (top1 Bash, the rest Read).
+
+def _add_sessions(db: Database, rows: list[_Row], *, started_ago: timedelta) -> None:
+    """Insert sessions that started `started_ago` ago.
+
+    Each owns a source file, a first user message and one tool call.
     """
     assert db.conn is not None
-    start = _ts(timedelta(days=2))
-    rows = [
-        ("top1", _REPO, "opus-4", 60, "build it", "Bash"),
-        ("top2", _OTHER, "sonnet-4", 120, "build it", "Read"),
-        ("ag1.top1", _REPO, "haiku-4", 20, "trace the rules", "Read"),
-        ("ag2.top1", _WORKTREE, "haiku-4", 10, "trace the rules", "Read"),
-    ]
+    start = _ts(started_ago)
     for sid, project, model, seconds, prompt, tool in rows:
         sfid = seed_source_file(db, path=f"/data/{sid}.jsonl")
         started = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
@@ -80,8 +77,40 @@ def _populate(db: Database) -> None:
 
 @pytest.fixture
 def populated(db: Database) -> Database:
-    _populate(db)
+    """Two top-level sessions plus two subagents of `top1`, one in its own worktree.
+
+    Durations: top1 60s, top2 120s, ag1 20s, ag2 10s. All started two days ago, so
+    they sit in `diff`'s current window.
+    """
+    _add_sessions(
+        db,
+        [
+            ("top1", _REPO, "opus-4", 60, "build it", "Bash"),
+            ("top2", _OTHER, "sonnet-4", 120, "build it", "Read"),
+            ("ag1.top1", _REPO, "haiku-4", 20, "trace the rules", "Read"),
+            ("ag2.top1", _WORKTREE, "haiku-4", 10, "trace the rules", "Read"),
+        ],
+        started_ago=timedelta(days=2),
+    )
     return db
+
+
+@pytest.fixture
+def with_history(populated: Database) -> Database:
+    """`populated` plus two top-level sessions and a subagent in `diff`'s previous window.
+
+    Durations: top3 30s, top4 50s, ag3 5s, all nine days ago.
+    """
+    _add_sessions(
+        populated,
+        [
+            ("top3", _REPO, "opus-4", 30, "ship it", "Bash"),
+            ("top4", _OTHER, "opus-4", 50, "ship it", "Bash"),
+            ("ag3.top3", _REPO, "haiku-4", 5, "scout", "Read"),
+        ],
+        started_ago=timedelta(days=9),
+    )
+    return populated
 
 
 def _run(
@@ -157,6 +186,13 @@ def test_subagent_only_project_needs_the_flag(populated: Database) -> None:
     with pytest.raises(ProjectResolveError, match="matched no known project"):
         resolve_project_path(populated.conn, "wf_demo")
     assert resolve_project_path(populated.conn, "wf_demo", include_subagents=True) == _WORKTREE
+
+
+def test_exact_project_path_only_subagents_used_needs_the_flag(populated: Database) -> None:
+    assert populated.conn is not None
+    with pytest.raises(ProjectResolveError, match="matched no known project"):
+        resolve_project_path(populated.conn, _WORKTREE)
+    assert resolve_project_path(populated.conn, _WORKTREE, include_subagents=True) == _WORKTREE
 
 
 # --------------------------------------------------------------------------- stats families
@@ -266,6 +302,49 @@ def test_diff_splits_session_counts_from_work_totals(populated: Database) -> Non
     assert with_sub.files_count == 4
 
 
+def _p95(seconds: list[float]) -> float:
+    return statistics.quantiles(seconds, n=20, method="exclusive")[18]
+
+
+def test_diff_current_p95_follows_the_flag(populated: Database) -> None:
+    default = compute_diff(populated).current.sessions_p95_seconds
+    assert default is not None
+    assert abs(default - _p95([60.0, 120.0])) < 0.5
+    with_sub = compute_diff(populated, include_subagents=True).current.sessions_p95_seconds
+    assert with_sub is not None
+    assert abs(with_sub - _p95([60.0, 120.0, 20.0, 10.0])) < 0.5
+
+
+def test_diff_previous_window_follows_the_flag(with_history: Database) -> None:
+    default = compute_diff(with_history).previous
+    assert default.sessions_count == 2
+    assert default.commands_total == 2
+    assert default.model_histogram == {"opus-4": 2}
+    assert default.files_count == 2
+    assert default.tool_calls_total == 3
+    assert default.sessions_median_seconds is not None
+    assert abs(default.sessions_median_seconds - 40.0) < 0.01
+    assert default.sessions_p95_seconds is not None
+    assert abs(default.sessions_p95_seconds - _p95([30.0, 50.0])) < 0.5
+
+    with_sub = compute_diff(with_history, include_subagents=True).previous
+    assert with_sub.sessions_count == 3
+    assert with_sub.commands_total == 3
+    assert with_sub.model_histogram == {"opus-4": 2, "haiku-4": 1}
+    assert with_sub.files_count == 3
+    assert with_sub.tool_calls_total == 3
+    assert with_sub.sessions_median_seconds is not None
+    assert abs(with_sub.sessions_median_seconds - 30.0) < 0.01
+    assert with_sub.sessions_p95_seconds is not None
+    assert abs(with_sub.sessions_p95_seconds - _p95([30.0, 50.0, 5.0])) < 0.5
+
+
+def test_diff_windows_do_not_bleed_into_each_other(with_history: Database) -> None:
+    report = compute_diff(with_history)
+    assert report.current.sessions_count == 2
+    assert report.previous.sessions_count == 2
+
+
 # --------------------------------------------------------------------------- CLI
 
 
@@ -306,6 +385,25 @@ def test_cli_sessions_project_ambiguity_follows_the_flag(
         capsys,
     )
     assert rc == 1
+
+
+@pytest.mark.parametrize("argv", [["stats", "sessions"], ["summary"], ["diff"]])
+def test_cli_project_ambiguity_follows_the_flag_everywhere(
+    populated: Database,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+) -> None:
+    rc, _ = _run([*argv, "--project", "/work/re", "--json"], populated.path, monkeypatch, capsys)
+    assert rc == 0
+    rc, out = _run(
+        [*argv, "--project", "/work/re", "--include-subagents", "--json"],
+        populated.path,
+        monkeypatch,
+        capsys,
+    )
+    assert rc == 1
+    assert "ambiguous" in json.loads(out)["error"]["message"]
 
 
 @pytest.mark.parametrize(

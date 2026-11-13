@@ -85,7 +85,7 @@ def test_open_refuses_db_from_future_version(db_path: Path) -> None:
 def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
         rows = db.conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
@@ -97,7 +97,7 @@ def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) ->
         migrations = db.conn.execute(
             "SELECT version, filename, applied_at FROM schema_migrations ORDER BY version",
         ).fetchall()
-        assert len(migrations) == 6
+        assert len(migrations) == 7
         assert migrations[0][0] == 1
         assert migrations[0][1] == "0001_init.sql"
         assert migrations[1][0] == 2
@@ -110,6 +110,8 @@ def test_fresh_db_has_current_user_version_and_expected_tables(db_path: Path) ->
         assert migrations[4][1] == "0005_fk_child_indexes.sql"
         assert migrations[5][0] == 6
         assert migrations[5][1] == "0006_message_positions.sql"
+        assert migrations[6][0] == 7
+        assert migrations[6][1] == "0007_session_entrypoint.sql"
         # Parses as ISO-8601:
         for migration in migrations:
             datetime.fromisoformat(migration[2])
@@ -145,7 +147,7 @@ def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
     # Now open via Database — that triggers migrate() and applies 0002 through 0006.
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 7
 
         # 0002 added the guard_decisions tables.
         rows = db.conn.execute(
@@ -177,6 +179,7 @@ def test_upgrade_v1_to_v2_preserves_data(db_path: Path) -> None:
             (4, "0004_guard_decisions_lockdown.sql"),
             (5, "0005_fk_child_indexes.sql"),
             (6, "0006_message_positions.sql"),
+            (7, "0007_session_entrypoint.sql"),
         ]
 
 
@@ -190,7 +193,7 @@ def test_reopen_does_not_rerun_migration(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
         rows = db.conn.execute("SELECT count(*) FROM schema_migrations").fetchone()
-        assert rows[0] == 6
+        assert rows[0] == 7
         second = db.conn.execute(
             "SELECT applied_at FROM schema_migrations WHERE version = 1",
         ).fetchone()[0]
@@ -231,14 +234,14 @@ def test_repair_heals_v2_db_missing_guard_decisions(db_path: Path) -> None:
 
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 7
         names = {r[0] for r in db.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         assert "guard_decisions" in names
         assert "guard_decisions_fts" in names
         versions = [
             r[0] for r in db.conn.execute("SELECT version FROM schema_migrations ORDER BY version")
         ]
-        assert versions == [1, 2, 3, 4, 5, 6]
+        assert versions == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_upgrade_v3_to_v4_accepts_lockdown_and_keeps_rows(db_path: Path) -> None:
@@ -282,7 +285,7 @@ def test_upgrade_v3_to_v4_accepts_lockdown_and_keeps_rows(db_path: Path) -> None
 
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 7
         db.conn.execute(decision, (2, "lockdown", now, "lockdown decision"))
         db.conn.commit()
         modes = [r[0] for r in db.conn.execute("SELECT mode FROM guard_decisions ORDER BY line_no")]
@@ -355,7 +358,7 @@ def test_upgrade_v5_to_v6_backfills_positions_without_touching_messages(db_path:
 
     with Database(db_path) as db:
         assert db.conn is not None
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 7
         positions = "SELECT message_id, position FROM message_positions"
         stored = dict(db.conn.execute(positions))
         assert stored == {"a2": 1, "a1": 2, "a3": 3, "a4": 4, "a9": 5, "a5": 6, "b1": 1, "b2": 2}

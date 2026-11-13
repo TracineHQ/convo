@@ -699,6 +699,7 @@ def test_inspect_timeline_json_emits_envelope(capsys: pytest.CaptureFixture[str]
         "project_path": "/work/foo",
         "model": "claude-opus-4-7",
         "git_branch": "main",
+        "entrypoint": None,
     }
     # Same header object as the normal view.
     assert inner["session"] == _inspect_json([_SID], capsys)["inspect"]["session"]

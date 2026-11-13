@@ -136,6 +136,8 @@ class TestStatsSessions:
     def test_seconds_per_day_first_param(self, mocker: MockerFixture) -> None:
         # Patch open_ro so we drive a stub Connection without touching the DB.
         conn, mock = _stub_conn(mocker)
+        # `PRAGMA user_version` reads 0: no entrypoint column, so no SDK filter.
+        mock.execute.return_value.fetchone.return_value = (0,)
         mocker.patch.object(stats_sessions_mod, "open_ro", return_value=conn)
         # Pass a dummy db; only its `path` attribute is read by open_ro (which we stubbed).
         db = mocker.MagicMock()
@@ -147,6 +149,7 @@ class TestStatsSessions:
 
     def test_with_filters_appends_after_seconds(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
+        mock.execute.return_value.fetchone.return_value = (0,)
         mocker.patch.object(stats_sessions_mod, "open_ro", return_value=conn)
         # since_iso() with None returns None; pass project to verify ordering.
         db = mocker.MagicMock()

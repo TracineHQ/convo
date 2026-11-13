@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso
+from convo.read.filters import interactive_files, interactive_sessions, since_iso
 
 if TYPE_CHECKING:
     import sqlite3
@@ -42,37 +42,46 @@ def stats_files(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
 ) -> FilesReport:
     """Aggregate source_files row counts, sizes, and top-N by message_count.
 
     `since` filters by `sessions.started_at` of the file's owning session(s).
     `project` filters by `sessions.project_path`. When either filter is set, we
-    scope to source_files joined through sessions.
+    scope to source_files joined through sessions. Transcripts of SDK sessions
+    are left out unless `include_sdk`.
     """
     cutoff = since_iso(since)
     ro = open_ro(db.path)
     try:
         if cutoff is None and project is None:
-            return _unfiltered(ro)
-        return _filtered(ro, cutoff=cutoff, project=project)
+            return _unfiltered(ro, interactive_files(ro, include_sdk=include_sdk))
+        return _filtered(
+            ro,
+            cutoff=cutoff,
+            project=project,
+            sdk_clause=interactive_sessions(ro, "s.id", include_sdk=include_sdk),
+        )
     finally:
         ro.close()
 
 
-def _unfiltered(conn: sqlite3.Connection) -> FilesReport:
+def _unfiltered(conn: sqlite3.Connection, sdk_clause: str | None = None) -> FilesReport:
+    scope = "" if sdk_clause is None else f" WHERE {sdk_clause}"
     row = conn.execute(
         "SELECT COUNT(*) AS n, "
         "COALESCE(SUM(size), 0) AS sz, "
         "COALESCE(SUM(message_count), 0) AS mc "
-        "FROM source_files"
+        "FROM source_files" + scope
     ).fetchone()
     total_files = int(row["n"]) if row is not None else 0
     total_size = int(row["sz"]) if row is not None else 0
     total_msgs = int(row["mc"]) if row is not None else 0
 
+    # `scope` is empty or the fixed `interactive_files` fragment.
+    top_sql = "SELECT path, message_count, size FROM source_files" + scope  # noqa: S608
     top_rows = conn.execute(
-        "SELECT path, message_count, size FROM source_files "
-        "ORDER BY message_count DESC, path LIMIT ?",
+        top_sql + " ORDER BY message_count DESC, path LIMIT ?",
         (_TOP_LIMIT,),
     ).fetchall()
     top = tuple(
@@ -91,7 +100,13 @@ def _unfiltered(conn: sqlite3.Connection) -> FilesReport:
     )
 
 
-def _filtered(conn: sqlite3.Connection, *, cutoff: str | None, project: str | None) -> FilesReport:
+def _filtered(
+    conn: sqlite3.Connection,
+    *,
+    cutoff: str | None,
+    project: str | None,
+    sdk_clause: str | None = None,
+) -> FilesReport:
     where: list[str] = []
     params: list[object] = []
     if cutoff is not None:
@@ -100,6 +115,8 @@ def _filtered(conn: sqlite3.Connection, *, cutoff: str | None, project: str | No
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    if sdk_clause is not None:
+        where.append(sdk_clause)
     where_sql = " WHERE " + " AND ".join(where)
 
     # DISTINCT source_files rows whose sessions match the filter.

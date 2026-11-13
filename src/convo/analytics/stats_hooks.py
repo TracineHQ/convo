@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso
+from convo.read.filters import interactive_sessions, since_iso
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -47,8 +47,12 @@ def stats_hooks(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
 ) -> HooksReport:
-    """Compute guard decision aggregates over the indexed log."""
+    """Compute guard decision aggregates over the indexed log.
+
+    Decisions logged in SDK sessions are left out unless `include_sdk`.
+    """
     db_path = db.path
     where_parts: list[str] = []
     params: list[object] = []
@@ -58,12 +62,15 @@ def stats_hooks(
     if project is not None:
         where_parts.append("cwd = ?")
         params.append(project)
-    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
     # WHERE clause is composed from a fixed allow-list of fragments
-    # (`timestamp >= ?`, `cwd = ?`); all user-supplied values are bound via
-    # `?` placeholders. Same pattern used by other stats_*.py modules.
+    # (`timestamp >= ?`, `cwd = ?`, the SDK filter); all user-supplied values
+    # are bound via `?` placeholders. Same pattern used by other stats_*.py modules.
     with open_ro(db_path) as conn:
+        sdk = interactive_sessions(conn, "session_id", include_sdk=include_sdk)
+        if sdk is not None:
+            where_parts.append(sdk)
+        where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         total = conn.execute(
             f"SELECT COUNT(*) FROM guard_decisions {where}",  # noqa: S608
             params,

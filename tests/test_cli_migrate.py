@@ -158,9 +158,10 @@ def test_migrate_v5_to_v6_numbers_existing_messages(
     db_path = _db_at(tmp_path / "convo.db", 5)
     assert main(["--db", str(db_path), "migrate", "--json"]) == 0
     body = json.loads(capsys.readouterr().out)["migrate"]
-    assert (body["from_version"], body["to_version"]) == (5, 6)
+    assert (body["from_version"], body["to_version"]) == (5, SCHEMA_VERSION)
     assert [(m["version"], m["filename"]) for m in body["applied"]] == [
         (6, "0006_message_positions.sql"),
+        (7, "0007_session_entrypoint.sql"),
     ]
     conn = sqlite3.connect(db_path)
     try:

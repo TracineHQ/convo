@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from convo.analytics._constants import SECONDS_PER_DAY
 from convo.read._db_access import open_ro
+from convo.read.filters import interactive_sessions
 
 if TYPE_CHECKING:
     import sqlite3
@@ -88,6 +89,7 @@ class DiffReport:
     current: WindowSnapshot
     previous: WindowSnapshot
     deltas: DeltaReport
+    include_sdk: bool = False
 
 
 def compute_diff(
@@ -95,8 +97,12 @@ def compute_diff(
     *,
     span: timedelta = _DEFAULT_SPAN,
     project: str | None = None,
+    include_sdk: bool = False,
 ) -> DiffReport:
-    """Run the stats aggregations over [now-span, now) and [now-2*span, now-span)."""
+    """Run the stats aggregations over [now-span, now) and [now-2*span, now-span).
+
+    SDK sessions are left out of every metric unless `include_sdk`.
+    """
     if span.total_seconds() <= 0:
         msg = f"diff span must be positive, got {span!r}"
         raise ValueError(msg)
@@ -105,8 +111,9 @@ def compute_diff(
     prev_lower = now - 2 * span
     ro = open_ro(db.path)
     try:
-        current = _window(ro, lower=cur_lower, upper=now, project=project)
-        previous = _window(ro, lower=prev_lower, upper=cur_lower, project=project)
+        sdk = _SdkClauses.build(ro, include_sdk=include_sdk)
+        current = _window(ro, lower=cur_lower, upper=now, project=project, sdk=sdk)
+        previous = _window(ro, lower=prev_lower, upper=cur_lower, project=project, sdk=sdk)
     finally:
         ro.close()
     deltas = _compute_deltas(current=current, previous=previous)
@@ -116,7 +123,31 @@ def compute_diff(
         current=current,
         previous=previous,
         deltas=deltas,
+        include_sdk=include_sdk,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _SdkClauses:
+    """The `interactive_sessions` fragment for each session-id column diff queries use.
+
+    All None when SDK sessions are included (or the DB predates entrypoints).
+    """
+
+    sessions: str | None = None
+    """For bare `FROM sessions` queries."""
+    aliased: str | None = None
+    """For queries that join `sessions s`."""
+    tool_calls: str | None = None
+    """For `FROM tool_calls tc` queries, which may not join sessions."""
+
+    @classmethod
+    def build(cls, conn: sqlite3.Connection, *, include_sdk: bool) -> _SdkClauses:
+        return cls(
+            sessions=interactive_sessions(conn, "id", include_sdk=include_sdk),
+            aliased=interactive_sessions(conn, "s.id", include_sdk=include_sdk),
+            tool_calls=interactive_sessions(conn, "tc.session_id", include_sdk=include_sdk),
+        )
 
 
 # --------------------------------------------------------------------------- window
@@ -128,33 +159,45 @@ def _window(
     lower: datetime,
     upper: datetime,
     project: str | None,
+    sdk: _SdkClauses | None = None,
 ) -> WindowSnapshot:
     lower_iso = _format_iso(lower)
     upper_iso = _format_iso(upper)
+    sdk = sdk or _SdkClauses()
+    bounds = (conn, lower_iso, upper_iso, project)
     return WindowSnapshot(
         lower=lower_iso,
         upper=upper_iso,
-        tool_calls_total=_tool_calls_total(conn, lower_iso, upper_iso, project),
-        tool_calls_by_name=_tool_calls_by_name(conn, lower_iso, upper_iso, project),
-        commands_total=_commands_total(conn, lower_iso, upper_iso, project),
-        commands_top=_commands_top(conn, lower_iso, upper_iso, project),
-        sessions_count=_sessions_count(conn, lower_iso, upper_iso, project),
-        sessions_median_seconds=_sessions_median(conn, lower_iso, upper_iso, project),
-        sessions_p95_seconds=_sessions_p95(conn, lower_iso, upper_iso, project),
-        files_count=_files_count(conn, lower_iso, upper_iso, project),
-        model_histogram=_model_histogram(conn, lower_iso, upper_iso, project),
+        tool_calls_total=_tool_calls_total(*bounds, sdk.tool_calls),
+        tool_calls_by_name=_tool_calls_by_name(*bounds, sdk.tool_calls),
+        commands_total=_commands_total(*bounds, sdk.aliased),
+        commands_top=_commands_top(*bounds, sdk.aliased),
+        sessions_count=_sessions_count(*bounds, sdk.sessions),
+        sessions_median_seconds=_sessions_median(*bounds, sdk.sessions),
+        sessions_p95_seconds=_sessions_p95(*bounds, sdk.sessions),
+        files_count=_files_count(*bounds, sdk.aliased),
+        model_histogram=_model_histogram(*bounds, sdk.sessions),
     )
+
+
+def _and_sdk(where: list[str], sdk: str | None) -> None:
+    """Append the SDK filter fragment to `where` when there is one."""
+    if sdk is not None:
+        where.append(sdk)
 
 
 # --------------------------------------------------------------------------- tool_calls
 
 
-def _tool_call_where(lower: str, upper: str, project: str | None) -> tuple[str, list[object], bool]:
+def _tool_call_where(
+    lower: str, upper: str, project: str | None, sdk: str | None = None
+) -> tuple[str, list[object], bool]:
     where = ["tc.started_at IS NOT NULL", "tc.started_at >= ?", "tc.started_at < ?"]
     params: list[object] = [lower, upper]
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    _and_sdk(where, sdk)
     return " WHERE " + " AND ".join(where), params, project is not None
 
 
@@ -165,17 +208,19 @@ def _tool_call_from(*, needs_join: bool) -> str:
     return base
 
 
-def _tool_calls_total(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
-    where_sql, params, needs_join = _tool_call_where(lower, upper, project)
+def _tool_calls_total(
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
+) -> int:
+    where_sql, params, needs_join = _tool_call_where(lower, upper, project, sdk)
     sql = f"SELECT COUNT(*) {_tool_call_from(needs_join=needs_join)}{where_sql}"
     row = conn.execute(sql, params).fetchone()
     return int(row[0]) if row is not None else 0
 
 
 def _tool_calls_by_name(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> dict[str, int]:
-    where_sql, params, needs_join = _tool_call_where(lower, upper, project)
+    where_sql, params, needs_join = _tool_call_where(lower, upper, project, sdk)
     sql = (
         f"SELECT tc.name AS name, COUNT(*) AS n "
         f"{_tool_call_from(needs_join=needs_join)}"
@@ -189,7 +234,7 @@ def _tool_calls_by_name(
 
 
 def _commands_query(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> list[str]:
     where = [
         "m.role = 'user'",
@@ -201,6 +246,7 @@ def _commands_query(
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    _and_sdk(where, sdk)
     where_sql = " AND ".join(where)
     base_sql = (
         "SELECT m.content AS content "
@@ -226,15 +272,17 @@ def _normalize_command(content: str) -> str:
     return collapsed
 
 
-def _commands_total(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
-    return len(_commands_query(conn, lower, upper, project))
+def _commands_total(
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
+) -> int:
+    return len(_commands_query(conn, lower, upper, project, sdk))
 
 
 def _commands_top(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for cmd in _commands_query(conn, lower, upper, project):
+    for cmd in _commands_query(conn, lower, upper, project, sdk):
         counts[cmd] = counts.get(cmd, 0) + 1
     items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     return dict(items[:_COMMANDS_TOP_LIMIT])
@@ -244,13 +292,14 @@ def _commands_top(
 
 
 def _sessions_durations(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> list[float]:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
+    _and_sdk(where, sdk)
     where_sql = " AND ".join(where)
     base_sql = (
         "SELECT (julianday(ended_at) - julianday(started_at)) * ? "
@@ -262,12 +311,15 @@ def _sessions_durations(
     return [float(r["duration_s"]) for r in rows if r["duration_s"] is not None]
 
 
-def _sessions_count(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
+def _sessions_count(
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
+) -> int:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
+    _and_sdk(where, sdk)
     base_sql = "SELECT COUNT(*) FROM sessions WHERE "
     sql = base_sql + " AND ".join(where)  # WHERE from fixed allow-list; binds parameterized.
     row = conn.execute(sql, params).fetchone()
@@ -275,18 +327,18 @@ def _sessions_count(conn: sqlite3.Connection, lower: str, upper: str, project: s
 
 
 def _sessions_median(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> float | None:
-    durations = _sessions_durations(conn, lower, upper, project)
+    durations = _sessions_durations(conn, lower, upper, project, sdk)
     if not durations:
         return None
     return float(statistics.median(durations))
 
 
 def _sessions_p95(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> float | None:
-    durations = _sessions_durations(conn, lower, upper, project)
+    durations = _sessions_durations(conn, lower, upper, project, sdk)
     if len(durations) < _MIN_QUANTILE_SAMPLES:
         return None
     cuts = statistics.quantiles(durations, n=_QUANTILE_BUCKETS, method="exclusive")
@@ -296,13 +348,16 @@ def _sessions_p95(
 # --------------------------------------------------------------------------- files
 
 
-def _files_count(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
+def _files_count(
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
+) -> int:
     """Count distinct source_files whose owning sessions started in the window."""
     where = ["s.started_at IS NOT NULL", "s.started_at >= ?", "s.started_at < ?"]
     params: list[object] = [lower, upper]
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    _and_sdk(where, sdk)
     where_sql = " AND ".join(where)
     base_sql = (
         "SELECT COUNT(DISTINCT sf.id) FROM source_files sf "
@@ -317,13 +372,14 @@ def _files_count(conn: sqlite3.Connection, lower: str, upper: str, project: str 
 
 
 def _model_histogram(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, sdk: str | None = None
 ) -> dict[str, int]:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
+    _and_sdk(where, sdk)
     where_sql = " AND ".join(where)
     base_sql = "SELECT model, COUNT(*) AS n FROM sessions WHERE "
     suffix = " GROUP BY model ORDER BY n DESC, model"

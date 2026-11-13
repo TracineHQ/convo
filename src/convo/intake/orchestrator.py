@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from convo.intake.entrypoint import INFERRED_SDK_ENTRYPOINT, session_entrypoint
 from convo.intake.mapper import INSERT_SQL, map_record
 from convo.intake.parser import IntakeParseError, parse_file
 from convo.intake.positions import assign_positions
@@ -40,8 +41,14 @@ _INSERT_SOURCE_FILE = (
 )
 _INSERT_SESSION = (
     "INSERT OR IGNORE INTO sessions("
-    "id, source_file_id, project_path, started_at, ended_at, model, git_branch, git_commit"
-    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "id, source_file_id, project_path, started_at, ended_at, model, git_branch, git_commit, "
+    "entrypoint"
+    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+)
+# A session another transcript created keeps its row (INSERT OR IGNORE), but
+# takes this file's entrypoint when it has none or only the heuristic tag.
+_FILL_ENTRYPOINT = (
+    "UPDATE sessions SET entrypoint = ? WHERE id = ? AND (entrypoint IS NULL OR entrypoint = ?)"
 )
 _UPDATE_SOURCE_FILE = "UPDATE source_files SET last_indexed_at = ?, message_count = ? WHERE id = ?"
 _SESSION_OWNER = "SELECT source_file_id FROM sessions WHERE id = ?"
@@ -239,6 +246,7 @@ def _persist(
     source_file_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
 
     started_at, ended_at, model, project_path, git_branch = _session_metadata(records)
+    entrypoint = session_entrypoint(getattr(rec, "raw", None) for rec in records)
     conn.execute(
         _INSERT_SESSION,
         (
@@ -250,8 +258,11 @@ def _persist(
             model,
             git_branch,
             None,
+            entrypoint,
         ),
     )
+    if entrypoint is not None:
+        conn.execute(_FILL_ENTRYPOINT, (entrypoint, sig.session_id, INFERRED_SDK_ENTRYPOINT))
 
     batches = _build_batches(records, session_id=sig.session_id, source_file_id=source_file_id)
     for table, rows in batches.items():

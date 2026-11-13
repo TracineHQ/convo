@@ -28,6 +28,7 @@ class SummaryReport:
     sessions: SessionsReport
     files: FilesReport
     model: ModelReport
+    include_sdk: bool = False
 
 
 def gather_summary(
@@ -35,16 +36,21 @@ def gather_summary(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
 ) -> SummaryReport:
-    """Compose the five `stats_*` families into a single SummaryReport."""
-    tools = stats_tools(db, since=since, project=project)
-    commands = stats_commands(db, since=since, project=project)
-    sessions = stats_sessions(db, since=since, project=project)
-    files = stats_files(db, since=since, project=project)
-    model = stats_model(db, since=since, project=project)
+    """Compose the five `stats_*` families into a single SummaryReport.
+
+    SDK sessions are left out of every family unless `include_sdk`.
+    """
+    tools = stats_tools(db, since=since, project=project, include_sdk=include_sdk)
+    commands = stats_commands(db, since=since, project=project, include_sdk=include_sdk)
+    sessions = stats_sessions(db, since=since, project=project, include_sdk=include_sdk)
+    files = stats_files(db, since=since, project=project, include_sdk=include_sdk)
+    model = stats_model(db, since=since, project=project, include_sdk=include_sdk)
     return SummaryReport(
         since=since,
         project=project,
+        include_sdk=include_sdk,
         tools=tools,
         commands=commands,
         sessions=sessions,

@@ -128,7 +128,7 @@ CREATE TABLE sessions (
     model           TEXT,
     git_branch      TEXT,
     git_commit      TEXT
-) STRICT;
+, entrypoint TEXT) STRICT;
 
 -- table source_files
 CREATE TABLE "source_files" (

@@ -113,6 +113,15 @@ convo search "kafka migration" --project /Users/dev/develop/web-billing-service 
 
 The `--project` filter accepts an absolute path prefix.
 
+## SDK sessions are left out by default
+
+`search`, `stats`, `summary`, `diff` and `sessions` count only interactive
+sessions. Headless `claude -p` runs and Agent SDK jobs (entrypoint `sdk-cli`,
+`sdk-py`, `sdk-ts`, or `sdk-inferred` from `convo tag-sdk`) are skipped. Add
+`--include-sdk` when the user asks about a pipeline, a scripted run or an
+agent job, or when a search they expect to hit comes back empty.
+`search --session ID` always searches that session.
+
 ## JSON output (when needed)
 
 Add `--json` to get machine-parseable output. `search`, `projects`, `tools`

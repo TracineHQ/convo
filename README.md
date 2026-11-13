@@ -88,8 +88,8 @@ gracefully if `convo` isn't on `PATH`.
   deltas. Defaults to 7 days.
 - `/convo:inspect <session-id-prefix | --latest>` -- full message timeline for
   one session.
-- `/convo:stats` -- tool-call frequency and error rates across all indexed
-  sessions.
+- `/convo:stats` -- tool-call frequency and error rates across indexed
+  interactive sessions (SDK runs are left out; see below).
 - `/convo:info` -- DB overview (row counts, last index time, top projects,
   snapshots).
 - `/convo:projects` -- list indexed projects with session counts.
@@ -147,6 +147,17 @@ Every command takes the global `--db PATH` before the command name
 (`convo --db ./work.db info`). It beats `CONVO_DB`; a relative path resolves
 against the current directory.
 
+**SDK sessions are left out by default.** Claude Code records how each
+session started: `cli` for an interactive session, `sdk-cli` for headless
+`claude -p`, `sdk-py` / `sdk-ts` for the Agent SDKs. Programmatic runs can
+outnumber your own sessions by orders of magnitude, so `search`, `stats`,
+`summary`, `diff` and `sessions` count only interactive sessions: `cli`, plus
+sessions whose entrypoint is unknown (transcripts from before Claude Code
+wrote it). Pass `--include-sdk` to count everything. `inspect` and `sessions`
+show each session's entrypoint, and `search --session ID` searches the named
+session whatever it is. On a DB older than schema 7, nothing is filtered and
+the read commands say so on stderr until you run `convo migrate`.
+
 - `convo index [--full] [--projects-dir PATH] [--session ID] [--dry-run]
   [--json]` -- walk `~/.claude/projects/<slug>/*.jsonl`, most recently
   modified first, and populate the database. Idempotent: skips files whose
@@ -171,8 +182,8 @@ against the current directory.
   time, top 5 projects by session count, snapshot directory size.
 - `convo search "<query>" [--since SPAN] [--project P] [--session ID]
   [--tool T] [--tool-exact] [--limit N] [--excerpt-chars N] [--fields LIST]
-  [--format prose|json]` -- FTS5 search over messages, tool calls, and tool
-  results.
+  [--include-sdk] [--format prose|json]` -- FTS5 search over messages, tool
+  calls, and tool results.
   - Terms are ANDed. Quote a `"phrase"`, put `OR` between terms, and prefix a
     term with `-` to exclude it.
   - `SPAN` is `7d` / `24h` / `90m` / `30s` / `2w` / `1y` or an ISO date.
@@ -207,19 +218,36 @@ against the current directory.
 - `convo restore <src>` -- atomic-swap restore from a snapshot file (snapshot is preserved)
 - `convo restore --latest` -- shorthand for restoring the newest snapshot in
   `$CONVO_BACKUP_DIR`.
-- `convo stats <family> [--since SPAN] [--project P] [--json]` -- analytics
-  families: `tools`, `commands`, `sessions`, `files`, `model`, `hooks`.
-- `convo summary [--since SPAN] [--project P] [--json]` -- composite of the
-  `tools`, `commands`, `sessions`, `files` and `model` families in one report.
-  `hooks` is not included; run `convo stats hooks` for it.
-- `convo diff [--since SPAN] [--project P] [--json]` -- current vs previous
-  window comparison with deltas. Default span 7d.
+- `convo stats <family> [--since SPAN] [--project P] [--include-sdk] [--json]`
+  -- analytics families: `tools`, `commands`, `sessions`, `files`, `model`,
+  `hooks`.
+- `convo summary [--since SPAN] [--project P] [--include-sdk] [--json]` --
+  composite of the `tools`, `commands`, `sessions`, `files` and `model`
+  families in one report. `hooks` is not included; run `convo stats hooks`
+  for it.
+- `convo diff [--since SPAN] [--project P] [--include-sdk] [--json]` --
+  current vs previous window comparison with deltas. Default span 7d.
 - `convo projects [--format prose|json]` -- list indexed projects with session
   counts and last-seen timestamps.
 - `convo tools [--format prose|json]` -- list tool names with total call
   counts and last-seen timestamps.
-- `convo sessions [--since SPAN] [--project P] [--limit N] [--format prose|json]`
-  -- list recent sessions with project, message count, and timestamps.
+- `convo sessions [--since SPAN] [--project P] [--limit N] [--include-sdk]
+  [--format prose|json]` -- list recent sessions with project, message count,
+  entrypoint, and timestamps.
+- `convo tag-sdk [--project P] [--max-messages N] [--min-shared N]
+  [--prefix-chars N] [--dry-run] [--json]` -- fill in entrypoints the index
+  could not record. First, a session with no entrypoint whose transcript is
+  still on disk takes the one in the file. Then, with `--project`, sessions in
+  that project whose transcript Claude Code has deleted are tagged
+  `sdk-inferred` when all of these hold: the entrypoint is unknown, the session
+  has at most `--max-messages` messages (default 10), its first prompt is
+  longer than `--prefix-chars` (default 12) and those first characters are
+  shared by at least `--min-shared` (default 20) such sessions, no `cli`
+  session in the project starts the same way, and the prompt is not a
+  slash-command wrapper. Rows are never deleted, and `--include-sdk` still
+  shows tagged sessions. `--dry-run` prints the counts, the matched templates
+  and sample session ids; without it, a snapshot is written first (as
+  `convo backup --auto`), so `convo restore --latest` undoes the tagging.
 
 `projects`, `tools` and `sessions` also accept `--json` as an alias for
 `--format json`. The JSON envelope shape for every command is documented in

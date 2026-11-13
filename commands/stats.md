@@ -11,7 +11,8 @@ Parses at `stats.*`. See `JSON-ENVELOPE.md` at the repo root for the
 contract.
 
 Print the `tools` stats family: call frequency and error rate per tool across
-all indexed sessions.
+indexed interactive sessions. SDK sessions (headless `claude -p`, Agent SDK
+runs) are left out; `convo stats tools --include-sdk` counts them.
 
 ```!
 convo stats tools

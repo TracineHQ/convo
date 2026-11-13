@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `convo tag-sdk [--project P] [--dry-run]` fills in session entrypoints the
+  index could not record: from transcripts still on disk, and, with
+  `--project`, by tagging templated pipeline runs whose transcript is gone as
+  `sdk-inferred` (at most `--max-messages` messages, a first-prompt prefix of
+  `--prefix-chars` shared by at least `--min-shared` sessions and by no `cli`
+  session). It snapshots the DB before writing and never deletes rows;
+  `--dry-run` prints counts, templates and sample session ids.
+- `--include-sdk` on `search`, `stats`, `summary`, `diff` and `sessions`.
+- `inspect` and `sessions` show each session's `entrypoint`, in prose and
+  JSON.
+
 ### Changed
+
+- `search`, `stats`, `summary`, `diff` and `sessions` leave SDK sessions out
+  by default: those whose entrypoint is `sdk-cli` (headless `claude -p`),
+  `sdk-py`, `sdk-ts` or `sdk-inferred`. Interactive (`cli`) sessions and
+  sessions with an unknown entrypoint still count; `--include-sdk` restores
+  the old totals. JSON bodies gain an `include_sdk` field (in `search`, under
+  `filters`); no field was renamed or removed. `search --session` searches the
+  named session either way.
+- Schema v7 (migration `0007_session_entrypoint.sql`) adds
+  `sessions.entrypoint`. `convo index` records the first `entrypoint` a
+  transcript carries. The migration backfills existing sessions from the
+  stored `messages.raw_json` (each session's first 20 messages), so it covers
+  sessions whose transcript Claude Code has since deleted. Until a DB
+  migrates, read commands count every session and say so on stderr.
 
 - Schema v6 (migration `0006_message_positions.sql`) stores each message's
   `position` in a new `message_positions` table. `convo index` fills it as it

@@ -12,7 +12,8 @@ passed. Parses at `search.hits[*]`. See `JSON-ENVELOPE.md` at the repo
 root for the contract.
 
 Run convo's full-text search over indexed session history and display the
-results verbatim.
+results verbatim. SDK sessions (headless `claude -p`, Agent SDK runs) are
+left out; `convo search "<query>" --include-sdk` searches them too.
 
 ```!
 convo search "$ARGUMENTS" --limit 20

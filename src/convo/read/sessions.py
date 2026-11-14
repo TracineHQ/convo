@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from convo.read._db_access import open_ro
-from convo.read.filters import has_entrypoint, interactive_sessions
+from convo.read.filters import has_entrypoint, interactive_sessions, top_level_sessions
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,20 +19,25 @@ class SessionRow:
     """How the session was started (`cli`, `sdk-cli`, `sdk-py`, ...); None if unknown."""
 
 
-def list_sessions(
+def list_sessions(  # noqa: PLR0913 -- keyword-only filters
     db_path: str,
     *,
     project: str | None = None,
     since_iso: str | None = None,
     limit: int = 50,
     include_sdk: bool = False,
+    include_subagents: bool = False,
 ) -> list[SessionRow]:
     """List sessions, optionally filtered by project + time, with msg counts.
 
-    SDK sessions are left out unless `include_sdk`.
+    SDK sessions are left out unless `include_sdk`, and subagent sessions
+    unless `include_subagents`.
     """
     conditions: list[str] = []
     params: list[object] = []
+
+    if not include_subagents:
+        conditions.append(top_level_sessions("s.id"))
 
     if project is not None:
         conditions.append("s.project_path = ?")

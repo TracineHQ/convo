@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import interactive_sessions, since_iso
+from convo.read.filters import interactive_sessions, since_iso, top_level_sessions
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -37,16 +37,20 @@ def stats_model(
     since: timedelta | None = None,
     project: str | None = None,
     include_sdk: bool = False,
+    include_subagents: bool = False,
 ) -> ModelReport:
     """Histogram of sessions per `sessions.model`. Null/empty rolled up separately.
 
-    SDK sessions are left out unless `include_sdk`.
+    SDK sessions are left out unless `include_sdk`, and subagent sessions
+    unless `include_subagents`.
     """
     cutoff = since_iso(since)
     ro = open_ro(db.path)
     try:
         where: list[str] = []
         params: list[object] = []
+        if not include_subagents:
+            where.append(top_level_sessions())
         if cutoff is not None:
             where.append("started_at IS NOT NULL AND started_at >= ?")
             params.append(cutoff)

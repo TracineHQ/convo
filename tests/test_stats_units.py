@@ -169,6 +169,7 @@ class TestSessionsDurations:
         diff._sessions_durations(conn, "2024-01-01T00:00:00.000Z", "2024-01-08T00:00:00.000Z", None)
         sql, params = mock.execute.call_args.args
         assert "* ?" in sql
+        assert "NOT LIKE" not in sql
         assert params[0] == SECONDS_PER_DAY
         # Then lower, upper.
         assert params[1] == "2024-01-01T00:00:00.000Z"
@@ -182,6 +183,24 @@ class TestSessionsDurations:
         _, params = mock.execute.call_args.args
         assert params[0] == SECONDS_PER_DAY
         assert params[-1] == "/proj/x"
+
+    def test_leaves_subagent_sessions_out_unless_included(self, mocker: MockerFixture) -> None:
+        conn, mock = _stub_conn(mocker)
+        # `PRAGMA user_version` reads 0: no entrypoint column, so no SDK filter.
+        mock.execute.return_value.fetchone.return_value = (0,)
+        scope = diff._Scope.build(conn, include_sdk=False, include_subagents=False)
+        diff._sessions_durations(
+            conn,
+            "2024-01-01T00:00:00.000Z",
+            "2024-01-08T00:00:00.000Z",
+            None,
+            scope.sessions,
+        )
+        sql, params = mock.execute.call_args.args
+        assert "id NOT LIKE '%.%'" in sql
+        # The exclusion is literal SQL, so it adds no bind parameter.
+        assert len(params) == 3
+        assert diff._Scope.build(conn, include_sdk=False, include_subagents=True).sessions is None
 
 
 # ---- diff._tool_calls_total

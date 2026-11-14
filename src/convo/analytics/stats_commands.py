@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import interactive_sessions, since_iso
+from convo.read.filters import interactive_sessions, since_iso, top_level_sessions
 
 if TYPE_CHECKING:
     import sqlite3
@@ -48,14 +48,23 @@ def stats_commands(
     since: timedelta | None = None,
     project: str | None = None,
     include_sdk: bool = False,
+    include_subagents: bool = False,
 ) -> CommandsReport:
     """Return the top-N first-user-message commands.
 
-    SDK sessions are left out unless `include_sdk`.
+    SDK sessions are left out unless `include_sdk`. A subagent session's first
+    user message is the prompt its parent handed it, not a command, so those
+    sessions are left out unless `include_subagents`.
     """
     ro = open_ro(db.path)
     try:
-        rows = _first_messages(ro, since=since, project=project, include_sdk=include_sdk)
+        rows = _first_messages(
+            ro,
+            since=since,
+            project=project,
+            include_sdk=include_sdk,
+            include_subagents=include_subagents,
+        )
     finally:
         ro.close()
 
@@ -77,10 +86,13 @@ def _first_messages(
     since: timedelta | None,
     project: str | None,
     include_sdk: bool,
+    include_subagents: bool,
 ) -> list[sqlite3.Row]:
     cutoff = since_iso(since)
     where: list[str] = ["m.role = 'user'"]
     params: list[object] = []
+    if not include_subagents:
+        where.append(top_level_sessions("s.id"))
     if cutoff is not None:
         where.append("m.timestamp IS NOT NULL AND m.timestamp >= ?")
         params.append(cutoff)

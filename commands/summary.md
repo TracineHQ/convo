@@ -1,6 +1,6 @@
 ---
 description: Activity dashboard for the last 7 days (tools, commands, sessions, files, model).
-argument-hint: "[--since SPAN] [--include-sdk]"
+argument-hint: "[--since SPAN] [--include-sdk] [--include-subagents]"
 allowed-tools: "Bash(convo summary *)"
 disable-model-invocation: true
 ---
@@ -13,11 +13,13 @@ for the contract.
 
 Print convo's activity rollup. Defaults to the last 7 days; pass
 `--since 30d` (or any `<N><unit>` span) to widen the window. SDK sessions
-(headless `claude -p`, Agent SDK runs) are left out; pass `--include-sdk` to
-count them.
+(headless `claude -p`, Agent SDK runs) and their subagents are left out; pass
+`--include-sdk` to count them. Session and file counts leave subagents out
+unless you pass `--include-subagents`; tool-call totals always include
+subagent work.
 
 ```!
-convo summary ${ARGUMENTS:---since 7d}
+convo summary --since 7d ${ARGUMENTS}
 ```
 
 Display the output above to the user verbatim.

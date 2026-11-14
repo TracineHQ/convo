@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from convo.db import ENTRYPOINT_SCHEMA_VERSION
 from convo.intake.entrypoint import SDK_ENTRYPOINT_PREFIX
+from convo.intake.subagents import SUBAGENT_SESSION_LIKE
 
 if TYPE_CHECKING:
     import sqlite3
@@ -90,10 +91,17 @@ def since_iso(since: timedelta | None) -> str | None:
 
 # Sessions whose entrypoint marks a programmatic run (see convo.intake.entrypoint).
 # These fragments are spliced into callers' WHERE clauses, so they can't take
-# bind parameters; the only interpolated value is the module constant.
+# bind parameters; the only interpolated values are module constants.
 _SDK_LIKE = f"entrypoint LIKE '{SDK_ENTRYPOINT_PREFIX}%'"
-_SDK_SESSION_IDS = "SELECT id FROM sessions WHERE " + _SDK_LIKE  # noqa: S608
-_SDK_FILE_IDS = "SELECT source_file_id FROM sessions WHERE " + _SDK_LIKE  # noqa: S608
+_SDK_ROOT_IDS = "SELECT id FROM sessions WHERE " + _SDK_LIKE  # noqa: S608
+# A subagent session (`<agent>.<parent>`, see convo.intake.subagents) belongs
+# to its parent: it is SDK when the parent is, whatever its own lines say.
+_SDK_SESSION_IDS = (
+    f"{_SDK_ROOT_IDS} UNION SELECT id FROM sessions "  # noqa: S608
+    f"WHERE id LIKE '{SUBAGENT_SESSION_LIKE}' "
+    f"AND substr(id, instr(id, '.') + 1) IN ({_SDK_ROOT_IDS})"
+)
+_SDK_FILE_IDS = f"SELECT source_file_id FROM sessions WHERE id IN ({_SDK_SESSION_IDS})"  # noqa: S608
 
 
 def has_entrypoint(conn: sqlite3.Connection) -> bool:
@@ -113,8 +121,9 @@ def interactive_sessions(
     `session_col` names the column holding a session id in the caller's query
     (`id` on `sessions`, `s.id`, `tc.session_id`, ...); it must be a fixed
     identifier, never user input. A session counts as SDK when its entrypoint
-    starts with `sdk-`; NULL (unknown) and `cli` are kept. On a DB older than
-    migration 0007 there is no entrypoint to filter on, so every row is kept.
+    starts with `sdk-`, and a subagent session counts as SDK when its parent
+    does; NULL (unknown) and `cli` are kept. On a DB older than migration 0007
+    there is no entrypoint to filter on, so every row is kept.
     """
     if include_sdk or not has_entrypoint(conn):
         return None
@@ -129,18 +138,32 @@ def interactive_files(
 ) -> str | None:
     """Like `interactive_sessions`, keyed on a `source_files.id` column.
 
-    Drops the transcripts that created an SDK session.
+    Drops the transcripts that created an SDK session, its subagents' included.
     """
     if include_sdk or not has_entrypoint(conn):
         return None
     return f"{file_col} NOT IN ({_SDK_FILE_IDS})"
 
 
+def top_level_sessions(column: str = "id") -> str:
+    """SQL condition keeping top-level sessions, given the `sessions.id` column to test.
+
+    Subagent sessions (see `convo.intake.subagents`) have a dot in their id.
+    Commands that count sessions apply this unless asked to include subagents.
+    """
+    return f"{column} NOT LIKE '{SUBAGENT_SESSION_LIKE}'"
+
+
 class ProjectResolveError(ValueError):
     """Raised when --project cannot be resolved unambiguously."""
 
 
-def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
+def resolve_project_path(
+    conn: sqlite3.Connection,
+    value: str,
+    *,
+    include_subagents: bool = False,
+) -> str:
     """Resolve a --project value to an exact project_path.
 
     Tries in order:
@@ -151,9 +174,15 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     Trailing path separators are ignored, so ``/x/eval-kit/`` names
     /x/eval-kit.
 
+    Only top-level sessions name projects unless `include_subagents`: a
+    subagent can run in its own worktree, and that path would otherwise make
+    a substring like `repo` ambiguous.
+
     Raises :class:`ProjectResolveError` if ambiguous (multiple matches)
     or if no candidates exist.
     """
+    scope = "" if include_subagents else " AND " + top_level_sessions()
+
     # Shell tab completion appends a separator. Left on, `/x/eval-kit/` misses
     # the exact and basename matches and the substring match picks
     # /x/eval-kit/python. A bare root ("/", "C:\") is kept for the exact match:
@@ -161,11 +190,9 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     name = value.rstrip("/\\") or value
 
     # 1. Exact match, as typed or without the trailing separator
+    exact_sql = "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?"
     for exact in dict.fromkeys((value, name)):
-        row = conn.execute(
-            "SELECT DISTINCT project_path FROM sessions WHERE project_path = ?",
-            (exact,),
-        ).fetchone()
+        row = conn.execute(exact_sql + scope, (exact,)).fetchone()
         if row is not None:
             return str(row[0])
 
@@ -173,16 +200,13 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
     # beats substring matches, so `eval-kit` picks /x/eval-kit over
     # /x/eval-kit/python. substr() is 1-indexed: the last len(value) + 1
     # characters start at length(path) - length(value).
-    candidates_basename = [
-        str(r[0])
-        for r in conn.execute(
-            "SELECT DISTINCT project_path FROM sessions "
-            "WHERE project_path IS NOT NULL "
-            "AND substr(project_path, length(project_path) - length(?)) "
-            "= ('/' || ?)",
-            (name, name),
-        )
-    ]
+    basename_sql = (
+        "SELECT DISTINCT project_path FROM sessions "
+        "WHERE project_path IS NOT NULL "
+        "AND substr(project_path, length(project_path) - length(?)) "
+        "= ('/' || ?)"
+    )
+    candidates_basename = [str(r[0]) for r in conn.execute(basename_sql + scope, (name, name))]
     if len(candidates_basename) == 1:
         return candidates_basename[0]
     if len(candidates_basename) > 1:
@@ -191,13 +215,8 @@ def resolve_project_path(conn: sqlite3.Connection, value: str) -> str:
         raise ProjectResolveError(msg)
 
     # 3. Substring match anywhere
-    candidates_substring = [
-        str(r[0])
-        for r in conn.execute(
-            "SELECT DISTINCT project_path FROM sessions WHERE project_path LIKE ?",
-            (f"%{name}%",),
-        )
-    ]
+    substring_sql = "SELECT DISTINCT project_path FROM sessions WHERE project_path LIKE ?"
+    candidates_substring = [str(r[0]) for r in conn.execute(substring_sql + scope, (f"%{name}%",))]
     if len(candidates_substring) == 1:
         return candidates_substring[0]
     if len(candidates_substring) > 1:

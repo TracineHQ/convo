@@ -399,6 +399,67 @@ def test_inspect_prose_prints_entrypoint(
     assert "entry     sdk-py" in capsys.readouterr().out
 
 
+# --------------------------------------------------------------------------- subagents
+
+# Subagent sessions (`<agent>.<parent>`) with no entrypoint of their own, so
+# only the parent can mark one SDK.
+_SDK_CHILD = "a1.s-sdk-py"
+_CLI_CHILD = "a2.s-cli"
+
+
+@pytest.fixture
+def subagent_db(mixed_db: Path) -> Path:
+    with Database(mixed_db) as db:
+        assert db.conn is not None
+        _seed(db.conn, _SDK_CHILD, None, 2)
+        _seed(db.conn, _CLI_CHILD, None, 2)
+        db.conn.commit()
+    return mixed_db
+
+
+def test_sdk_session_subagents_are_left_out_with_their_parent(
+    subagent_db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    kept = {*_INTERACTIVE, _CLI_CHILD}
+    every = {*_SESSIONS, _CLI_CHILD, _SDK_CHILD}
+
+    def stat(family: str, *extra: str) -> int:
+        body = _stats(subagent_db, family, capsys, "--include-subagents", *extra)
+        assert isinstance(body, dict)
+        return int(body["total"])
+
+    for family in ("sessions", "commands", "model", "files", "tools"):
+        assert stat(family) == len(kept), family
+        assert stat(family, "--include-sdk") == len(every), family
+    assert stat("files", "--project", _PROJECT) == len(kept)
+    # `stats tools` counts subagent work even without --include-subagents.
+    body = _stats(subagent_db, "tools", capsys)
+    assert isinstance(body, dict)
+    assert body["total"] == len(kept)
+
+    summary = _json(subagent_db, ["summary", "--json", "--include-subagents"], capsys)["summary"]
+    assert isinstance(summary, dict)
+    assert summary["sessions"]["total"] == len(kept)
+    assert summary["files"]["total"] == len(kept)
+    assert summary["tools"]["total"] == len(kept)
+
+    diff = _json(subagent_db, ["diff", "--json", "--include-subagents"], capsys)["diff"]
+    assert isinstance(diff, dict)
+    assert diff["current"]["sessions_count"] == len(kept)
+    assert diff["current"]["commands_total"] == len(kept)
+    assert diff["current"]["files_count"] == len(kept)
+    assert diff["current"]["tool_calls_total"] == len(kept)
+
+    search = _json(subagent_db, ["search", "needle", "--json", "--limit", "100"], capsys)
+    assert _hit_sessions(search["search"]) == kept
+    argv = ["search", "needle", "--json", "--limit", "100", "--include-sdk"]
+    assert _hit_sessions(_json(subagent_db, argv, capsys)["search"]) == every
+
+    listed = _json(subagent_db, ["sessions", "--json", "--include-subagents"], capsys)["sessions"]
+    assert isinstance(listed, dict)
+    assert {item["id"] for item in listed["items"]} == kept
+
+
 # --------------------------------------------------------------------------- old schema
 
 
@@ -433,6 +494,7 @@ def v6_db(db_path: Path) -> Path:
         ["summary", "--json"],
         ["diff", "--json"],
         ["search", "needle", "--json"],
+        ["sessions", "--json"],
     ],
     ids=lambda a: a[0],
 )

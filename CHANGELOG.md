@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Subagent transcripts are indexed. Claude Code writes them to
+  `<slug>/<session-id>/subagents/agent-<id>.jsonl` (and under
+  `subagents/workflows/<workflow>/`), where the `*/*.jsonl` walk never looked.
+  Each becomes a session of its own, linked to its parent by its id,
+  `<agent-id>.<parent-session-id>`, so no schema change or migration is
+  needed. The agent type and description from the `agent-<id>.meta.json`
+  beside it become a leading `system` message, so `convo search` finds a
+  subagent by what it was asked to do. The first `convo index` after upgrading
+  indexes every existing subagent transcript. On a history with many subagents
+  that takes minutes and grows the database a lot (it nearly doubled on one
+  large history), so run it when you can wait for it. Later runs skip
+  unchanged files as before.
+- `convo hook pre-compact` and a `PreCompact` entry in the plugin's hooks. A
+  session that runs for days never reaches `SessionEnd`, so its transcript
+  went stale. Now the session is indexed in the background just before Claude
+  Code compacts it. Unlike the `SessionEnd` run it does not queue behind
+  another convo writer (`convo index --session <id> --no-wait`): it logs that
+  it found one and exits, and a later compaction or the session's end covers
+  what accrued. With a CLI that predates the command the hook does nothing.
+
 ### Changed
 
 - Schema v6 (migration `0006_message_positions.sql`) stores each message's
@@ -24,6 +46,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   go back, make sure no convo process is running (including a hook's
   background run), downgrade, then copy the snapshot over `<CONVO_DB>` by
   hand and delete the `-wal` and `-shm` files beside it.
+- `convo index --session ID` also indexes `ID`'s subagent transcripts, and so
+  do the `SessionEnd` and `PreCompact` hooks.
+- Subagent sessions and their transcript files are left out of counts by
+  default, so a session that spawned forty helpers is still one session and one
+  file. `convo inspect --latest` skips them (the latest session is the one you
+  started), as do `convo sessions`, `convo projects`, the top projects in
+  `convo info`, and the session- and file-based parts of `stats` (`sessions`,
+  `commands`, `model`, `files`), `summary` and `diff` (session counts and
+  durations, first messages, models, files). A subagent session id is the one
+  containing a dot. `--project` resolves among top-level sessions, since a
+  subagent in its own worktree would make a substring like `repo` ambiguous.
+- `--include-subagents` on `sessions`, `projects`, `stats`, `summary` and
+  `diff` counts them too (and lets `--project` name a worktree only subagents
+  used). Tool-call totals ignore it and always include subagent work
+  (`stats tools`, `convo tools`, and those lines of `summary` and `diff`).
+  `stats hooks` reads the guard log, not sessions, so the flag does nothing
+  there. `convo info` `row_counts` stay the raw table counts.
 
 ### Fixed
 

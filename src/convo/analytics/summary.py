@@ -35,13 +35,19 @@ def gather_summary(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_subagents: bool = False,
 ) -> SummaryReport:
-    """Compose the five `stats_*` families into a single SummaryReport."""
+    """Compose the five `stats_*` families into a single SummaryReport.
+
+    Session counts (commands, sessions, model) and transcript files leave
+    subagents out unless `include_subagents`. Tool-call totals always include
+    subagent work.
+    """
     tools = stats_tools(db, since=since, project=project)
-    commands = stats_commands(db, since=since, project=project)
-    sessions = stats_sessions(db, since=since, project=project)
-    files = stats_files(db, since=since, project=project)
-    model = stats_model(db, since=since, project=project)
+    commands = stats_commands(db, since=since, project=project, include_subagents=include_subagents)
+    sessions = stats_sessions(db, since=since, project=project, include_subagents=include_subagents)
+    files = stats_files(db, since=since, project=project, include_subagents=include_subagents)
+    model = stats_model(db, since=since, project=project, include_subagents=include_subagents)
     return SummaryReport(
         since=since,
         project=project,

@@ -1,11 +1,11 @@
-"""Background half of `convo hook session-end`: index one session, stamping each log line.
+"""Background half of `convo hook session-end` / `pre-compact`: index one session.
 
 `convo hook session-end` starts `python -m convo.hook_worker <db> <session-id>`
-detached, with stdout and stderr appended to `<db>.hook.log`. This runs
-`convo --db <db> index --session <session-id>` with every line it prints
-prefixed by the UTC time and the session id, because runs for several
-sessions share that log and, when they queue on the writer lock, interleave
-in it.
+detached, with stdout and stderr appended to `<db>.hook.log`; `pre-compact`
+adds a trailing `--no-wait`. This runs `convo --db <db> index --session
+<session-id>` with every line it prints prefixed by the UTC time and the
+session id, because runs for several sessions share that log and, when they
+queue on the writer lock, interleave in it.
 """
 
 from __future__ import annotations
@@ -16,9 +16,11 @@ from datetime import UTC, datetime
 from typing import TextIO, override
 
 from convo import cli
+from convo.hook import NO_WAIT_ARG
 from convo.intake.orchestrator import is_valid_session_id
 
-_USAGE = "usage: python -m convo.hook_worker <db-path> <session-id>"
+_USAGE = "usage: python -m convo.hook_worker <db-path> <session-id> [--no-wait]"
+_POSITIONAL = 2  # <db-path> <session-id>
 
 
 class _StampedWriter(io.TextIOBase):
@@ -44,28 +46,39 @@ class _StampedWriter(io.TextIOBase):
         self._out.flush()
 
 
-def index_argv(db_path: str, session_id: str) -> list[str]:
+def index_argv(db_path: str, session_id: str, *, no_wait: bool = False) -> list[str]:
     """Return the `convo` argv for the session's index run.
 
     `--hook-run` keeps at most one run waiting for the writer lock (see
-    `convo.cli._hook_run_lock`). Like any `convo index`, it applies pending
-    migrations.
+    `convo.cli._hook_run_lock`). With `no_wait` the run uses `--no-wait`
+    instead and exits when another writer holds the lock. Like any
+    `convo index`, it applies pending migrations.
     """
-    return ["--db", db_path, "index", "--session", session_id, "--hook-run"]
+    mode = "--no-wait" if no_wait else "--hook-run"
+    return ["--db", db_path, "index", "--session", session_id, mode]
+
+
+def _parse_args(args: list[str]) -> tuple[str, str, bool] | None:
+    """Return `(db_path, session_id, no_wait)`, or None if `args` do not fit the usage."""
+    no_wait = args[_POSITIONAL:] == [NO_WAIT_ARG]
+    positional = args[:_POSITIONAL] if no_wait else args
+    if len(positional) != _POSITIONAL or not is_valid_session_id(positional[1]):
+        return None
+    return positional[0], positional[1], no_wait
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run the session's index with stamped output; return its exit code."""
-    args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2 or not is_valid_session_id(args[1]):  # noqa: PLR2004 - <db> <session-id>
+    parsed = _parse_args(sys.argv[1:] if argv is None else argv)
+    if parsed is None:
         sys.stderr.write(_USAGE + "\n")
         return 2
-    db_path, session_id = args
+    db_path, session_id, no_wait = parsed
     out, err = sys.stdout, sys.stderr
     sys.stdout = _StampedWriter(out, session_id)
     sys.stderr = _StampedWriter(err, session_id)
     try:
-        return cli.main(index_argv(db_path, session_id))
+        return cli.main(index_argv(db_path, session_id, no_wait=no_wait))
     finally:
         sys.stdout.flush()
         sys.stderr.flush()

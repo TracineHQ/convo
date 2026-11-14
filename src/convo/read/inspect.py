@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from convo.intake.subagents import SUBAGENT_SESSION_LIKE
 from convo.read._db_access import open_ro
 from convo.read.prose import TimelineEvent
 
@@ -152,14 +153,18 @@ def resolve_session_id(db: Database, prefix: str) -> str:
 def resolve_latest_session(db: Database) -> str:
     """Return the most recent session id by `started_at DESC`, NULLs last.
 
-    Raises ``RuntimeError("no sessions in DB")`` when the table is empty.
+    Subagent sessions are skipped: the latest session is the one a person
+    started, not one of its helpers. Raises ``RuntimeError("no sessions in DB")``
+    when the table has no other session.
     """
     ro = open_ro(db.path)
     try:
         # NULLs LAST: ORDER BY started_at IS NULL puts non-NULLs first, then
         # ORDER BY started_at DESC picks the newest among the timestamped rows.
         row = ro.execute(
-            "SELECT id FROM sessions ORDER BY (started_at IS NULL), started_at DESC LIMIT 1",
+            "SELECT id FROM sessions WHERE id NOT LIKE ? "
+            "ORDER BY (started_at IS NULL), started_at DESC LIMIT 1",
+            (SUBAGENT_SESSION_LIKE,),
         ).fetchone()
     finally:
         ro.close()

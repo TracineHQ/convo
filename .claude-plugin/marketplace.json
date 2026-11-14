@@ -10,7 +10,7 @@
     {
       "name": "convo",
       "version": "2.1.1",
-      "description": "Index Claude Code session JSONLs into local SQLite. Needs the convo CLI (pipx install tracine-convo). Auto-indexes after every session, adds /convo:search, /convo:summary, /convo:diff, /convo:inspect, /convo:stats, /convo:info, /convo:projects, /convo:tools, /convo:sessions, and a skill that lets Claude search your history when asked.",
+      "description": "Index Claude Code session JSONLs into local SQLite. Needs the convo CLI (pipx install tracine-convo). Auto-indexes after every session and before each compaction, adds /convo:search, /convo:summary, /convo:diff, /convo:inspect, /convo:stats, /convo:info, /convo:projects, /convo:tools, /convo:sessions, and a skill that lets Claude search your history when asked.",
       "author": { "name": "Anthony Ledesma", "url": "https://github.com/TracineHQ" },
       "source": "./",
       "category": "developer-tools",

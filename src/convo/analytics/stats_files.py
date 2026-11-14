@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from convo.intake.subagents import SUBAGENT_SESSION_LIKE
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso
+from convo.read.filters import since_iso, top_level_sessions
 
 if TYPE_CHECKING:
     import sqlite3
@@ -16,6 +17,13 @@ if TYPE_CHECKING:
 
 
 _TOP_LIMIT: int = 10
+# A subagent's transcript is a source file whose session has a dotted id. The
+# only interpolated value is the module constant `SUBAGENT_SESSION_LIKE`.
+_NO_SUBAGENT_FILES = (
+    " WHERE NOT EXISTS (SELECT 1 FROM sessions sub "  # noqa: S608
+    "WHERE sub.source_file_id = source_files.id "
+    f"AND sub.id LIKE '{SUBAGENT_SESSION_LIKE}')"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,39 +50,41 @@ def stats_files(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_subagents: bool = False,
 ) -> FilesReport:
     """Aggregate source_files row counts, sizes, and top-N by message_count.
 
     `since` filters by `sessions.started_at` of the file's owning session(s).
     `project` filters by `sessions.project_path`. When either filter is set, we
-    scope to source_files joined through sessions.
+    scope to source_files joined through sessions. Subagent transcripts are
+    source files too, and are left out unless `include_subagents`.
     """
     cutoff = since_iso(since)
     ro = open_ro(db.path)
     try:
         if cutoff is None and project is None:
-            return _unfiltered(ro)
-        return _filtered(ro, cutoff=cutoff, project=project)
+            return _unfiltered(ro, include_subagents=include_subagents)
+        return _filtered(ro, cutoff=cutoff, project=project, include_subagents=include_subagents)
     finally:
         ro.close()
 
 
-def _unfiltered(conn: sqlite3.Connection) -> FilesReport:
-    row = conn.execute(
+def _unfiltered(conn: sqlite3.Connection, *, include_subagents: bool) -> FilesReport:
+    scope = "" if include_subagents else _NO_SUBAGENT_FILES
+    base_aggregate = (
         "SELECT COUNT(*) AS n, "
         "COALESCE(SUM(size), 0) AS sz, "
         "COALESCE(SUM(message_count), 0) AS mc "
         "FROM source_files"
-    ).fetchone()
+    )
+    row = conn.execute(base_aggregate + scope).fetchone()
     total_files = int(row["n"]) if row is not None else 0
     total_size = int(row["sz"]) if row is not None else 0
     total_msgs = int(row["mc"]) if row is not None else 0
 
-    top_rows = conn.execute(
-        "SELECT path, message_count, size FROM source_files "
-        "ORDER BY message_count DESC, path LIMIT ?",
-        (_TOP_LIMIT,),
-    ).fetchall()
+    base_top = "SELECT path, message_count, size FROM source_files"
+    top_sql = base_top + scope + " ORDER BY message_count DESC, path LIMIT ?"
+    top_rows = conn.execute(top_sql, (_TOP_LIMIT,)).fetchall()
     top = tuple(
         FileActivity(
             path=str(r["path"]),
@@ -91,9 +101,17 @@ def _unfiltered(conn: sqlite3.Connection) -> FilesReport:
     )
 
 
-def _filtered(conn: sqlite3.Connection, *, cutoff: str | None, project: str | None) -> FilesReport:
+def _filtered(
+    conn: sqlite3.Connection,
+    *,
+    cutoff: str | None,
+    project: str | None,
+    include_subagents: bool,
+) -> FilesReport:
     where: list[str] = []
     params: list[object] = []
+    if not include_subagents:
+        where.append(top_level_sessions("s.id"))
     if cutoff is not None:
         where.append("s.started_at IS NOT NULL AND s.started_at >= ?")
         params.append(cutoff)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from convo.read._db_access import open_ro
+from convo.read.filters import top_level_sessions
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,10 +23,17 @@ def list_sessions(
     project: str | None = None,
     since_iso: str | None = None,
     limit: int = 50,
+    include_subagents: bool = False,
 ) -> list[SessionRow]:
-    """List sessions, optionally filtered by project + time, with msg counts."""
+    """List sessions, optionally filtered by project + time, with msg counts.
+
+    Subagent sessions are left out unless `include_subagents`.
+    """
     conditions: list[str] = []
     params: list[object] = []
+
+    if not include_subagents:
+        conditions.append(top_level_sessions("s.id"))
 
     if project is not None:
         conditions.append("s.project_path = ?")

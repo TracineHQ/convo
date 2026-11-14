@@ -136,6 +136,8 @@ class TestStatsSessions:
     def test_seconds_per_day_first_param(self, mocker: MockerFixture) -> None:
         # Patch open_ro so we drive a stub Connection without touching the DB.
         conn, mock = _stub_conn(mocker)
+        # `PRAGMA user_version` reads 0: no entrypoint column, so no SDK filter.
+        mock.execute.return_value.fetchone.return_value = (0,)
         mocker.patch.object(stats_sessions_mod, "open_ro", return_value=conn)
         # Pass a dummy db; only its `path` attribute is read by open_ro (which we stubbed).
         db = mocker.MagicMock()
@@ -147,6 +149,7 @@ class TestStatsSessions:
 
     def test_with_filters_appends_after_seconds(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
+        mock.execute.return_value.fetchone.return_value = (0,)
         mocker.patch.object(stats_sessions_mod, "open_ro", return_value=conn)
         # since_iso() with None returns None; pass project to verify ordering.
         db = mocker.MagicMock()
@@ -163,13 +166,7 @@ class TestStatsSessions:
 class TestSessionsDurations:
     def test_seconds_per_day_first_param(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
-        diff._sessions_durations(
-            conn,
-            "2024-01-01T00:00:00.000Z",
-            "2024-01-08T00:00:00.000Z",
-            None,
-            include_subagents=True,
-        )
+        diff._sessions_durations(conn, "2024-01-01T00:00:00.000Z", "2024-01-08T00:00:00.000Z", None)
         sql, params = mock.execute.call_args.args
         assert "* ?" in sql
         assert "NOT LIKE" not in sql
@@ -181,11 +178,7 @@ class TestSessionsDurations:
     def test_with_project_appends_param(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
         diff._sessions_durations(
-            conn,
-            "2024-01-01T00:00:00.000Z",
-            "2024-01-08T00:00:00.000Z",
-            "/proj/x",
-            include_subagents=True,
+            conn, "2024-01-01T00:00:00.000Z", "2024-01-08T00:00:00.000Z", "/proj/x"
         )
         _, params = mock.execute.call_args.args
         assert params[0] == SECONDS_PER_DAY
@@ -193,17 +186,21 @@ class TestSessionsDurations:
 
     def test_leaves_subagent_sessions_out_unless_included(self, mocker: MockerFixture) -> None:
         conn, mock = _stub_conn(mocker)
+        # `PRAGMA user_version` reads 0: no entrypoint column, so no SDK filter.
+        mock.execute.return_value.fetchone.return_value = (0,)
+        scope = diff._Scope.build(conn, include_sdk=False, include_subagents=False)
         diff._sessions_durations(
             conn,
             "2024-01-01T00:00:00.000Z",
             "2024-01-08T00:00:00.000Z",
             None,
-            include_subagents=False,
+            scope.sessions,
         )
         sql, params = mock.execute.call_args.args
         assert "id NOT LIKE '%.%'" in sql
         # The exclusion is literal SQL, so it adds no bind parameter.
         assert len(params) == 3
+        assert diff._Scope.build(conn, include_sdk=False, include_subagents=True).sessions is None
 
 
 # ---- diff._tool_calls_total

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from convo.analytics._constants import SECONDS_PER_DAY
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso, top_level_sessions
+from convo.read.filters import interactive_sessions, since_iso, top_level_sessions
 
 if TYPE_CHECKING:
     from datetime import timedelta
@@ -39,35 +39,39 @@ def stats_sessions(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
     include_subagents: bool = False,
 ) -> SessionsReport:
     """Compute session count, median/p95 wallclock duration, and started-at histogram.
 
-    Subagent sessions are left out unless `include_subagents`.
+    SDK sessions are left out unless `include_sdk`, and subagent sessions
+    unless `include_subagents`.
     """
     cutoff = since_iso(since)
-    where: list[str] = []
-    params: list[object] = []
-    if not include_subagents:
-        where.append(top_level_sessions())
-    if cutoff is not None:
-        where.append("started_at IS NOT NULL AND started_at >= ?")
-        params.append(cutoff)
-    if project is not None:
-        where.append("project_path = ?")
-        params.append(project)
-    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-
-    base_select = (
-        "SELECT started_at, "
-        "(julianday(ended_at) - julianday(started_at)) * ? AS duration_s "
-        "FROM sessions"
-    )
-    sql = base_select + where_sql
-    bind_params: list[object] = [SECONDS_PER_DAY, *params]
-
     ro = open_ro(db.path)
     try:
+        where: list[str] = []
+        params: list[object] = []
+        if not include_subagents:
+            where.append(top_level_sessions())
+        if cutoff is not None:
+            where.append("started_at IS NOT NULL AND started_at >= ?")
+            params.append(cutoff)
+        if project is not None:
+            where.append("project_path = ?")
+            params.append(project)
+        sdk = interactive_sessions(ro, include_sdk=include_sdk)
+        if sdk is not None:
+            where.append(sdk)
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+
+        base_select = (
+            "SELECT started_at, "
+            "(julianday(ended_at) - julianday(started_at)) * ? AS duration_s "
+            "FROM sessions"
+        )
+        sql = base_select + where_sql
+        bind_params: list[object] = [SECONDS_PER_DAY, *params]
         rows = ro.execute(sql, bind_params).fetchall()
     finally:
         ro.close()

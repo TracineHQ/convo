@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from convo.analytics._constants import SECONDS_PER_DAY
 from convo.read._db_access import open_ro
-from convo.read.filters import top_level_sessions
+from convo.read.filters import interactive_sessions, top_level_sessions
 
 if TYPE_CHECKING:
     import sqlite3
@@ -89,6 +89,7 @@ class DiffReport:
     current: WindowSnapshot
     previous: WindowSnapshot
     deltas: DeltaReport
+    include_sdk: bool = False
 
 
 def compute_diff(
@@ -96,13 +97,16 @@ def compute_diff(
     *,
     span: timedelta = _DEFAULT_SPAN,
     project: str | None = None,
+    include_sdk: bool = False,
     include_subagents: bool = False,
 ) -> DiffReport:
     """Run the stats aggregations over [now-span, now) and [now-2*span, now-span).
 
-    Session-level metrics (session count and durations, first-message commands,
-    model histogram) and the transcript file count leave subagents out unless
-    `include_subagents`. Tool-call totals always include subagent work.
+    SDK sessions, and their subagents, are left out of every metric unless
+    `include_sdk`. Session-level metrics (session count and durations,
+    first-message commands, model histogram) and the transcript file count
+    leave subagents out unless `include_subagents`. Tool-call totals always
+    include subagent work.
     """
     if span.total_seconds() <= 0:
         msg = f"diff span must be positive, got {span!r}"
@@ -112,16 +116,9 @@ def compute_diff(
     prev_lower = now - 2 * span
     ro = open_ro(db.path)
     try:
-        current = _window(
-            ro, lower=cur_lower, upper=now, project=project, include_subagents=include_subagents
-        )
-        previous = _window(
-            ro,
-            lower=prev_lower,
-            upper=cur_lower,
-            project=project,
-            include_subagents=include_subagents,
-        )
+        scope = _Scope.build(ro, include_sdk=include_sdk, include_subagents=include_subagents)
+        current = _window(ro, lower=cur_lower, upper=now, project=project, scope=scope)
+        previous = _window(ro, lower=prev_lower, upper=cur_lower, project=project, scope=scope)
     finally:
         ro.close()
     deltas = _compute_deltas(current=current, previous=previous)
@@ -131,7 +128,42 @@ def compute_diff(
         current=current,
         previous=previous,
         deltas=deltas,
+        include_sdk=include_sdk,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _Scope:
+    """The session filter for each session-id column diff queries use.
+
+    Each field ANDs the `interactive_sessions` fragment (SDK sessions) with
+    `top_level_sessions` (subagents), or is None when nothing is filtered.
+    Tool calls are never scoped to top-level sessions: their totals always
+    include subagent work.
+    """
+
+    sessions: str | None = None
+    """For bare `FROM sessions` queries."""
+    aliased: str | None = None
+    """For queries that join `sessions s`."""
+    tool_calls: str | None = None
+    """For `FROM tool_calls tc` queries, which may not join sessions."""
+
+    @classmethod
+    def build(
+        cls, conn: sqlite3.Connection, *, include_sdk: bool, include_subagents: bool
+    ) -> _Scope:
+        def session_scope(column: str) -> str | None:
+            parts = [interactive_sessions(conn, column, include_sdk=include_sdk)]
+            if not include_subagents:
+                parts.append(top_level_sessions(column))
+            return " AND ".join(p for p in parts if p is not None) or None
+
+        return cls(
+            sessions=session_scope("id"),
+            aliased=session_scope("s.id"),
+            tool_calls=interactive_sessions(conn, "tc.session_id", include_sdk=include_sdk),
+        )
 
 
 # --------------------------------------------------------------------------- window
@@ -143,37 +175,45 @@ def _window(
     lower: datetime,
     upper: datetime,
     project: str | None,
-    include_subagents: bool,
+    scope: _Scope | None = None,
 ) -> WindowSnapshot:
     lower_iso = _format_iso(lower)
     upper_iso = _format_iso(upper)
-    bounds = (lower_iso, upper_iso, project)
+    scope = scope or _Scope()
+    bounds = (conn, lower_iso, upper_iso, project)
     return WindowSnapshot(
         lower=lower_iso,
         upper=upper_iso,
-        tool_calls_total=_tool_calls_total(conn, *bounds),
-        tool_calls_by_name=_tool_calls_by_name(conn, *bounds),
-        commands_total=_commands_total(conn, *bounds, include_subagents=include_subagents),
-        commands_top=_commands_top(conn, *bounds, include_subagents=include_subagents),
-        sessions_count=_sessions_count(conn, *bounds, include_subagents=include_subagents),
-        sessions_median_seconds=_sessions_median(
-            conn, *bounds, include_subagents=include_subagents
-        ),
-        sessions_p95_seconds=_sessions_p95(conn, *bounds, include_subagents=include_subagents),
-        files_count=_files_count(conn, *bounds, include_subagents=include_subagents),
-        model_histogram=_model_histogram(conn, *bounds, include_subagents=include_subagents),
+        tool_calls_total=_tool_calls_total(*bounds, scope.tool_calls),
+        tool_calls_by_name=_tool_calls_by_name(*bounds, scope.tool_calls),
+        commands_total=_commands_total(*bounds, scope.aliased),
+        commands_top=_commands_top(*bounds, scope.aliased),
+        sessions_count=_sessions_count(*bounds, scope.sessions),
+        sessions_median_seconds=_sessions_median(*bounds, scope.sessions),
+        sessions_p95_seconds=_sessions_p95(*bounds, scope.sessions),
+        files_count=_files_count(*bounds, scope.aliased),
+        model_histogram=_model_histogram(*bounds, scope.sessions),
     )
+
+
+def _and_scope(where: list[str], scope: str | None) -> None:
+    """Append the session filter fragment to `where` when there is one."""
+    if scope is not None:
+        where.append(scope)
 
 
 # --------------------------------------------------------------------------- tool_calls
 
 
-def _tool_call_where(lower: str, upper: str, project: str | None) -> tuple[str, list[object], bool]:
+def _tool_call_where(
+    lower: str, upper: str, project: str | None, scope: str | None = None
+) -> tuple[str, list[object], bool]:
     where = ["tc.started_at IS NOT NULL", "tc.started_at >= ?", "tc.started_at < ?"]
     params: list[object] = [lower, upper]
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    _and_scope(where, scope)
     return " WHERE " + " AND ".join(where), params, project is not None
 
 
@@ -184,17 +224,19 @@ def _tool_call_from(*, needs_join: bool) -> str:
     return base
 
 
-def _tool_calls_total(conn: sqlite3.Connection, lower: str, upper: str, project: str | None) -> int:
-    where_sql, params, needs_join = _tool_call_where(lower, upper, project)
+def _tool_calls_total(
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
+) -> int:
+    where_sql, params, needs_join = _tool_call_where(lower, upper, project, scope)
     sql = f"SELECT COUNT(*) {_tool_call_from(needs_join=needs_join)}{where_sql}"
     row = conn.execute(sql, params).fetchone()
     return int(row[0]) if row is not None else 0
 
 
 def _tool_calls_by_name(
-    conn: sqlite3.Connection, lower: str, upper: str, project: str | None
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> dict[str, int]:
-    where_sql, params, needs_join = _tool_call_where(lower, upper, project)
+    where_sql, params, needs_join = _tool_call_where(lower, upper, project, scope)
     sql = (
         f"SELECT tc.name AS name, COUNT(*) AS n "
         f"{_tool_call_from(needs_join=needs_join)}"
@@ -208,12 +250,7 @@ def _tool_calls_by_name(
 
 
 def _commands_query(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> list[str]:
     where = [
         "m.role = 'user'",
@@ -222,11 +259,10 @@ def _commands_query(
         "m.timestamp < ?",
     ]
     params: list[object] = [lower, upper]
-    if not include_subagents:
-        where.append(top_level_sessions("s.id"))
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    _and_scope(where, scope)
     where_sql = " AND ".join(where)
     base_sql = (
         "SELECT m.content AS content "
@@ -253,26 +289,16 @@ def _normalize_command(content: str) -> str:
 
 
 def _commands_total(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> int:
-    return len(_commands_query(conn, lower, upper, project, include_subagents=include_subagents))
+    return len(_commands_query(conn, lower, upper, project, scope))
 
 
 def _commands_top(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for cmd in _commands_query(conn, lower, upper, project, include_subagents=include_subagents):
+    for cmd in _commands_query(conn, lower, upper, project, scope):
         counts[cmd] = counts.get(cmd, 0) + 1
     items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     return dict(items[:_COMMANDS_TOP_LIMIT])
@@ -282,20 +308,14 @@ def _commands_top(
 
 
 def _sessions_durations(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> list[float]:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
-    if not include_subagents:
-        where.append(top_level_sessions())
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
+    _and_scope(where, scope)
     where_sql = " AND ".join(where)
     base_sql = (
         "SELECT (julianday(ended_at) - julianday(started_at)) * ? "
@@ -308,20 +328,14 @@ def _sessions_durations(
 
 
 def _sessions_count(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> int:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
-    if not include_subagents:
-        where.append(top_level_sessions())
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
+    _and_scope(where, scope)
     base_sql = "SELECT COUNT(*) FROM sessions WHERE "
     sql = base_sql + " AND ".join(where)  # WHERE from fixed allow-list; binds parameterized.
     row = conn.execute(sql, params).fetchone()
@@ -329,32 +343,18 @@ def _sessions_count(
 
 
 def _sessions_median(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> float | None:
-    durations = _sessions_durations(
-        conn, lower, upper, project, include_subagents=include_subagents
-    )
+    durations = _sessions_durations(conn, lower, upper, project, scope)
     if not durations:
         return None
     return float(statistics.median(durations))
 
 
 def _sessions_p95(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> float | None:
-    durations = _sessions_durations(
-        conn, lower, upper, project, include_subagents=include_subagents
-    )
+    durations = _sessions_durations(conn, lower, upper, project, scope)
     if len(durations) < _MIN_QUANTILE_SAMPLES:
         return None
     cuts = statistics.quantiles(durations, n=_QUANTILE_BUCKETS, method="exclusive")
@@ -365,21 +365,15 @@ def _sessions_p95(
 
 
 def _files_count(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> int:
     """Count distinct source_files whose owning sessions started in the window."""
     where = ["s.started_at IS NOT NULL", "s.started_at >= ?", "s.started_at < ?"]
     params: list[object] = [lower, upper]
-    if not include_subagents:
-        where.append(top_level_sessions("s.id"))
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    _and_scope(where, scope)
     where_sql = " AND ".join(where)
     base_sql = (
         "SELECT COUNT(DISTINCT sf.id) FROM source_files sf "
@@ -394,20 +388,14 @@ def _files_count(
 
 
 def _model_histogram(
-    conn: sqlite3.Connection,
-    lower: str,
-    upper: str,
-    project: str | None,
-    *,
-    include_subagents: bool,
+    conn: sqlite3.Connection, lower: str, upper: str, project: str | None, scope: str | None = None
 ) -> dict[str, int]:
     where = ["started_at IS NOT NULL", "started_at >= ?", "started_at < ?"]
     params: list[object] = [lower, upper]
-    if not include_subagents:
-        where.append(top_level_sessions())
     if project is not None:
         where.append("project_path = ?")
         params.append(project)
+    _and_scope(where, scope)
     where_sql = " AND ".join(where)
     base_sql = "SELECT model, COUNT(*) AS n FROM sessions WHERE "
     suffix = " GROUP BY model ORDER BY n DESC, model"

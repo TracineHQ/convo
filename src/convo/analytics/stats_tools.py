@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso
+from convo.read.filters import interactive_sessions, since_iso
 
 if TYPE_CHECKING:
     import sqlite3
@@ -63,14 +63,19 @@ def stats_tools(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
 ) -> ToolsReport:
-    """Compute tool-call frequencies and per-tool error rates."""
+    """Compute tool-call frequencies and per-tool error rates.
+
+    Calls made in SDK sessions are left out unless `include_sdk`.
+    """
     cutoff = since_iso(since)
     ro = open_ro(db.path)
     try:
-        total = _total_calls(ro, cutoff=cutoff, project=project)
-        top_freq = _top_by_frequency(ro, cutoff=cutoff, project=project)
-        errors = _error_rates(ro, cutoff=cutoff, project=project)
+        sdk = interactive_sessions(ro, "tc.session_id", include_sdk=include_sdk)
+        total = _total_calls(ro, cutoff=cutoff, project=project, sdk_clause=sdk)
+        top_freq = _top_by_frequency(ro, cutoff=cutoff, project=project, sdk_clause=sdk)
+        errors = _error_rates(ro, cutoff=cutoff, project=project, sdk_clause=sdk)
     finally:
         ro.close()
     return ToolsReport(
@@ -81,11 +86,14 @@ def stats_tools(
     )
 
 
-def _where_and_params(*, cutoff: str | None, project: str | None) -> tuple[str, list[object], bool]:
+def _where_and_params(
+    *, cutoff: str | None, project: str | None, sdk_clause: str | None = None
+) -> tuple[str, list[object], bool]:
     """Build WHERE clause for tool_calls + (optional) sessions JOIN.
 
     Returns (where_sql, params, needs_session_join).
-    `needs_session_join` is True iff project filter is set.
+    `needs_session_join` is True iff project filter is set. `sdk_clause` is
+    the `interactive_sessions` fragment over `tc.session_id`, or None.
     """
     where: list[str] = []
     params: list[object] = []
@@ -95,6 +103,8 @@ def _where_and_params(*, cutoff: str | None, project: str | None) -> tuple[str, 
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    if sdk_clause is not None:
+        where.append(sdk_clause)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     return where_sql, params, project is not None
 
@@ -106,17 +116,31 @@ def _from_clause(*, needs_session_join: bool) -> str:
     return base
 
 
-def _total_calls(conn: sqlite3.Connection, *, cutoff: str | None, project: str | None) -> int:
-    where_sql, params, needs_join = _where_and_params(cutoff=cutoff, project=project)
+def _total_calls(
+    conn: sqlite3.Connection,
+    *,
+    cutoff: str | None,
+    project: str | None,
+    sdk_clause: str | None = None,
+) -> int:
+    where_sql, params, needs_join = _where_and_params(
+        cutoff=cutoff, project=project, sdk_clause=sdk_clause
+    )
     sql = f"SELECT COUNT(*) {_from_clause(needs_session_join=needs_join)}{where_sql}"
     row = conn.execute(sql, params).fetchone()
     return int(row[0]) if row is not None else 0
 
 
 def _top_by_frequency(
-    conn: sqlite3.Connection, *, cutoff: str | None, project: str | None
+    conn: sqlite3.Connection,
+    *,
+    cutoff: str | None,
+    project: str | None,
+    sdk_clause: str | None = None,
 ) -> tuple[ToolFreq, ...]:
-    where_sql, params, needs_join = _where_and_params(cutoff=cutoff, project=project)
+    where_sql, params, needs_join = _where_and_params(
+        cutoff=cutoff, project=project, sdk_clause=sdk_clause
+    )
     sql = (
         f"SELECT tc.name AS name, COUNT(*) AS n "
         f"{_from_clause(needs_session_join=needs_join)}"
@@ -131,9 +155,15 @@ def _top_by_frequency(
 
 
 def _error_rates(
-    conn: sqlite3.Connection, *, cutoff: str | None, project: str | None
+    conn: sqlite3.Connection,
+    *,
+    cutoff: str | None,
+    project: str | None,
+    sdk_clause: str | None = None,
 ) -> tuple[ToolErrorRate, ...]:
-    where_sql, params, needs_join = _where_and_params(cutoff=cutoff, project=project)
+    where_sql, params, needs_join = _where_and_params(
+        cutoff=cutoff, project=project, sdk_clause=sdk_clause
+    )
     # LEFT JOIN tool_results so calls without a recorded result are still counted
     # in `total` with 0 errors.
     sql = (

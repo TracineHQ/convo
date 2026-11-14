@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from convo.db import STORED_POSITIONS_SCHEMA_VERSION
 from convo.read._db_access import open_ro
+from convo.read.filters import interactive_sessions
 from convo.read.filters import since_iso as _filters_since_iso
 
 if TYPE_CHECKING:
@@ -208,6 +209,15 @@ class _Filters:
     session: str | None
     tool_exact: bool
     snippet_tokens: int
+    sdk_clause: str | None = None
+    """`interactive_sessions` fragment over `s.id`, or None to keep SDK sessions."""
+
+
+def _sdk_clause(conn: sqlite3.Connection, *, session: str | None, include_sdk: bool) -> str | None:
+    """SDK sessions drop out unless `include_sdk`, or `session` names one explicitly."""
+    if session is not None:
+        return None
+    return interactive_sessions(conn, "s.id", include_sdk=include_sdk)
 
 
 def search(  # noqa: PLR0913
@@ -221,25 +231,29 @@ def search(  # noqa: PLR0913
     tool_exact: bool = False,
     excerpt_chars: int = SNIPPET_MAX_TOKENS,
     limit: int = 10,
+    include_sdk: bool = False,
 ) -> Iterator[SearchHit]:
     """Search across messages / tool_calls / tool_results FTS tables.
 
     Opens a read-only connection on the same DB path as ``db`` (via SQLite's
     ``mode=ro`` URI). The caller's ``Database`` need not be opened — only its
     ``path`` is used. The function materializes results internally because each
-    branch uses ``LIMIT`` and the union is small.
+    branch uses ``LIMIT`` and the union is small. Hits in SDK sessions are left
+    out unless ``include_sdk`` or ``session`` is given.
     """
-    filters = _Filters(
-        fts_match=build_fts_query(query),
-        since_iso=_filters_since_iso(since),
-        project=project,
-        tool=tool,
-        session=session,
-        tool_exact=tool_exact,
-        snippet_tokens=max(1, min(SNIPPET_MAX_TOKENS, excerpt_chars)),
-    )
+    fts_match = build_fts_query(query)
     ro = open_ro(db.path)
     try:
+        filters = _Filters(
+            fts_match=fts_match,
+            since_iso=_filters_since_iso(since),
+            project=project,
+            tool=tool,
+            session=session,
+            tool_exact=tool_exact,
+            snippet_tokens=max(1, min(SNIPPET_MAX_TOKENS, excerpt_chars)),
+            sdk_clause=_sdk_clause(ro, session=session, include_sdk=include_sdk),
+        )
         try:
             rows = _run_search(
                 ro,
@@ -263,22 +277,25 @@ def count_matches(  # noqa: PLR0913
     tool: str | None = None,
     session: str | None = None,
     tool_exact: bool = False,
+    include_sdk: bool = False,
 ) -> int:
     """Count every hit ``search()`` would return with the same filters and no limit."""
-    filters = _Filters(
-        fts_match=build_fts_query(query),
-        since_iso=_filters_since_iso(since),
-        project=project,
-        tool=tool,
-        session=session,
-        tool_exact=tool_exact,
-        snippet_tokens=1,
-    )
-    parts = _branches(filters, count_only=True)
-    sql = "SELECT " + " + ".join(f"({branch})" for branch, _ in parts)
-    params = [p for _, branch_params in parts for p in branch_params]
+    fts_match = build_fts_query(query)
     ro = open_ro(db.path)
     try:
+        filters = _Filters(
+            fts_match=fts_match,
+            since_iso=_filters_since_iso(since),
+            project=project,
+            tool=tool,
+            session=session,
+            tool_exact=tool_exact,
+            snippet_tokens=1,
+            sdk_clause=_sdk_clause(ro, session=session, include_sdk=include_sdk),
+        )
+        parts = _branches(filters, count_only=True)
+        sql = "SELECT " + " + ".join(f"({branch})" for branch, _ in parts)
+        params = [p for _, branch_params in parts for p in branch_params]
         try:
             row = ro.execute(sql, params).fetchone()
         except sqlite3.OperationalError as exc:
@@ -368,6 +385,8 @@ def _message_branch(filters: _Filters, *, count_only: bool = False) -> tuple[str
     if filters.session is not None:
         where.append("s.id LIKE ?")
         params.append(filters.session + "%")
+    if filters.sdk_clause is not None:
+        where.append(filters.sdk_clause)
     snip = _snippet("messages_fts", 0, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_MESSAGE}' AS kind, m.id AS id, m.session_id AS session_id, "
@@ -406,6 +425,8 @@ def _tool_call_branch(filters: _Filters, *, count_only: bool = False) -> tuple[s
         else:
             where.append("tc.name LIKE ?")
             params.append(filters.tool + "%")
+    if filters.sdk_clause is not None:
+        where.append(filters.sdk_clause)
     snip = _snippet("tool_calls_fts", 1, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_TOOL_CALL}' AS kind, tc.id AS id, tc.session_id AS session_id, "
@@ -444,6 +465,8 @@ def _tool_result_branch(filters: _Filters, *, count_only: bool = False) -> tuple
         else:
             where.append("tc.name LIKE ?")
             params.append(filters.tool + "%")
+    if filters.sdk_clause is not None:
+        where.append(filters.sdk_clause)
     snip = _snippet("tool_results_fts", 0, filters.snippet_tokens)
     select_clause = (
         f"SELECT '{_KIND_TOOL_RESULT}' AS kind, tr.tool_call_id AS id, "

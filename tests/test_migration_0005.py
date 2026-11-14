@@ -219,7 +219,7 @@ def test_0005_replays_on_populated_v4_db(db_path: Path) -> None:
     with Database(db_path) as db:
         assert db.conn is not None
         conn = db.conn
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert _counts(conn) == before
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

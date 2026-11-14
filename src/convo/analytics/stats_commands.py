@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso, top_level_sessions
+from convo.read.filters import interactive_sessions, since_iso, top_level_sessions
 
 if TYPE_CHECKING:
+    import sqlite3
     from datetime import timedelta
 
     from convo.db import Database
@@ -46,13 +47,47 @@ def stats_commands(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
     include_subagents: bool = False,
 ) -> CommandsReport:
     """Return the top-N first-user-message commands.
 
-    A subagent session's first user message is the prompt its parent handed
-    it, not a command, so those sessions are left out unless `include_subagents`.
+    SDK sessions are left out unless `include_sdk`. A subagent session's first
+    user message is the prompt its parent handed it, not a command, so those
+    sessions are left out unless `include_subagents`.
     """
+    ro = open_ro(db.path)
+    try:
+        rows = _first_messages(
+            ro,
+            since=since,
+            project=project,
+            include_sdk=include_sdk,
+            include_subagents=include_subagents,
+        )
+    finally:
+        ro.close()
+
+    counts: dict[str, int] = {}
+    for r in rows:
+        raw = r["content"]
+        normalized = _normalize(raw if raw is not None else "")
+        counts[normalized] = counts.get(normalized, 0) + 1
+
+    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    top = tuple(CommandFreq(command=k, count=v) for k, v in items[:_TOP_LIMIT])
+    total = sum(counts.values())
+    return CommandsReport(total=total, top_commands=top)
+
+
+def _first_messages(
+    conn: sqlite3.Connection,
+    *,
+    since: timedelta | None,
+    project: str | None,
+    include_sdk: bool,
+    include_subagents: bool,
+) -> list[sqlite3.Row]:
     cutoff = since_iso(since)
     where: list[str] = ["m.role = 'user'"]
     params: list[object] = []
@@ -64,6 +99,9 @@ def stats_commands(
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    sdk = interactive_sessions(conn, "s.id", include_sdk=include_sdk)
+    if sdk is not None:
+        where.append(sdk)
 
     # Subquery: for each session, find the MIN(seq) among that session's user
     # messages, then JOIN back to fetch the content.
@@ -82,23 +120,7 @@ def stats_commands(
         "WHERE "
     )
     sql = base_sql + where_sql
-
-    ro = open_ro(db.path)
-    try:
-        rows = ro.execute(sql, params).fetchall()
-    finally:
-        ro.close()
-
-    counts: dict[str, int] = {}
-    for r in rows:
-        raw = r["content"]
-        normalized = _normalize(raw if raw is not None else "")
-        counts[normalized] = counts.get(normalized, 0) + 1
-
-    items = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    top = tuple(CommandFreq(command=k, count=v) for k, v in items[:_TOP_LIMIT])
-    total = sum(counts.values())
-    return CommandsReport(total=total, top_commands=top)
+    return conn.execute(sql, params).fetchall()
 
 
 def _normalize(content: str) -> str:

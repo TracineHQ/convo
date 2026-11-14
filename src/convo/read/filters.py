@@ -6,6 +6,8 @@ import re
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from convo.db import ENTRYPOINT_SCHEMA_VERSION
+from convo.intake.entrypoint import SDK_ENTRYPOINT_PREFIX
 from convo.intake.subagents import SUBAGENT_SESSION_LIKE
 
 if TYPE_CHECKING:
@@ -85,6 +87,62 @@ def since_iso(since: timedelta | None) -> str | None:
         return None
     cutoff = datetime.now(UTC) - since
     return cutoff.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+# Sessions whose entrypoint marks a programmatic run (see convo.intake.entrypoint).
+# These fragments are spliced into callers' WHERE clauses, so they can't take
+# bind parameters; the only interpolated values are module constants.
+_SDK_LIKE = f"entrypoint LIKE '{SDK_ENTRYPOINT_PREFIX}%'"
+_SDK_ROOT_IDS = "SELECT id FROM sessions WHERE " + _SDK_LIKE  # noqa: S608
+# A subagent session (`<agent>.<parent>`, see convo.intake.subagents) belongs
+# to its parent: it is SDK when the parent is, whatever its own lines say.
+_SDK_SESSION_IDS = (
+    f"{_SDK_ROOT_IDS} UNION SELECT id FROM sessions "  # noqa: S608
+    f"WHERE id LIKE '{SUBAGENT_SESSION_LIKE}' "
+    f"AND substr(id, instr(id, '.') + 1) IN ({_SDK_ROOT_IDS})"
+)
+_SDK_FILE_IDS = f"SELECT source_file_id FROM sessions WHERE id IN ({_SDK_SESSION_IDS})"  # noqa: S608
+
+
+def has_entrypoint(conn: sqlite3.Connection) -> bool:
+    """True if the DB's schema has `sessions.entrypoint` (migration 0007)."""
+    version: int = conn.execute("PRAGMA user_version").fetchone()[0]
+    return version >= ENTRYPOINT_SCHEMA_VERSION
+
+
+def interactive_sessions(
+    conn: sqlite3.Connection,
+    session_col: str = "id",
+    *,
+    include_sdk: bool = False,
+) -> str | None:
+    """Return a WHERE fragment that drops SDK sessions, or None to keep every row.
+
+    `session_col` names the column holding a session id in the caller's query
+    (`id` on `sessions`, `s.id`, `tc.session_id`, ...); it must be a fixed
+    identifier, never user input. A session counts as SDK when its entrypoint
+    starts with `sdk-`, and a subagent session counts as SDK when its parent
+    does; NULL (unknown) and `cli` are kept. On a DB older than migration 0007
+    there is no entrypoint to filter on, so every row is kept.
+    """
+    if include_sdk or not has_entrypoint(conn):
+        return None
+    return f"{session_col} NOT IN ({_SDK_SESSION_IDS})"
+
+
+def interactive_files(
+    conn: sqlite3.Connection,
+    file_col: str = "id",
+    *,
+    include_sdk: bool = False,
+) -> str | None:
+    """Like `interactive_sessions`, keyed on a `source_files.id` column.
+
+    Drops the transcripts that created an SDK session, its subagents' included.
+    """
+    if include_sdk or not has_entrypoint(conn):
+        return None
+    return f"{file_col} NOT IN ({_SDK_FILE_IDS})"
 
 
 def top_level_sessions(column: str = "id") -> str:

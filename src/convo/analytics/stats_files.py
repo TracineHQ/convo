@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING
 
 from convo.intake.subagents import SUBAGENT_SESSION_LIKE
 from convo.read._db_access import open_ro
-from convo.read.filters import since_iso, top_level_sessions
+from convo.read.filters import (
+    interactive_files,
+    interactive_sessions,
+    since_iso,
+    top_level_sessions,
+)
 
 if TYPE_CHECKING:
     import sqlite3
@@ -20,7 +25,7 @@ _TOP_LIMIT: int = 10
 # A subagent's transcript is a source file whose session has a dotted id. The
 # only interpolated value is the module constant `SUBAGENT_SESSION_LIKE`.
 _NO_SUBAGENT_FILES = (
-    " WHERE NOT EXISTS (SELECT 1 FROM sessions sub "  # noqa: S608
+    "NOT EXISTS (SELECT 1 FROM sessions sub "  # noqa: S608
     "WHERE sub.source_file_id = source_files.id "
     f"AND sub.id LIKE '{SUBAGENT_SESSION_LIKE}')"
 )
@@ -50,27 +55,50 @@ def stats_files(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
     include_subagents: bool = False,
 ) -> FilesReport:
     """Aggregate source_files row counts, sizes, and top-N by message_count.
 
     `since` filters by `sessions.started_at` of the file's owning session(s).
     `project` filters by `sessions.project_path`. When either filter is set, we
-    scope to source_files joined through sessions. Subagent transcripts are
-    source files too, and are left out unless `include_subagents`.
+    scope to source_files joined through sessions. Transcripts of SDK sessions
+    are left out unless `include_sdk`. Subagent transcripts are source files
+    too, and are left out unless `include_subagents`.
     """
     cutoff = since_iso(since)
     ro = open_ro(db.path)
     try:
         if cutoff is None and project is None:
-            return _unfiltered(ro, include_subagents=include_subagents)
-        return _filtered(ro, cutoff=cutoff, project=project, include_subagents=include_subagents)
+            return _unfiltered(
+                ro,
+                include_subagents=include_subagents,
+                sdk_clause=interactive_files(ro, include_sdk=include_sdk),
+            )
+        return _filtered(
+            ro,
+            cutoff=cutoff,
+            project=project,
+            include_subagents=include_subagents,
+            sdk_clause=interactive_sessions(ro, "s.id", include_sdk=include_sdk),
+        )
     finally:
         ro.close()
 
 
-def _unfiltered(conn: sqlite3.Connection, *, include_subagents: bool) -> FilesReport:
-    scope = "" if include_subagents else _NO_SUBAGENT_FILES
+def _unfiltered(
+    conn: sqlite3.Connection,
+    *,
+    include_subagents: bool,
+    sdk_clause: str | None = None,
+) -> FilesReport:
+    # Both conditions are fixed fragments: `_NO_SUBAGENT_FILES` and `interactive_files`.
+    where: list[str] = []
+    if not include_subagents:
+        where.append(_NO_SUBAGENT_FILES)
+    if sdk_clause is not None:
+        where.append(sdk_clause)
+    scope = (" WHERE " + " AND ".join(where)) if where else ""
     base_aggregate = (
         "SELECT COUNT(*) AS n, "
         "COALESCE(SUM(size), 0) AS sz, "
@@ -107,6 +135,7 @@ def _filtered(
     cutoff: str | None,
     project: str | None,
     include_subagents: bool,
+    sdk_clause: str | None = None,
 ) -> FilesReport:
     where: list[str] = []
     params: list[object] = []
@@ -118,6 +147,8 @@ def _filtered(
     if project is not None:
         where.append("s.project_path = ?")
         params.append(project)
+    if sdk_clause is not None:
+        where.append(sdk_clause)
     where_sql = " WHERE " + " AND ".join(where)
 
     # DISTINCT source_files rows whose sessions match the filter.

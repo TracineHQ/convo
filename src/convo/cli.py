@@ -1,7 +1,7 @@
 """Argparse CLI for convo.
 
 Subcommands: backup, restore, index, index-guard, migrate, hook, info, search,
-inspect, snapshots, stats, summary, diff, projects, tools, sessions.
+inspect, snapshots, stats, summary, diff, projects, tools, sessions, tag-sdk.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from convo.analytics import (
 )
 from convo.cli_errors import precheck_argv
 from convo.db import (
+    ENTRYPOINT_SCHEMA_VERSION,
     READ_MIN_SCHEMA_VERSION,
     SCHEMA_VERSION,
     AppliedMigration,
@@ -51,6 +52,7 @@ from convo.db import (
     resolve_snapshot_dir,
 )
 from convo.hook import HookOutcome, run_pre_compact, run_session_end
+from convo.intake import tag_sdk
 from convo.intake.guard import index_guard_file, resolve_guard_log_path
 from convo.intake.orchestrator import (
     IndexReport,
@@ -61,7 +63,12 @@ from convo.intake.orchestrator import (
 )
 from convo.lock import WaiterLock, WriterLock
 from convo.read._db_access import open_ro as _open_ro
-from convo.read.filters import ProjectResolveError, parse_span, resolve_project_path, since_iso
+from convo.read.filters import (
+    ProjectResolveError,
+    parse_span,
+    resolve_project_path,
+    since_iso,
+)
 from convo.read.info import InfoReport, ProjectCount, gather_info
 from convo.read.inspect import (
     MessageView,
@@ -398,7 +405,29 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_projects_parser(sub)
     _add_tools_parser(sub)
     _add_sessions_parser(sub)
+    _add_tag_sdk_parser(sub)
     return parser
+
+
+_INCLUDE_SDK_HELP = (
+    "Count SDK sessions too (headless `claude -p`, the Agent SDKs, and sessions "
+    "`convo tag-sdk` marked sdk-inferred). Default: interactive sessions only."
+)
+
+
+def _add_include_sdk(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--include-sdk", action="store_true", help=_INCLUDE_SDK_HELP)
+
+
+def _note_unfiltered(db: Database, *, include_sdk: bool) -> None:
+    """On a DB older than migration 0007, say on stderr that SDK sessions are counted."""
+    if include_sdk or db.schema_version() >= ENTRYPOINT_SCHEMA_VERSION:
+        return
+    print(
+        "convo: this DB predates session entrypoints, so SDK sessions are included; "
+        "run `convo migrate` to leave them out",
+        file=sys.stderr,
+    )
 
 
 def _add_backup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -712,6 +741,11 @@ def _add_search_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         help="match --tool exactly instead of prefix",
     )
     search_p.add_argument(
+        "--include-sdk",
+        action="store_true",
+        help=_INCLUDE_SDK_HELP + " --session searches the named session either way.",
+    )
+    search_p.add_argument(
         "--fields",
         type=_fields_list,
         default=None,
@@ -854,6 +888,7 @@ def _add_stats_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         default=None,
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
+    _add_include_sdk(stats_p)
     _add_include_subagents_arg(
         stats_p,
         "Count subagent sessions and transcript files in the commands, sessions, "
@@ -916,6 +951,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         "projects": _projects_command,
         "tools": _tools_command,
         "sessions": _sessions_command,
+        "tag-sdk": _tag_sdk_command,
     }
     handler = handlers.get(args.cmd)
     if handler is None:
@@ -1491,6 +1527,8 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
                 return 1
 
     with _read_db(db_path) as db:
+        if args.session is None:
+            _note_unfiltered(db, include_sdk=args.include_sdk)
         hits = list(
             search(
                 db,
@@ -1502,6 +1540,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
                 tool_exact=args.tool_exact,
                 excerpt_chars=args.excerpt_chars,
                 limit=args.limit,
+                include_sdk=args.include_sdk,
             ),
         )
         # Matches before --limit. max() covers an index run landing between the queries.
@@ -1515,6 +1554,7 @@ def _search_command(args: argparse.Namespace, db_path: Path) -> int:
                 tool=args.tool,
                 session=args.session,
                 tool_exact=args.tool_exact,
+                include_sdk=args.include_sdk,
             ),
         )
 
@@ -1602,6 +1642,7 @@ def _filters_dict(args: argparse.Namespace, project_resolved: str | None) -> dic
         "session": args.session,
         "tool_exact": args.tool_exact,
         "limit": args.limit,
+        "include_sdk": args.include_sdk,
     }
 
 
@@ -1696,6 +1737,7 @@ def _build_timeline_envelope(
                 project_path=meta["project"],
                 model=meta["model"],
                 git_branch=meta["git_branch"],
+                entrypoint=meta["entrypoint"],
             ),
             "timeline": {
                 "duration_seconds": meta["duration_seconds"],
@@ -1727,6 +1769,7 @@ def _session_to_dict(  # noqa: PLR0913
     project_path: str | None,
     model: str | None,
     git_branch: str | None,
+    entrypoint: str | None,
 ) -> dict[str, object]:
     """Session header shared by the normal and ``--timeline`` JSON bodies."""
     return {
@@ -1736,6 +1779,7 @@ def _session_to_dict(  # noqa: PLR0913
         "project_path": project_path,
         "model": model,
         "git_branch": git_branch,
+        "entrypoint": entrypoint,
     }
 
 
@@ -1755,6 +1799,7 @@ def _build_inspect_envelope(
                 project_path=view.project_path,
                 model=view.model,
                 git_branch=view.git_branch,
+                entrypoint=view.entrypoint,
             ),
             "messages": [
                 _message_to_dict(m, position, content_chars, tool_chars)
@@ -1820,6 +1865,7 @@ def _print_inspect(view: SessionView, content_chars: int, tool_chars: int) -> No
     print(f"project   {view.project_path or '(unknown)'}")
     print(f"model     {view.model or '(unknown)'}")
     print(f"branch    {view.git_branch or '(unknown)'}")
+    print(f"entry     {view.entrypoint or '(unknown)'}")
     print()
     if not view.messages:
         print("(no messages)")
@@ -1900,9 +1946,12 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
         {"include_subagents": args.include_subagents} if family in _SESSION_COUNT_FAMILIES else {}
     )
     with _read_db(db_path) as db:
-        report = func(db, since=args.since, project=project_resolved, **extra)
+        _note_unfiltered(db, include_sdk=args.include_sdk)
+        report = func(
+            db, since=args.since, project=project_resolved, include_sdk=args.include_sdk, **extra
+        )
     if args.as_json:
-        print(json.dumps(_build_stats_envelope(family, report)))
+        print(json.dumps(_build_stats_envelope(family, report, include_sdk=args.include_sdk)))
     else:
         _print_stats(family, report)
     return 0
@@ -1911,8 +1960,14 @@ def _stats_command(args: argparse.Namespace, db_path: Path) -> int:
 def _build_stats_envelope(
     family: str,
     report: ToolsReport | CommandsReport | SessionsReport | FilesReport | ModelReport | HooksReport,
+    *,
+    include_sdk: bool = False,
 ) -> dict[str, object]:
-    body: dict[str, object] = {"family": family, **dataclasses.asdict(report)}
+    body: dict[str, object] = {
+        "family": family,
+        **dataclasses.asdict(report),
+        "include_sdk": include_sdk,
+    }
     return {"schema_version": STATS_ENVELOPE_VERSION, "stats": body}
 
 
@@ -2119,6 +2174,7 @@ def _add_summary_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         default=None,
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
+    _add_include_sdk(summary_p)
     _add_include_subagents_arg(
         summary_p,
         "Count subagent sessions and transcript files in the commands, sessions, "
@@ -2157,10 +2213,12 @@ def _summary_command(args: argparse.Namespace, db_path: Path) -> int:
         finally:
             ro.close()
     with _read_db(db_path) as db:
+        _note_unfiltered(db, include_sdk=args.include_sdk)
         report = gather_summary(
             db,
             since=args.since,
             project=project_resolved,
+            include_sdk=args.include_sdk,
             include_subagents=args.include_subagents,
         )
     if args.as_json:
@@ -2179,6 +2237,7 @@ def _build_summary_envelope(report: SummaryReport) -> dict[str, object]:
         "sessions": dataclasses.asdict(report.sessions),
         "files": dataclasses.asdict(report.files),
         "model": dataclasses.asdict(report.model),
+        "include_sdk": report.include_sdk,
     }
     return {"schema_version": SUMMARY_ENVELOPE_VERSION, "summary": body}
 
@@ -2186,7 +2245,8 @@ def _build_summary_envelope(report: SummaryReport) -> dict[str, object]:
 def _print_summary_report(report: SummaryReport) -> None:
     since_label = _span_to_str(report.since) or "all"
     project_label = report.project if report.project is not None else "all"
-    print(f"convo summary (since={since_label}, project={project_label})")
+    sdk_label = "included" if report.include_sdk else "excluded"
+    print(f"convo summary (since={since_label}, project={project_label}, sdk={sdk_label})")
     print()
     _print_summary_tools(report.tools)
     print()
@@ -2309,6 +2369,7 @@ def _add_diff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         default=None,
         help="Fuzzy match: exact path, basename, or substring (see `convo projects`).",
     )
+    _add_include_sdk(diff_p)
     _add_include_subagents_arg(
         diff_p,
         "Count subagent sessions and transcript files in the session, command, "
@@ -2348,10 +2409,12 @@ def _diff_command(args: argparse.Namespace, db_path: Path) -> int:
         finally:
             ro.close()
     with _read_db(db_path) as db:
+        _note_unfiltered(db, include_sdk=args.include_sdk)
         report = compute_diff(
             db,
             span=span,
             project=project_resolved,
+            include_sdk=args.include_sdk,
             include_subagents=args.include_subagents,
         )
     if args.as_json:
@@ -2368,6 +2431,7 @@ def _build_diff_envelope(report: DiffReport) -> dict[str, object]:
         "current": _window_to_dict(report.current),
         "previous": _window_to_dict(report.previous),
         "deltas": _deltas_to_dict(report.deltas),
+        "include_sdk": report.include_sdk,
     }
     return {"schema_version": DIFF_ENVELOPE_VERSION, "diff": body}
 
@@ -2430,7 +2494,8 @@ def _print_diff(report: DiffReport) -> None:
     color = _diff_use_color()
     span_label = _span_seconds_label(report.span_seconds)
     project_label = report.project if report.project is not None else "all"
-    print(f"convo diff (span={span_label}, project={project_label})")
+    sdk_label = "included" if report.include_sdk else "excluded"
+    print(f"convo diff (span={span_label}, project={project_label}, sdk={sdk_label})")
     print(f"  current   [{report.current.lower}, {report.current.upper})")
     print(f"  previous  [{report.previous.lower}, {report.previous.upper})")
     print()
@@ -2603,9 +2668,10 @@ def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         "sessions",
         help="list sessions, optionally filtered",
         epilog=(
-            "Lists sessions with id, project path, start/end times, and message count. "
-            "Subagent sessions (ids shaped <agent-id>.<parent-session-id>) are listed "
-            "only with --include-subagents."
+            "Lists sessions with id, project path, start/end times, message count and "
+            "entrypoint. SDK sessions, and their subagents, are left out unless "
+            "--include-sdk. Subagent sessions (ids shaped <agent-id>.<parent-session-id>) "
+            "are listed only with --include-subagents."
         ),
     )
     _add_include_subagents_arg(p, "List subagent sessions too.")
@@ -2624,6 +2690,7 @@ def _add_sessions_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     p.add_argument(
         "--limit", type=int, default=20, help="Maximum sessions to return (default: 20)."
     )
+    _add_include_sdk(p)
     p.add_argument(
         "--format",
         choices=["prose", "json"],
@@ -2708,13 +2775,16 @@ def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
     if args.since is not None:
         _since = since_iso(parse_span(args.since))
 
-    items: list[SessionRow] = list_sessions(
-        str(db_path),
-        project=resolved_project,
-        since_iso=_since,
-        limit=args.limit,
-        include_subagents=args.include_subagents,
-    )
+    with _read_db(db_path) as db:
+        _note_unfiltered(db, include_sdk=args.include_sdk)
+        items: list[SessionRow] = list_sessions(
+            str(db.path),
+            project=resolved_project,
+            since_iso=_since,
+            limit=args.limit,
+            include_sdk=args.include_sdk,
+            include_subagents=args.include_subagents,
+        )
     use_json = args.as_json or args.format == "json"
     if use_json:
         print(
@@ -2729,9 +2799,11 @@ def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
                                 "started_at": r.started_at,
                                 "ended_at": r.ended_at,
                                 "message_count": r.message_count,
+                                "entrypoint": r.entrypoint,
                             }
                             for r in items
-                        ]
+                        ],
+                        "include_sdk": args.include_sdk,
                     },
                 }
             )
@@ -2743,10 +2815,251 @@ def _sessions_command(args: argparse.Namespace, db_path: Path) -> int:
         # A session UUID is 36 characters; a subagent's `<agent-id>.<uuid>` is longer.
         id_w = max(36, *(len(r.id) for r in items))
         proj_w = max(len("project"), *(len(r.project_path or "") for r in items))
-        print(f"{'id'.ljust(id_w)}  {'project'.ljust(proj_w)}  {'msgs':>5}  started_at")
-        print(f"{'-' * id_w}  {'-' * proj_w}  {'-' * 5}  {'-' * 24}")
+        entry_w = max(len("entry"), *(len(r.entrypoint or "") for r in items))
+        print(
+            f"{'id'.ljust(id_w)}  {'project'.ljust(proj_w)}  {'msgs':>5}  "
+            f"{'entry'.ljust(entry_w)}  started_at"
+        )
+        print(f"{'-' * id_w}  {'-' * proj_w}  {'-' * 5}  {'-' * entry_w}  {'-' * 24}")
         for r in items:
             proj = r.project_path or ""
             started = r.started_at or ""
-            print(f"{r.id.ljust(id_w)}  {proj.ljust(proj_w)}  {r.message_count:>5}  {started}")
+            entry = r.entrypoint or ""
+            print(
+                f"{r.id.ljust(id_w)}  {proj.ljust(proj_w)}  {r.message_count:>5}  "
+                f"{entry.ljust(entry_w)}  {started}"
+            )
     return 0
+
+
+TAG_SDK_ENVELOPE_VERSION: int = 2
+
+
+def _at_least_one(flag: str) -> Callable[[str], int]:
+    """Build an argparse type for `flag` that accepts integers >= 1."""
+    msg = f"{flag} must be a positive integer"
+
+    def parse(s: str) -> int:
+        try:
+            n = int(s)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(msg) from exc
+        if n < 1:
+            raise argparse.ArgumentTypeError(msg)
+        return n
+
+    return parse
+
+
+def _add_tag_sdk_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "tag-sdk",
+        help="Fill in session entrypoints, and tag templated pipeline runs as sdk-inferred.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Read commands leave SDK sessions out by default, which needs each\n"
+            "session's entrypoint. `convo index` records it and `convo migrate`\n"
+            "backfills it from stored messages; this fills the gaps.\n"
+            "\n"
+            "1. Sessions with no entrypoint whose transcript is still on disk\n"
+            "   take the one in the file (every project, or just --project).\n"
+            "2. With --project, sessions in that project whose transcript is gone\n"
+            "   and whose entrypoint is unknown are tagged sdk-inferred when they\n"
+            "   have at most --max-messages messages and their first prompt starts\n"
+            "   with a template: its first --prefix-chars characters are shared by\n"
+            "   at least --min-shared such sessions, and by no `cli` session.\n"
+            "\n"
+            "Rows are never deleted; --include-sdk on the read commands still shows\n"
+            "them. Without --dry-run, a snapshot is written first (as `convo backup\n"
+            "--auto`), so `convo restore --latest` undoes it.\n"
+            "\n"
+            "Examples:\n"
+            "  convo tag-sdk --dry-run\n"
+            "  convo tag-sdk --project myapp --dry-run\n"
+            "  convo tag-sdk --project myapp --min-shared 50\n"
+        ),
+    )
+    p.add_argument(
+        "--project",
+        default=None,
+        help=(
+            "Fuzzy match: exact path, basename, or substring (see `convo projects`). "
+            "Needed for the heuristic pass."
+        ),
+    )
+    p.add_argument(
+        "--max-messages",
+        type=_at_least_one("--max-messages"),
+        default=tag_sdk.DEFAULT_MAX_MESSAGES,
+        help=f"Largest session to tag (default: {tag_sdk.DEFAULT_MAX_MESSAGES} messages).",
+    )
+    p.add_argument(
+        "--min-shared",
+        type=_at_least_one("--min-shared"),
+        default=tag_sdk.DEFAULT_MIN_SHARED,
+        help=(
+            "Sessions that must share a first-prompt template "
+            f"(default: {tag_sdk.DEFAULT_MIN_SHARED})."
+        ),
+    )
+    p.add_argument(
+        "--prefix-chars",
+        type=_at_least_one("--prefix-chars"),
+        default=tag_sdk.DEFAULT_PREFIX_CHARS,
+        help=(
+            "Length of the first-prompt prefix compared as the template "
+            f"(default: {tag_sdk.DEFAULT_PREFIX_CHARS})."
+        ),
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would change, with sample session ids; write nothing.",
+    )
+    p.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="Emit a single JSON envelope on stdout instead of prose.",
+    )
+
+
+def _tag_sdk_command(args: argparse.Namespace, db_path: Path) -> int:
+    criteria = tag_sdk.Criteria(
+        max_messages=args.max_messages,
+        min_shared=args.min_shared,
+        prefix_chars=args.prefix_chars,
+    )
+    if args.dry_run:
+        with _read_db(db_path) as db:
+            assert db.conn is not None
+            db.require_schema(ENTRYPOINT_SCHEMA_VERSION)
+            project = None if args.project is None else resolve_project_path(db.conn, args.project)
+            plan = tag_sdk.plan_tags(db.conn, project=project, criteria=criteria)
+        _report_tag_sdk(args, plan, status="dry_run", backup_path=None, updated=0)
+        return 0
+    with _writer_lock(db_path), Database(db_path, migrate=False) as db:
+        assert db.conn is not None
+        db.require_schema(ENTRYPOINT_SCHEMA_VERSION)
+        project = None if args.project is None else resolve_project_path(db.conn, args.project)
+        plan = tag_sdk.plan_tags(db.conn, project=project, criteria=criteria)
+        if plan.changes == 0:
+            _report_tag_sdk(args, plan, status="nothing_to_tag", backup_path=None, updated=0)
+            return 0
+        if not args.as_json:
+            _announce_snapshot()
+        backup_path = db.backup_snapshot()
+        updated = tag_sdk.apply_plan(db.conn, plan)
+    _report_tag_sdk(args, plan, status="tagged", backup_path=backup_path, updated=updated)
+    return 0
+
+
+def _report_tag_sdk(
+    args: argparse.Namespace,
+    plan: tag_sdk.TagPlan,
+    *,
+    status: str,
+    backup_path: Path | None,
+    updated: int,
+) -> None:
+    if args.as_json:
+        print(json.dumps(_build_tag_sdk_envelope(plan, status, backup_path, updated)))
+    else:
+        _print_tag_sdk(plan, status, backup_path, updated)
+
+
+def _sample(ids: list[str]) -> list[str]:
+    return ids[: tag_sdk.SAMPLE_SIZE]
+
+
+def _entrypoint_counts(plan: tag_sdk.TagPlan) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entrypoint in plan.from_files.values():
+        counts[entrypoint] = counts.get(entrypoint, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def _template_dicts(groups: tuple[tag_sdk.TemplateGroup, ...]) -> list[dict[str, object]]:
+    return [
+        {
+            "prefix": g.prefix,
+            "sessions": len(g.session_ids),
+            "sample_ids": _sample(list(g.session_ids)),
+        }
+        for g in groups
+    ]
+
+
+def _build_tag_sdk_envelope(
+    plan: tag_sdk.TagPlan,
+    status: str,
+    backup_path: Path | None,
+    updated: int,
+) -> dict[str, object]:
+    inferred = plan.inferred_ids
+    return {
+        "schema_version": TAG_SDK_ENVELOPE_VERSION,
+        "tag_sdk": {
+            "status": status,
+            "project": plan.project,
+            "criteria": dataclasses.asdict(plan.criteria),
+            "from_files": {
+                "checked": plan.files_checked,
+                "count": len(plan.from_files),
+                "by_entrypoint": _entrypoint_counts(plan),
+                "sample_ids": _sample(sorted(plan.from_files)),
+            },
+            "inferred": {
+                "ran": plan.project is not None,
+                "candidates": plan.candidates,
+                "count": len(inferred),
+                "templates": _template_dicts(plan.templates),
+                "skipped_cli_templates": _template_dicts(plan.skipped_cli_templates),
+                "sample_ids": _sample(inferred),
+            },
+            "updated": updated,
+            "backup_path": None if backup_path is None else str(backup_path),
+        },
+    }
+
+
+def _print_tag_sdk(
+    plan: tag_sdk.TagPlan,
+    status: str,
+    backup_path: Path | None,
+    updated: int,
+) -> None:
+    dry = status == "dry_run"
+    c = plan.criteria
+    print(f"convo tag-sdk (project={plan.project or 'all'}{', dry run' if dry else ''})")
+    by_entry = ", ".join(f"{k} {v}" for k, v in _entrypoint_counts(plan).items()) or "none found"
+    print(
+        f"from transcripts on disk: {len(plan.from_files)} of {plan.files_checked} "
+        f"unresolved sessions with a file ({by_entry})"
+    )
+    if plan.from_files:
+        print(f"  sample: {', '.join(_sample(sorted(plan.from_files)))}")
+    if plan.project is None:
+        print("heuristic: skipped (pass --project to tag templated runs whose transcript is gone)")
+    else:
+        print(
+            f"heuristic: {plan.candidates} sessions with no transcript, unknown entrypoint "
+            f"and <= {c.max_messages} messages; templates of {c.prefix_chars} chars "
+            f"shared by >= {c.min_shared}:"
+        )
+        for g in plan.templates:
+            print(f"  {g.prefix!r}  {len(g.session_ids)} sessions")
+            print(f"    sample: {', '.join(_sample(list(g.session_ids)))}")
+        if not plan.templates:
+            print("  (none)")
+        for g in plan.skipped_cli_templates:
+            print(f"  skipped {g.prefix!r} ({len(g.session_ids)} sessions): a cli session uses it")
+    verb = "would tag" if dry else "tagged"
+    print(f"{verb} {len(plan.inferred_ids)} sessions sdk-inferred")
+    if dry:
+        print("Dry run: nothing was written.")
+    elif status == "nothing_to_tag":
+        print("nothing to change; no snapshot written")
+    else:
+        print(f"snapshot written: {backup_path}")
+        print(f"updated {updated} sessions")

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from convo.read._db_access import open_ro
-from convo.read.filters import top_level_sessions
+from convo.read.filters import has_entrypoint, interactive_sessions, top_level_sessions
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,19 +15,23 @@ class SessionRow:
     started_at: str | None
     ended_at: str | None
     message_count: int
+    entrypoint: str | None = None
+    """How the session was started (`cli`, `sdk-cli`, `sdk-py`, ...); None if unknown."""
 
 
-def list_sessions(
+def list_sessions(  # noqa: PLR0913 -- keyword-only filters
     db_path: str,
     *,
     project: str | None = None,
     since_iso: str | None = None,
     limit: int = 50,
+    include_sdk: bool = False,
     include_subagents: bool = False,
 ) -> list[SessionRow]:
     """List sessions, optionally filtered by project + time, with msg counts.
 
-    Subagent sessions are left out unless `include_subagents`.
+    SDK sessions are left out unless `include_sdk`, and subagent sessions
+    unless `include_subagents`.
     """
     conditions: list[str] = []
     params: list[object] = []
@@ -43,14 +47,18 @@ def list_sessions(
         conditions.append("s.started_at >= ?")
         params.append(since_iso)
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
     params.append(limit)
 
     ro = open_ro(db_path)
     try:
+        sdk = interactive_sessions(ro, "s.id", include_sdk=include_sdk)
+        if sdk is not None:
+            conditions.append(sdk)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        entrypoint = "s.entrypoint" if has_entrypoint(ro) else "NULL"
         rows = ro.execute(
             f"SELECT s.id, s.project_path, s.started_at, s.ended_at, "  # noqa: S608
+            f"       {entrypoint} AS entrypoint, "
             f"       (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count "
             f"FROM sessions s "
             f"{where} "
@@ -67,6 +75,7 @@ def list_sessions(
             started_at=None if r["started_at"] is None else str(r["started_at"]),
             ended_at=None if r["ended_at"] is None else str(r["ended_at"]),
             message_count=int(r["msg_count"]),
+            entrypoint=None if r["entrypoint"] is None else str(r["entrypoint"]),
         )
         for r in rows
     ]

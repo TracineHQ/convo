@@ -28,6 +28,7 @@ class SummaryReport:
     sessions: SessionsReport
     files: FilesReport
     model: ModelReport
+    include_sdk: bool = False
 
 
 def gather_summary(
@@ -35,22 +36,49 @@ def gather_summary(
     *,
     since: timedelta | None = None,
     project: str | None = None,
+    include_sdk: bool = False,
     include_subagents: bool = False,
 ) -> SummaryReport:
     """Compose the five `stats_*` families into a single SummaryReport.
 
-    Session counts (commands, sessions, model) and transcript files leave
-    subagents out unless `include_subagents`. Tool-call totals always include
-    subagent work.
+    SDK sessions, and their subagents, are left out of every family unless
+    `include_sdk`. Session counts (commands, sessions, model) and transcript
+    files leave subagents out unless `include_subagents`. Tool-call totals
+    always include subagent work.
     """
-    tools = stats_tools(db, since=since, project=project)
-    commands = stats_commands(db, since=since, project=project, include_subagents=include_subagents)
-    sessions = stats_sessions(db, since=since, project=project, include_subagents=include_subagents)
-    files = stats_files(db, since=since, project=project, include_subagents=include_subagents)
-    model = stats_model(db, since=since, project=project, include_subagents=include_subagents)
+    tools = stats_tools(db, since=since, project=project, include_sdk=include_sdk)
+    commands = stats_commands(
+        db,
+        since=since,
+        project=project,
+        include_sdk=include_sdk,
+        include_subagents=include_subagents,
+    )
+    sessions = stats_sessions(
+        db,
+        since=since,
+        project=project,
+        include_sdk=include_sdk,
+        include_subagents=include_subagents,
+    )
+    files = stats_files(
+        db,
+        since=since,
+        project=project,
+        include_sdk=include_sdk,
+        include_subagents=include_subagents,
+    )
+    model = stats_model(
+        db,
+        since=since,
+        project=project,
+        include_sdk=include_sdk,
+        include_subagents=include_subagents,
+    )
     return SummaryReport(
         since=since,
         project=project,
+        include_sdk=include_sdk,
         tools=tools,
         commands=commands,
         sessions=sessions,

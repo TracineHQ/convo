@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from convo.intake.subagents import SUBAGENT_SESSION_LIKE
 from convo.read._db_access import open_ro
+from convo.read.filters import has_entrypoint
 from convo.read.prose import TimelineEvent
 
 if TYPE_CHECKING:
@@ -89,6 +90,8 @@ class SessionView:
     total_messages: int = 0
     first_index: int = 1
     window_end: int = 0
+    entrypoint: str | None = None
+    """How the session was started (`cli`, `sdk-cli`, `sdk-py`, ...); None if unknown."""
 
 
 def message_window(
@@ -215,24 +218,26 @@ def inspect_session(
         total_messages=total_messages,
         first_index=lo + 1,
         window_end=hi,
+        entrypoint=header["entrypoint"],
+    )
+
+
+def _header_sql(conn: sqlite3.Connection) -> str:
+    """Session header SELECT; `entrypoint` reads as NULL before migration 0007."""
+    entrypoint = "entrypoint" if has_entrypoint(conn) else "NULL AS entrypoint"
+    return (
+        "SELECT project_path, started_at, ended_at, model, git_branch, "  # noqa: S608
+        f"{entrypoint} FROM sessions WHERE id = ?"
     )
 
 
 def _fetch_header(conn: sqlite3.Connection, session_id: str) -> dict[str, str | None]:
-    row = conn.execute(
-        "SELECT started_at, ended_at, project_path, model, git_branch FROM sessions WHERE id = ?",
-        (session_id,),
-    ).fetchone()
+    row = conn.execute(_header_sql(conn), (session_id,)).fetchone()
     if row is None:
         # Resolver should have caught this; treat as a clean modeled error.
         raise RuntimeError(_ERR_NO_MATCH.format(prefix=session_id))
-    return {
-        "started_at": None if row["started_at"] is None else str(row["started_at"]),
-        "ended_at": None if row["ended_at"] is None else str(row["ended_at"]),
-        "project_path": None if row["project_path"] is None else str(row["project_path"]),
-        "model": None if row["model"] is None else str(row["model"]),
-        "git_branch": None if row["git_branch"] is None else str(row["git_branch"]),
-    }
+    keys = ("started_at", "ended_at", "project_path", "model", "git_branch", "entrypoint")
+    return {key: None if row[key] is None else str(row[key]) for key in keys}
 
 
 def _fetch_messages(
@@ -408,16 +413,13 @@ def build_timeline(
     """Return ``(events, meta)`` for ``convo inspect --timeline``.
 
     ``meta`` keys: ``project``, ``started_at``, ``ended_at``, ``model``,
-    ``git_branch``, ``duration_seconds``, ``message_count``, ``tool_call_count``.
+    ``git_branch``, ``entrypoint``, ``duration_seconds``, ``message_count``,
+    ``tool_call_count``.
     ``max_chars`` clips message and tool-call previews (0 = no limit).
     """
     ro = open_ro(db.path)
     try:
-        header_row = ro.execute(
-            "SELECT project_path, started_at, ended_at, model, git_branch"
-            " FROM sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
+        header_row = ro.execute(_header_sql(ro), (session_id,)).fetchone()
         if header_row is None:
             raise RuntimeError(_ERR_NO_MATCH.format(prefix=session_id))
 
@@ -463,7 +465,7 @@ def build_timeline(
         "project": project,
         **{
             key: None if header_row[key] is None else str(header_row[key])
-            for key in ("started_at", "ended_at", "model", "git_branch")
+            for key in ("started_at", "ended_at", "model", "git_branch", "entrypoint")
         },
         "duration_seconds": duration_seconds,
         "message_count": message_count,

@@ -91,7 +91,8 @@ apply them (`convo migrate` does).
       "tool": null,
       "session": null,
       "tool_exact": false,
-      "limit": 10
+      "limit": 10,
+      "include_sdk": false
     },
     "total": 2,
     "hits": [
@@ -153,6 +154,10 @@ stored under the transcript that made it. `convo inspect` on the hit's
 `session_id` does not list such a call; inspecting the session that kept the
 message lists it under that message.
 
+`filters.include_sdk` is `false` unless `--include-sdk` was passed: hits in
+SDK sessions (see [SDK sessions](#sdk-sessions)) are left out of `hits` and
+`total`. With `--session`, the named session is searched either way.
+
 When `total=0` a `"suggestions"` key may appear:
 
 ```json
@@ -183,7 +188,8 @@ When `total=0` a `"suggestions"` key may appear:
       "ended_at": "2026-05-10T09:45:00.000Z",
       "project_path": "/workspace/myapp",
       "model": "claude-sonnet-4-6",
-      "git_branch": "main"
+      "git_branch": "main",
+      "entrypoint": "cli"
     },
     "messages": [
       {
@@ -205,6 +211,10 @@ When `total=0` a `"suggestions"` key may appear:
   }
 }
 ```
+
+`session.entrypoint` is how the session was started (`cli`, `sdk-cli`,
+`sdk-py`, `sdk-ts`, `sdk-inferred`; see [SDK sessions](#sdk-sessions)), or
+`null` when unknown. `inspect` shows any session, SDK or not.
 
 `truncated` is `true` when the message list was capped (default cap: 50
 messages; `--full` removes the cap). `messages[].truncated` is `true` when
@@ -236,7 +246,8 @@ message returns the error envelope.
       "ended_at": "2026-05-10T09:45:00.000Z",
       "project_path": "/workspace/myapp",
       "model": "claude-sonnet-4-6",
-      "git_branch": "main"
+      "git_branch": "main",
+      "entrypoint": "cli"
     },
     "timeline": {
       "duration_seconds": 1860,
@@ -277,7 +288,8 @@ parent message's position. `from_message` /
     "commands": {"total": 42, "top_commands": [...]},
     "sessions": {"total": 42, "sessions_with_duration": 40, "median_duration_s": 1260.0, "p95_duration_s": 5400.0, "hour_of_day": [...]},
     "files": {"total": 12, "total_message_count": 1800, "top_files": [...]},
-    "model": {"total": 42, "null_count": 2, "by_model": [...]}
+    "model": {"total": 42, "null_count": 2, "by_model": [...]},
+    "include_sdk": false
   }
 }
 ```
@@ -285,6 +297,8 @@ parent message's position. `from_message` /
 `summary` is the `stats` families inlined under a single envelope. Sub-object
 shapes match `stats` exactly (see above). `since` is a span string or `null`
 for all-time. Note: `summary` does not include the `hooks` family.
+`include_sdk` is `false` unless `--include-sdk` was passed: every family then
+leaves SDK sessions out.
 
 `commands`, `sessions`, `model` and `files` count top-level sessions and
 transcript files only; `--include-subagents` counts subagents too. `tools`
@@ -319,7 +333,8 @@ always includes subagent work. The envelope shape is the same either way.
       "tool_calls_by_name": {"Bash": {"absolute": 70, "pct": 0.2}},
       "sessions_median_seconds": {"absolute": 160.0, "pct": 0.1455},
       "...": "..."
-    }
+    },
+    "include_sdk": false
   }
 }
 ```
@@ -327,7 +342,8 @@ always includes subagent work. The envelope shape is the same either way.
 `current` and `previous` have identical shapes. `deltas` mirrors the same
 keys; each value is `{"absolute": <float>, "pct": <float|null>}`. `pct` is
 `null` when the previous-window value was 0. `span_seconds` is the window
-length in seconds.
+length in seconds. `include_sdk` is `false` unless `--include-sdk` was
+passed: both windows then leave SDK sessions out of every metric.
 
 `commands_*`, `sessions_*`, `model_histogram` and `files_count` count
 top-level sessions and transcript files only; `--include-subagents` counts
@@ -360,10 +376,15 @@ Example (`tools`):
     "total": 840,
     "top_by_frequency": [{"name": "Bash", "count": 420}],
     "top_by_median_duration": [],
-    "error_rates": [{"name": "Bash", "total": 420, "errors": 12, "error_rate": 0.0286}]
+    "error_rates": [{"name": "Bash", "total": 420, "errors": 12, "error_rate": 0.0286}],
+    "include_sdk": false
   }
 }
 ```
+
+Every family carries `include_sdk`: `false` unless `--include-sdk` was
+passed, in which case SDK sessions (and their tool calls, first prompts,
+transcripts and guard decisions) count too.
 
 `top_by_median_duration` is always `[]`: intake does not record tool-call
 durations. The key stays so v2 consumers don't break and goes away at the next
@@ -439,16 +460,20 @@ recent tool call, or `null` if unavailable.
         "project_path": "/workspace/myapp",
         "started_at": "2026-05-18T09:14:00.000Z",
         "ended_at": "2026-05-18T09:45:00.000Z",
-        "message_count": 24
+        "message_count": 24,
+        "entrypoint": "cli"
       }
-    ]
+    ],
+    "include_sdk": false
   }
 }
 ```
 
-Ordered by `started_at` descending. Accepts `--since`, `--project`, and
-`--limit`. Subagent sessions (ids shaped `<agent-id>.<parent-session-id>`) are
-listed only with `--include-subagents`.
+Ordered by `started_at` descending. Accepts `--since`, `--project`,
+`--limit`, `--include-sdk` and `--include-subagents`. `entrypoint` is as in
+`inspect` (`null` when unknown); SDK sessions, and their subagents, are listed
+only with `--include-sdk`. Subagent sessions (ids shaped
+`<agent-id>.<parent-session-id>`) are listed only with `--include-subagents`.
 
 ---
 
@@ -607,6 +632,65 @@ If another convo writer holds the lock, a `session-end` run waits for it, or
 leaves the session to a run that is already waiting. A `pre-compact` run does
 not wait: it logs that it found a writer and exits, because the session is
 still running and a later compaction or its end indexes what accrued.
+
+---
+
+### `tag-sdk`
+
+```json
+{
+  "schema_version": 2,
+  "tag_sdk": {
+    "status": "dry_run",
+    "project": "/workspace/pipeline",
+    "criteria": {"max_messages": 10, "min_shared": 20, "prefix_chars": 12},
+    "from_files": {
+      "checked": 40,
+      "count": 38,
+      "by_entrypoint": {"cli": 30, "sdk-cli": 8},
+      "sample_ids": ["0a1b...", "..."]
+    },
+    "inferred": {
+      "ran": true,
+      "candidates": 10850,
+      "count": 10790,
+      "templates": [{"prefix": "URL: https:/", "sessions": 10790, "sample_ids": ["..."]}],
+      "skipped_cli_templates": [],
+      "sample_ids": ["..."]
+    },
+    "updated": 0,
+    "backup_path": null
+  }
+}
+```
+
+`status` is `"dry_run"`, `"tagged"` or `"nothing_to_tag"`. `from_files`
+covers sessions with no entrypoint (or `sdk-inferred`) whose transcript is
+still on disk: `checked` of them, `count` with an entrypoint in the file.
+`inferred` is the `sdk-inferred` heuristic, which runs only with
+`--project` (`ran`): `candidates` are the project's sessions with an unknown
+entrypoint, no transcript and at most `max_messages` messages; `templates`
+are the first-prompt prefixes shared by at least `min_shared` of them, and
+`skipped_cli_templates` the ones left alone because a `cli` session starts
+the same way. `sample_ids` hold up to 5 session ids. `updated` counts rows
+written, and `backup_path` is the snapshot taken first (`null` on a dry run
+or when there is nothing to tag).
+
+---
+
+### SDK sessions
+
+`sessions.entrypoint` (schema 7) records how a session started: `cli` for an
+interactive session; `sdk-cli` (headless `claude -p`), `sdk-py` or `sdk-ts`
+(the Agent SDKs) for a programmatic one; `sdk-inferred` when `convo tag-sdk`
+tagged it by heuristic; `null` when unknown. `search`, `stats`, `summary`,
+`diff` and `sessions` leave out every session whose entrypoint starts with
+`sdk-` unless `--include-sdk` is passed; `cli` and `null` sessions are kept.
+A subagent session (`<agent-id>.<parent-session-id>`) goes with its parent:
+an SDK session's subagents, their messages and tool calls are left out too,
+whatever their own entrypoint, including from `tools` and `tool_calls_*`
+totals that otherwise always count subagent work. On a DB older than schema 7 nothing is filtered (the command says so on
+stderr) and `entrypoint` is `null`.
 
 ---
 
